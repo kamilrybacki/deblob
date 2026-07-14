@@ -102,11 +102,15 @@ pub async fn serve(
     // The health gate's background probe needs its OWN connection —
     // `RedisRegistry::conn()` is crate-private to `deblob-redis`, by
     // design (spec §6: the gate is a separate runtime concern from the
-    // registry's own publish path, not a shared mutable handle).
+    // registry's own publish path, not a shared mutable handle). It uses
+    // the same `ConnectionManager` tuning as the registry/evidence
+    // connections (Task 19 fix) so the probe itself recovers after a Redis
+    // outage instead of permanently reporting the last state it saw before
+    // the connection died.
     let probe_client = redis::Client::open(secrets.redis_url.as_str())
         .map_err(|e| AppError::Redis(CoreError::RegistryUnavailable(e.to_string())))?;
     let probe_conn = probe_client
-        .get_multiplexed_async_connection()
+        .get_connection_manager_with_config(deblob_redis::connection_manager_config())
         .await
         .map_err(|e| AppError::Redis(CoreError::RegistryUnavailable(e.to_string())))?;
     let probe_handle = health.spawn_probe(probe_conn, HEALTH_PROBE_INTERVAL);

@@ -12,7 +12,7 @@ async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-redis = { version = "0.27", features = ["tokio-comp", "script"] }
+redis = { version = "0.27", features = ["tokio-comp", "script", "connection-manager"] }
 sha2.workspace = true
 data-encoding.workspace = true
 

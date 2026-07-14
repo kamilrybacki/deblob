@@ -329,7 +329,7 @@ impl RedisRegistry {
 /// Deletes every key matching `pattern`, via bounded `SCAN` + `DEL` batches
 /// (never `KEYS`, which blocks the whole server on a large vault).
 async fn delete_matching(
-    mut conn: redis::aio::MultiplexedConnection,
+    mut conn: redis::aio::ConnectionManager,
     pattern: &str,
 ) -> Result<(), CoreError> {
     let mut cursor = "0".to_string();

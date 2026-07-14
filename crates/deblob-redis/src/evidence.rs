@@ -48,9 +48,12 @@ impl Default for RedisEvidenceOpts {
 /// streams, backed by a permanent (never-expiring) audit trail of first
 /// sightings.
 pub struct RedisEvidence {
-    /// Cheaply `Clone`-able handle over one multiplexed connection — see
-    /// `RedisRegistry::conn` for why sharing it this way is safe.
-    conn: redis::aio::MultiplexedConnection,
+    /// Cheaply `Clone`-able handle over a `ConnectionManager`-wrapped
+    /// connection — see `RedisRegistry::conn` for why sharing it this way
+    /// is safe, and why `ConnectionManager` (not a bare
+    /// `MultiplexedConnection`) is what makes recovery after a Redis
+    /// restart possible (Task 19 fix, spec §10).
+    conn: redis::aio::ConnectionManager,
     candidate_ttl_secs: u64,
     set_state_script: Script,
 }
@@ -155,7 +158,7 @@ impl RedisEvidence {
         let client = Client::open(url)
             .map_err(|e| CoreError::RegistryUnavailable(format!("invalid redis url: {e}")))?;
         let mut conn = client
-            .get_multiplexed_async_connection()
+            .get_connection_manager_with_config(crate::connection_manager_config())
             .await
             .map_err(|e| CoreError::RegistryUnavailable(format!("connect failed: {e}")))?;
 
@@ -186,7 +189,7 @@ impl RedisEvidence {
         })
     }
 
-    fn conn(&self) -> redis::aio::MultiplexedConnection {
+    fn conn(&self) -> redis::aio::ConnectionManager {
         self.conn.clone()
     }
 }

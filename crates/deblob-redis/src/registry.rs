@@ -22,12 +22,17 @@ pub struct RedisOpts {
 /// publication script (spec §6) — no partial publication is ever visible,
 /// even under a crash mid-script or concurrent publishers.
 pub struct RedisRegistry {
-    /// Cheaply `Clone`-able handle over one multiplexed connection; cloning
-    /// it (once per call, see `conn()`) shares the same underlying socket
-    /// rather than opening a new TCP connection per operation, and safely
-    /// supports the concurrent publishers this vault must serialize inside
-    /// Redis via the Lua script's atomicity, not via client-side locking.
-    conn: redis::aio::MultiplexedConnection,
+    /// Cheaply `Clone`-able handle over a `ConnectionManager`-wrapped
+    /// multiplexed connection; cloning it (once per call, see `conn()`)
+    /// shares the same underlying socket rather than opening a new TCP
+    /// connection per operation, and safely supports the concurrent
+    /// publishers this vault must serialize inside Redis via the Lua
+    /// script's atomicity, not via client-side locking. Unlike a bare
+    /// `MultiplexedConnection`, `ConnectionManager` transparently
+    /// reconnects when the underlying TCP connection breaks (Redis
+    /// restart/network blip) instead of staying dead for the lifetime of
+    /// the process (Task 19 fix, spec §10).
+    conn: redis::aio::ConnectionManager,
     publish_script: Script,
     /// Runtime persistence health gate (Task 10, spec §6). `None` for
     /// registries built without one (the default, and every existing
@@ -108,7 +113,7 @@ impl RedisRegistry {
         let client = Client::open(url)
             .map_err(|e| CoreError::RegistryUnavailable(format!("invalid redis url: {e}")))?;
         let mut conn = client
-            .get_multiplexed_async_connection()
+            .get_connection_manager_with_config(crate::connection_manager_config())
             .await
             .map_err(|e| CoreError::RegistryUnavailable(format!("connect failed: {e}")))?;
 
@@ -151,11 +156,12 @@ impl RedisRegistry {
         self
     }
 
-    /// A cheap clone of the shared multiplexed connection. `redis::aio::
-    /// MultiplexedConnection` is designed to be cloned per concurrent
-    /// caller — it pipelines requests over one socket rather than opening a
-    /// new connection each time.
-    pub(crate) fn conn(&self) -> redis::aio::MultiplexedConnection {
+    /// A cheap clone of the shared connection manager. `redis::aio::
+    /// ConnectionManager` is designed to be cloned per concurrent caller —
+    /// it pipelines requests over one socket rather than opening a new
+    /// connection each time, and every clone shares the same reconnect
+    /// state.
+    pub(crate) fn conn(&self) -> redis::aio::ConnectionManager {
         self.conn.clone()
     }
 }

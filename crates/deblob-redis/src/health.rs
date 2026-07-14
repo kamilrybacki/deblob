@@ -127,7 +127,7 @@ impl PersistenceHealth {
     /// command failure (connection dropped, command error) is itself a
     /// `Degraded` result — a probe that can't reach Redis is exactly the
     /// kind of failure this gate exists to catch.
-    pub async fn probe(mut conn: redis::aio::MultiplexedConnection) -> HealthState {
+    pub async fn probe(mut conn: redis::aio::ConnectionManager) -> HealthState {
         let info_persistence: String = match redis::cmd("INFO")
             .arg("persistence")
             .query_async(&mut conn)
@@ -203,7 +203,7 @@ impl HealthGate {
     /// so they don't have to sleep for real seconds.
     pub fn spawn_probe(
         &self,
-        conn: redis::aio::MultiplexedConnection,
+        conn: redis::aio::ConnectionManager,
         interval: Duration,
     ) -> JoinHandle<()> {
         let gate = self.clone();

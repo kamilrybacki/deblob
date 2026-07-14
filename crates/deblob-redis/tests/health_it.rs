@@ -42,7 +42,10 @@ async fn probe_reports_ok_on_persistent_redis() {
         node.get_host_port_ipv4(6379).await.unwrap()
     );
     let client = redis::Client::open(url.as_str()).unwrap();
-    let conn = client.get_multiplexed_async_connection().await.unwrap();
+    let conn = client
+        .get_connection_manager_with_config(deblob_redis::connection_manager_config())
+        .await
+        .unwrap();
 
     let state = PersistenceHealth::probe(conn).await;
     assert_eq!(
@@ -63,7 +66,10 @@ async fn probe_reports_degraded_when_aof_disabled() {
         node.get_host_port_ipv4(6379).await.unwrap()
     );
     let client = redis::Client::open(url.as_str()).unwrap();
-    let conn = client.get_multiplexed_async_connection().await.unwrap();
+    let conn = client
+        .get_connection_manager_with_config(deblob_redis::connection_manager_config())
+        .await
+        .unwrap();
 
     let state = PersistenceHealth::probe(conn).await;
     assert!(
