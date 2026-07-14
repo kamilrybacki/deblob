@@ -23,7 +23,7 @@ Core invariant (from research): *deterministic code establishes facts, a task-sp
 | Tag placement | Kafka record headers / HTTP response headers; payload never mutated |
 | Schema vault | Redis (AOF `everysec` minimum, enforced + runtime-monitored) |
 | Structural inference | Minimal JSONoid-style monoid merger written in Rust (no JVM) |
-| SLM runtime | llama.cpp in-process (`llama-cpp-2`), GGUF artifacts |
+| SLM runtime | Provider-agnostic behind the `SemanticInferencer` port. **Default: OpenAI-compatible HTTP adapter** (covers llama.cpp server mode, vLLM, Ollama, LM Studio, TGI, hosted APIs). **Optional: in-process llama.cpp** (`llama-cpp-2`, GGUF) as an offline/perf optimization. Selected by config; both behind one trait. |
 | Name | **Deblob** |
 | Deployment | Standalone binary → container → inline between producers/consumers |
 
@@ -82,7 +82,7 @@ consume(deblob.discovery)
 | `deblob-monoid` | Mergeable structural profiles. Algebraic laws proven by proptest. |
 | `deblob-kafka` | Transactional relay adapter + header TagSink (rust-rdkafka). |
 | `deblob-redis` | Registry + EvidenceStore implementations. |
-| `deblob-slm` | llama.cpp worker (P2+): isolated thread, deadline, fixed output grammar, decision cache. |
+| `deblob-slm` | `SemanticInferencer` impls (P2+): `HttpInferencer` (OpenAI-compatible, **default**) + optional `LocalInferencer` (llama.cpp, feature-gated `local-llama`). Shared: fixed output grammar/JSON-schema, decision cache, deadline, one-repair policy. |
 | `deblob-http` | P2: axum reverse proxy adapter. Trait ships in P1, implementation does not. |
 | `deblob` (bin) | Config (TOML + env for secrets), wiring, policy engine, management API. |
 
@@ -133,7 +133,10 @@ Startup: refuse non-persistent Redis unless `--unsafe-volatile`. Require AOF `ev
 
 ## 7. SLM lane (`deblob-slm`, P2+)
 
-- **Isolation:** in-process llama.cpp can kill the binary (native crash/OOM — threads don't isolate faults). P2: dedicated worker thread, bounded channel, hard inference deadline, preallocated model memory budget, panic containment. Child-process isolation acknowledged as the eventual endpoint.
+- **Provider-agnostic runtime (the seam):** every model call goes through the `SemanticInferencer` port in `deblob-core`; nothing above the trait knows the vendor. Two adapters:
+  - **`HttpInferencer` (default):** OpenAI-compatible `/v1/chat/completions` (or `/completions` + grammar) client. Config = `base_url`, `model`, optional bearer token (env-only), timeout, concurrency cap. One adapter transparently targets llama.cpp server mode, vLLM, Ollama, LM Studio, TGI, and hosted APIs. Process isolation is free — a crashing inference server never touches the relay. This is the baseline provider-agnostic path.
+  - **`LocalInferencer` (optional, feature `local-llama`):** in-process llama.cpp via `llama-cpp-2`, GGUF artifacts, for offline/low-latency deployments. Because in-process native code CAN kill the binary (crash/OOM — threads don't isolate faults), it runs on a dedicated worker thread with a bounded channel, hard deadline, preallocated memory budget, and panic containment; child-process isolation is the eventual endpoint. Not the default precisely because it is the least portable and least isolated option.
+- **Runtime selection:** config `[slm] runtime = "http" | "local"` (default `"http"`). The grammar/JSON-schema contract, decision cache, prompt construction, and policy all live above the adapter and are identical across runtimes — swapping providers changes only config.
 - **Economy:** invoke once per stable cluster (debounced, sample/time stability required), dedupe by monoid-profile digest, cancel superseded jobs, cap invocations per source/hour, cache decisions by model+prompt+candidate-set digest. Never per-record autoregression.
 - **Grammar:** fixed 3-way output contract, keyed by output-contract version + model/tokenizer/template digest + grammar-engine version. **Never compile attacker-derived candidate schemas into grammars.**
 - **Contract:** `match_schema(id, exact | compatible_drift | incompatible_similarity)` / `new_candidate(reason)` / `abstain(reason)`. IDs grammar-constrained to the supplied top-k set — the model cannot invent `sch_`/`fam_`/`cand_` values. Abstain reasons are enums + bounded diagnostics (free prose = exfil channel). `new_candidate` never implies family approval.
