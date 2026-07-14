@@ -12,7 +12,7 @@ use sha2::{Digest, Sha256};
 /// `generalized_fingerprint` preimage. Deliberately distinct from
 /// `deblob-fingerprint`'s `CANONICALIZER` — a candidate identity is never
 /// the same digest as a raw shape fingerprint (§4).
-const GENERALIZER: &str = "deblob-monoid-v1";
+pub const GENERALIZER: &str = "deblob-monoid-v1";
 
 /// Per-type observation counts at a single field position.
 #[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]

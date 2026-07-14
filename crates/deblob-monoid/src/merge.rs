@@ -253,4 +253,15 @@ mod tests {
         let raw = raw_fp(br#"{"a":1}"#);
         assert_ne!(generalized, raw);
     }
+
+    #[test]
+    fn generalized_fingerprint_golden() {
+        // Pin the generalized-fingerprint format so a GENERALIZER/format
+        // bump must break this test. Known small payload: `{"a":1,"opt":"x"}`
+        // parsed → shape → profile.
+        let p = profile_of(br#"{"a":1,"opt":"x"}"#);
+        let digest = p.generalized_fingerprint();
+        let hex = format!("{:02x?}", digest);
+        insta::assert_snapshot!(hex);
+    }
 }

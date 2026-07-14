@@ -9,8 +9,8 @@ use async_trait::async_trait;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{CandidateRecord, EvidenceStore, Registry, SchemaRecord};
-use deblob_fingerprint::{bucket_key, ShapeSummary, CANONICALIZER};
-use deblob_monoid::{FieldNode, Profile};
+use deblob_fingerprint::{bucket_key, ShapeSummary};
+use deblob_monoid::{FieldNode, Profile, GENERALIZER};
 
 use crate::promote::{FamilyChoice, PromoteRequest, Promoter as PromoterTrait};
 
@@ -139,7 +139,7 @@ impl PromoterTrait for Promoter {
             family_id,
             version: FamilyVersion(0),
             canonical: profile.generalized_canonical_json(),
-            canonicalizer: CANONICALIZER.to_string(),
+            canonicalizer: GENERALIZER.to_string(),
             provenance,
         };
 
@@ -482,7 +482,7 @@ mod tests {
         assert_eq!(call.alias_from, cand_id);
         assert_eq!(call.actor, "alice");
         assert_eq!(call.reason, "manually reviewed");
-        assert_eq!(call.record.canonicalizer, CANONICALIZER);
+        assert_eq!(call.record.canonicalizer, GENERALIZER);
         assert_eq!(call.record.schema_id, schema.schema_id);
         assert!(call.bucket_key.starts_with("deblob:index:"));
 

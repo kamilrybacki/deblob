@@ -1,0 +1,5 @@
+---
+source: crates/deblob-monoid/src/merge.rs
+expression: hex
+---
+[cc, a1, a3, 83, e4, 32, 07, d5, 66, 2c, 22, 99, 01, a1, 07, da, 56, bd, be, 68, 5f, 93, 16, c3, 5e, 95, 33, ea, f6, 4e, 37, 25]
