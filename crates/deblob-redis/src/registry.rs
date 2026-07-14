@@ -1,5 +1,6 @@
 //! Redis-backed `Registry`: the permanent schema vault (spec §6).
 
+use crate::health::HealthGate;
 use crate::lua::PUBLISH_SCRIPT;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
@@ -28,6 +29,13 @@ pub struct RedisRegistry {
     /// Redis via the Lua script's atomicity, not via client-side locking.
     conn: redis::aio::MultiplexedConnection,
     publish_script: Script,
+    /// Runtime persistence health gate (Task 10, spec §6). `None` for
+    /// registries built without one (the default, and every existing
+    /// caller/test) — publishing then behaves exactly as before this task,
+    /// gated only by the startup check in `connect`. `Some` freezes
+    /// `publish` the moment the background probe observes a degraded
+    /// state, without a Redis round trip on the hot path.
+    health_gate: Option<HealthGate>,
 }
 
 impl std::fmt::Debug for RedisRegistry {
@@ -92,9 +100,10 @@ fn record_from_hash(record_json: &str, version: Option<String>) -> Result<Schema
 }
 
 impl RedisRegistry {
-    /// Connect and run the startup persistence gate. Runtime drift
-    /// monitoring (AOF write errors, `CONFIG SET` drift) is Task 10 — this
-    /// only checks the state at connect time.
+    /// Connect and run the startup persistence gate. This only checks the
+    /// state at connect time; runtime drift monitoring (AOF write errors,
+    /// disk exhaustion, `CONFIG SET` drift) is a separate concern — see
+    /// `with_health_gate` and `crate::health`.
     pub async fn connect(url: &str, opts: RedisOpts) -> Result<Self, CoreError> {
         let client = Client::open(url)
             .map_err(|e| CoreError::RegistryUnavailable(format!("invalid redis url: {e}")))?;
@@ -125,7 +134,21 @@ impl RedisRegistry {
         Ok(Self {
             conn,
             publish_script: Script::new(PUBLISH_SCRIPT),
+            health_gate: None,
         })
+    }
+
+    /// Attaches a runtime persistence [`HealthGate`] (Task 10, spec §6).
+    /// Builder-style so existing callers (and every pre-Task-10 test) that
+    /// never call this keep `health_gate: None` — `publish` then skips the
+    /// gate check entirely, preserving prior behaviour exactly. Callers
+    /// that DO want runtime monitoring construct a `HealthGate`, start its
+    /// background probe via `HealthGate::spawn_probe`, and pass the same
+    /// (cheaply `Clone`-able) gate here — `/readyz` (Task 12) is meant to
+    /// share that same instance.
+    pub fn with_health_gate(mut self, gate: HealthGate) -> Self {
+        self.health_gate = Some(gate);
+        self
     }
 
     /// A cheap clone of the shared multiplexed connection. `redis::aio::
@@ -177,6 +200,19 @@ impl Registry for RedisRegistry {
         actor: &str,
         reason: &str,
     ) -> Result<FamilyVersion, CoreError> {
+        // Task 10: runtime persistence health. This is a cheap atomic load
+        // (never a Redis round trip) — the background probe spawned via
+        // `HealthGate::spawn_probe` is what actually talks to Redis, on its
+        // own ~10s interval. A degraded gate freezes promotions before any
+        // write is attempted.
+        if let Some(gate) = &self.health_gate {
+            if !gate.is_healthy() {
+                return Err(CoreError::RegistryUnavailable(
+                    "persistence degraded".to_string(),
+                ));
+            }
+        }
+
         let mut conn = self.conn();
         let schema_json = serde_json::to_string(&record)
             .map_err(|e| CoreError::RegistryUnavailable(format!("serialize schema record: {e}")))?;

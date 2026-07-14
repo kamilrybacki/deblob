@@ -7,10 +7,12 @@
 //! version allocation).
 
 pub mod evidence;
+pub mod health;
 pub mod index;
 pub mod lua;
 pub mod registry;
 
 pub use evidence::{RedisEvidence, RedisEvidenceOpts};
+pub use health::{HealthGate, HealthState, PersistenceHealth};
 pub use index::{bucket_key, bucket_member};
 pub use registry::{RedisOpts, RedisRegistry};
