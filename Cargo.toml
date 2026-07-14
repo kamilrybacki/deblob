@@ -7,6 +7,7 @@ members = [
     "crates/deblob-monoid",
     "crates/deblob-redis",
 ]
+exclude = ["crates/deblob-fingerprint/fuzz"]
 
 [workspace.package]
 edition = "2021"
