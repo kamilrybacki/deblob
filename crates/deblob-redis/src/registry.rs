@@ -2,7 +2,7 @@
 
 use crate::lua::PUBLISH_SCRIPT;
 use deblob_core::error::CoreError;
-use deblob_core::id::{CandidateId, FamilyId, SchemaId};
+use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{Registry, SchemaRecord};
 use redis::{AsyncCommands, Client, Script};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -64,12 +64,32 @@ fn redis_err(e: redis::RedisError) -> CoreError {
 fn map_script_error(e: redis::RedisError) -> CoreError {
     let msg = e.to_string();
     if msg.contains("IMMUTABILITY") {
-        CoreError::ImmutabilityViolation(format!("schema bytes differ from stored record: {msg}"))
+        CoreError::ImmutabilityViolation(format!(
+            "canonical identity differs from stored record: {msg}"
+        ))
     } else if msg.contains("ALIAS_CONFLICT") {
         CoreError::Conflict(format!("alias already points at a different schema: {msg}"))
     } else {
         CoreError::RegistryUnavailable(msg)
     }
+}
+
+/// Reconstructs a `SchemaRecord` from the schema hash's `record` blob,
+/// overwriting its `version` field with the AUTHORITATIVE version stored
+/// separately by the publication script (§6 Fix B) — the version baked
+/// into the stored `record` JSON is whatever the original caller guessed
+/// and must never be trusted.
+fn record_from_hash(record_json: &str, version: Option<String>) -> Result<SchemaRecord, CoreError> {
+    let mut value: serde_json::Value = serde_json::from_str(record_json)
+        .map_err(|e| CoreError::RegistryUnavailable(format!("corrupt schema record: {e}")))?;
+    if let Some(v) = version {
+        let v: u32 = v
+            .parse()
+            .map_err(|e| CoreError::RegistryUnavailable(format!("corrupt schema version: {e}")))?;
+        value["version"] = serde_json::Value::from(v);
+    }
+    serde_json::from_value(value)
+        .map_err(|e| CoreError::RegistryUnavailable(format!("corrupt schema record: {e}")))
 }
 
 impl RedisRegistry {
@@ -122,12 +142,16 @@ impl RedisRegistry {
 impl Registry for RedisRegistry {
     async fn get_schema(&self, id: &SchemaId) -> Result<Option<SchemaRecord>, CoreError> {
         let mut conn = self.conn();
-        let raw: Option<String> = conn.get(schema_key(id)).await.map_err(redis_err)?;
-        match raw {
+        let (record_json, version): (Option<String>, Option<String>) = redis::cmd("HMGET")
+            .arg(schema_key(id))
+            .arg("record")
+            .arg("version")
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_err)?;
+        match record_json {
             None => Ok(None),
-            Some(json) => serde_json::from_str(&json)
-                .map(Some)
-                .map_err(|e| CoreError::RegistryUnavailable(format!("corrupt schema record: {e}"))),
+            Some(json) => record_from_hash(&json, version).map(Some),
         }
     }
 
@@ -154,7 +178,7 @@ impl Registry for RedisRegistry {
         bucket_key: &str,
         actor: &str,
         reason: &str,
-    ) -> Result<(), CoreError> {
+    ) -> Result<FamilyVersion, CoreError> {
         let mut conn = self.conn();
         let schema_json = serde_json::to_string(&record)
             .map_err(|e| CoreError::RegistryUnavailable(format!("serialize schema record: {e}")))?;
@@ -165,6 +189,11 @@ impl Registry for RedisRegistry {
             .to_string();
         let bucket_member = format!("{bucket_key}:{}", record.schema_id.as_str());
 
+        // The Lua script is the sole authority for the version (HINCRBY on
+        // fresh publish, or the previously-allocated version on an
+        // idempotent republish) — `record.version` is never trusted for
+        // storage; only `canonical`/`canonicalizer` gate the immutability
+        // check (Fix A).
         let result: redis::RedisResult<i64> = self
             .publish_script
             .key(schema_key(&record.schema_id))
@@ -174,6 +203,8 @@ impl Registry for RedisRegistry {
             .key(AUDIT_KEY)
             .key(published_key(&record.schema_id))
             .arg(&schema_json)
+            .arg(&record.canonical)
+            .arg(&record.canonicalizer)
             .arg(record.family_id.as_str())
             .arg(record.schema_id.as_str())
             .arg(&bucket_member)
@@ -183,7 +214,9 @@ impl Registry for RedisRegistry {
             .invoke_async(&mut conn)
             .await;
 
-        result.map(|_version| ()).map_err(map_script_error)
+        result
+            .map(|version| FamilyVersion(version as u32))
+            .map_err(map_script_error)
     }
 
     async fn get_alias(&self, id: &CandidateId) -> Result<Option<SchemaId>, CoreError> {
@@ -216,12 +249,15 @@ impl Registry for RedisRegistry {
 
         let mut records = Vec::with_capacity(keys.len());
         for key in keys {
-            let raw: Option<String> = conn.get(&key).await.map_err(redis_err)?;
-            if let Some(json) = raw {
-                let record: SchemaRecord = serde_json::from_str(&json).map_err(|e| {
-                    CoreError::RegistryUnavailable(format!("corrupt schema record: {e}"))
-                })?;
-                records.push(record);
+            let (record_json, version): (Option<String>, Option<String>) = redis::cmd("HMGET")
+                .arg(&key)
+                .arg("record")
+                .arg("version")
+                .query_async(&mut conn)
+                .await
+                .map_err(redis_err)?;
+            if let Some(json) = record_json {
+                records.push(record_from_hash(&json, version)?);
             }
         }
 

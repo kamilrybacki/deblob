@@ -40,6 +40,12 @@ pub trait Registry: Send + Sync {
         fingerprint: &SchemaId,
     ) -> Result<Option<SchemaId>, CoreError>;
     /// Atomic publication: schema + family version + index + alias + audit (§6).
+    ///
+    /// Returns the authoritative `FamilyVersion` allocated by the registry.
+    /// The `version` field on the passed-in `record` is only ever a
+    /// caller-side guess; implementations must never trust it for storage
+    /// or echo it back — the registry (e.g. Redis `HINCRBY` on the family
+    /// key) is the sole authority for version numbers.
     async fn publish(
         &self,
         record: SchemaRecord,
@@ -47,7 +53,7 @@ pub trait Registry: Send + Sync {
         bucket_key: &str,
         actor: &str,
         reason: &str,
-    ) -> Result<(), CoreError>;
+    ) -> Result<FamilyVersion, CoreError>;
     async fn get_alias(&self, id: &CandidateId) -> Result<Option<SchemaId>, CoreError>;
     async fn list_schemas(
         &self,

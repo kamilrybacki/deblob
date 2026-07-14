@@ -53,18 +53,29 @@ async fn publish_is_atomic_and_write_once() {
 
     let rec = sample_record(); // helper building a SchemaRecord
     let cand = CandidateId::from_digest(&[9u8; 32]);
-    reg.publish(rec.clone(), &cand, "bucket:3:abc", "kamil", "initial")
+    let v1 = reg
+        .publish(rec.clone(), &cand, "bucket:3:abc", "kamil", "initial")
         .await
         .unwrap();
+    assert_eq!(v1, FamilyVersion(1), "first publish allocates version 1");
 
     // schema readable, alias resolves, republish identical = idempotent OK
-    assert!(reg.get_schema(&rec.schema_id).await.unwrap().is_some());
+    // and returns the SAME authoritative version, never a new one.
+    let stored = reg.get_schema(&rec.schema_id).await.unwrap().unwrap();
+    assert_eq!(stored.version, v1);
     assert_eq!(reg.get_alias(&cand).await.unwrap().unwrap(), rec.schema_id);
-    reg.publish(rec.clone(), &cand, "bucket:3:abc", "kamil", "retry")
+    let v2 = reg
+        .publish(rec.clone(), &cand, "bucket:3:abc", "kamil", "retry")
         .await
         .unwrap();
+    assert_eq!(
+        v2, v1,
+        "idempotent republish must return the SAME authoritative version"
+    );
 
-    // same schema_id with DIFFERENT bytes = fatal ImmutabilityViolation (§6)
+    // same schema_id with a genuinely DIFFERENT canonical identity =
+    // fatal ImmutabilityViolation (§6) — this is a real identity change,
+    // not merely different provenance/version.
     let mut tampered = rec.clone();
     tampered.canonical = "{\"t\":\"obj\",\"f\":{}}".into();
     let err = reg
@@ -72,6 +83,63 @@ async fn publish_is_atomic_and_write_once() {
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::ImmutabilityViolation(_)));
+}
+
+#[tokio::test]
+async fn republish_with_different_provenance_is_idempotent() {
+    // Fix A: the immutability check must compare CANONICAL IDENTITY only
+    // (canonical + canonicalizer), not the whole record. Republishing the
+    // SAME schema_id with the SAME canonical but DIFFERENT provenance (a
+    // fresh timestamp, as a real retry would produce) must succeed and
+    // must NOT raise ImmutabilityViolation. Fix B: it must also return the
+    // SAME authoritative version — a caller-guessed `version` on the retry
+    // must be ignored, never trusted for storage.
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let cand = CandidateId::from_digest(&[40u8; 32]);
+    let rec = sample_record();
+    let v1 = reg
+        .publish(rec.clone(), &cand, "bucket:4:abc", "kamil", "initial")
+        .await
+        .unwrap();
+    assert_eq!(v1, FamilyVersion(1));
+
+    let mut retried = rec.clone();
+    retried.provenance = serde_json::json!({"source": "test", "first_seen_ms": 999});
+    retried.version = FamilyVersion(999); // caller's stale/guessed version — must be ignored
+
+    let v2 = reg
+        .publish(
+            retried,
+            &cand,
+            "bucket:4:abc",
+            "kamil",
+            "retry-with-new-provenance",
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        v2, v1,
+        "republish with different provenance must return the SAME authoritative version"
+    );
+
+    let stored = reg.get_schema(&rec.schema_id).await.unwrap().unwrap();
+    assert_eq!(
+        stored.version, v1,
+        "stored record must carry the authoritative version, not the caller's guess"
+    );
 }
 
 #[tokio::test]
@@ -159,8 +227,18 @@ async fn family_versions_allocate_atomically() {
 
     // join two tasks together
     let (res_a, res_b) = tokio::join!(task_a, task_b);
-    res_a.unwrap().unwrap();
-    res_b.unwrap().unwrap();
+    let ver_a = res_a.unwrap().unwrap();
+    let ver_b = res_b.unwrap().unwrap();
+
+    // the two RETURNED versions must be exactly {1, 2} — never a duplicate,
+    // never a caller-guessed value.
+    let mut returned = vec![ver_a.0, ver_b.0];
+    returned.sort();
+    assert_eq!(
+        returned,
+        vec![1, 2],
+        "the two returned versions must be exactly {{1,2}}"
+    );
 
     // inspect the family hash directly: HINCRBY must have produced two
     // distinct, consecutive versions — never a duplicate.
