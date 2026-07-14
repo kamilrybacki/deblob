@@ -29,7 +29,8 @@ pub fn canonical_bytes(shape: &Shape) -> Vec<u8> {
 /// `canonical_bytes(shape)`.
 pub fn fingerprint(shape: &Shape) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(b"deblob-canon-v1\0");
+    hasher.update(CANONICALIZER.as_bytes());
+    hasher.update([0u8]);
     hasher.update(canonical_bytes(shape));
     hasher.finalize().into()
 }
