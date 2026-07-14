@@ -124,6 +124,9 @@ async fn well_formed_tool_call_parses_to_decision() {
 
 #[tokio::test]
 async fn id_outside_topk_then_abstain() {
+    // IdNotAllowed is a semantic contract violation (schema_id not in allow-list).
+    // Per the repair rule, semantic errors must NOT retry — we abstain immediately
+    // to avoid a wasted second HTTP call. This test asserts exactly ONE request.
     let server = MockServer::start().await;
     let allowed = SchemaId::from_digest(&[2u8; 32]);
     let outside = SchemaId::from_digest(&[3u8; 32]);
@@ -132,20 +135,11 @@ async fn id_outside_topk_then_abstain() {
         r#"{{"decision":"match_schema","schema_id":"{}","relation":"exact"}}"#,
         outside.as_str()
     );
-    let second_args = format!(
-        r#"{{"decision":"match_schema","schema_id":"{}","relation":"exact"}}"#,
-        outside.as_str()
-    );
-
-    let responder = Sequenced::new(vec![
-        ResponseTemplate::new(200).set_body_json(tool_call_response(&first_args)),
-        ResponseTemplate::new(200).set_body_json(tool_call_response(&second_args)),
-    ]);
 
     Mock::given(method("POST"))
         .and(path("/chat/completions"))
-        .respond_with(responder)
-        .expect(2)
+        .respond_with(ResponseTemplate::new(200).set_body_json(tool_call_response(&first_args)))
+        .expect(1)
         .mount(&server)
         .await;
 
@@ -162,7 +156,11 @@ async fn id_outside_topk_then_abstain() {
     );
 
     let received = server.received_requests().await.expect("requests recorded");
-    assert_eq!(received.len(), 2, "expected exactly one repair, not more");
+    assert_eq!(
+        received.len(),
+        1,
+        "IdNotAllowed is semantic, must not retry (saves wasted prefill)"
+    );
 }
 
 #[tokio::test]
@@ -203,6 +201,39 @@ async fn malformed_then_repaired() {
 
     let received = server.received_requests().await.expect("requests recorded");
     assert_eq!(received.len(), 2, "one repair should have run");
+}
+
+#[tokio::test]
+async fn persistent_5xx_is_transport_error() {
+    // A persistent HTTP 500 (or any non-2xx status) on every call is a
+    // transport-class failure, not a malformed-response case. After one retry,
+    // if both attempts return non-2xx, we should surface InferenceError::Transport,
+    // NOT silently abstain.
+    let server = MockServer::start().await;
+    let responder = Sequenced::new(vec![ResponseTemplate::new(500), ResponseTemplate::new(500)]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(responder)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let inferencer = HttpInferencer::new(cfg(server.uri()));
+    let id = SchemaId::from_digest(&[7u8; 32]);
+    let req = request(vec![candidate(&id, 0)]);
+
+    let err = inferencer
+        .classify(req)
+        .await
+        .expect_err("should fail with transport error");
+    assert!(
+        matches!(err, InferenceError::Transport(_)),
+        "expected InferenceError::Transport, got {err:?}"
+    );
+
+    let received = server.received_requests().await.expect("requests recorded");
+    assert_eq!(received.len(), 2, "should retry once on non-2xx status");
 }
 
 #[tokio::test]

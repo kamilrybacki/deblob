@@ -80,8 +80,8 @@ use tokio::sync::Semaphore;
 
 use crate::cache::{cache_key, DecisionCache};
 use crate::contract::{
-    validate_decision, AbstainCause, InferenceDecision, InferenceError, InferenceRequest,
-    SemanticInferencer,
+    validate_decision, AbstainCause, ContractError, InferenceDecision, InferenceError,
+    InferenceRequest, SemanticInferencer,
 };
 
 /// Tool name the model is required to call.
@@ -92,6 +92,18 @@ const TOOL_NAME: &str = "submit_semantic_decision";
 const MAX_TOOL_ARG_TOKENS: u32 = 32;
 /// Default in-memory decision cache capacity.
 const DEFAULT_CACHE_CAPACITY: usize = 1024;
+
+/// Result of a single HTTP call attempt, distinguishing parse errors from
+/// transport errors so the caller can decide whether to retry.
+#[derive(Debug)]
+enum CallResult {
+    /// Success: 200 response with a valid tool call.
+    Success(String),
+    /// 200 response but malformed (no tool call, unparseable JSON).
+    Malformed,
+    /// Non-2xx HTTP status or network failure (retriable).
+    TransportError(String),
+}
 
 /// Configuration for [`HttpInferencer`].
 ///
@@ -224,21 +236,12 @@ impl HttpInferencer {
         })
     }
 
-    /// Issue one HTTP call and return the tool call's raw `arguments`
-    /// string, if any.
+    /// Issue one HTTP call and extract the tool call's raw `arguments` string.
     ///
-    /// Returns `Err` ONLY for a transport/timeout failure (no usable HTTP
-    /// response was obtained). Any other defect — non-2xx status, a body
-    /// that isn't valid JSON, a response with no tool call — is represented
-    /// as `Ok("null")`, a value that is syntactically valid JSON but will
-    /// deterministically fail [`validate_decision`], so it flows through
-    /// the same one-repair-then-abstain path as a malformed tool call
-    /// rather than a separate error path.
-    async fn call_once(
-        &self,
-        req: &InferenceRequest,
-        allowed_ids: &[SchemaId],
-    ) -> Result<String, InferenceError> {
+    /// Returns `CallResult::Success(arguments)` for a valid 200 response with a tool call.
+    /// Returns `CallResult::Malformed` for a 200 response but no/bad tool call.
+    /// Returns `CallResult::TransportError(msg)` for non-2xx status or network failure.
+    async fn call_once(&self, req: &InferenceRequest, allowed_ids: &[SchemaId]) -> CallResult {
         let body = self.build_body(req, allowed_ids);
 
         let mut builder = self.client.post(self.endpoint_url()).json(&body);
@@ -246,21 +249,26 @@ impl HttpInferencer {
             builder = builder.bearer_auth(token);
         }
 
-        let response = builder.send().await.map_err(|err| {
-            if err.is_timeout() {
-                InferenceError::Timeout
-            } else {
-                InferenceError::Transport(err.to_string())
+        let response = match builder.send().await {
+            Ok(r) => r,
+            Err(err) => {
+                let msg = if err.is_timeout() {
+                    "timeout".to_string()
+                } else {
+                    format!("send failed: {}", err)
+                };
+                return CallResult::TransportError(msg);
             }
-        })?;
+        };
 
+        // Non-2xx status is a transport-class failure (provider unavailable/error).
         if !response.status().is_success() {
-            return Ok("null".to_string());
+            return CallResult::TransportError(format!("HTTP {}", response.status()));
         }
 
         let payload: Value = match response.json().await {
             Ok(v) => v,
-            Err(_) => return Ok("null".to_string()),
+            Err(_) => return CallResult::Malformed, // 200 but unparseable body
         };
 
         let arguments = payload
@@ -274,7 +282,10 @@ impl HttpInferencer {
             .and_then(|a| a.as_str())
             .map(str::to_string);
 
-        Ok(arguments.unwrap_or_else(|| "null".to_string()))
+        match arguments {
+            Some(args) => CallResult::Success(args),
+            None => CallResult::Malformed,
+        }
     }
 }
 
@@ -300,18 +311,84 @@ impl SemanticInferencer for HttpInferencer {
             .await
             .map_err(|err| InferenceError::Transport(err.to_string()))?;
 
-        let first_raw = self.call_once(&req, &allowed_ids).await?;
-        let decision = match validate_decision(&first_raw, &allowed_ids) {
-            Ok(decision) => decision,
-            Err(_) => {
-                // One mechanical repair: retry the whole call once. Never
-                // attempt to rewrite/patch the first response's content.
-                let second_raw = self.call_once(&req, &allowed_ids).await?;
-                match validate_decision(&second_raw, &allowed_ids) {
+        // First call attempt. Process based on result type.
+        let first_result = self.call_once(&req, &allowed_ids).await;
+        let decision = match first_result {
+            CallResult::Success(args) => {
+                // Successful response: validate the decision and handle errors.
+                match validate_decision(&args, &allowed_ids) {
                     Ok(decision) => decision,
-                    Err(_) => InferenceDecision::Abstain {
+                    Err(err) => {
+                        // Validation failed. Branch on error kind:
+                        // - IdNotAllowed: semantic error, no retry (saves prefill).
+                        // - Malformed/UnknownField: retriable syntax errors.
+                        match err {
+                            ContractError::IdNotAllowed => InferenceDecision::Abstain {
+                                cause: AbstainCause::Ambiguous,
+                            },
+                            ContractError::Malformed(_) | ContractError::UnknownField => {
+                                // Retry the full call once.
+                                match self.call_once(&req, &allowed_ids).await {
+                                    CallResult::Success(second_args) => {
+                                        match validate_decision(&second_args, &allowed_ids) {
+                                            Ok(d) => d,
+                                            Err(_) => InferenceDecision::Abstain {
+                                                cause: AbstainCause::Ambiguous,
+                                            },
+                                        }
+                                    }
+                                    CallResult::Malformed => InferenceDecision::Abstain {
+                                        cause: AbstainCause::Ambiguous,
+                                    },
+                                    CallResult::TransportError(msg) => {
+                                        return Err(InferenceError::Transport(msg));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            CallResult::Malformed => {
+                // 200 response but malformed body. Retry once.
+                match self.call_once(&req, &allowed_ids).await {
+                    CallResult::Success(second_args) => {
+                        match validate_decision(&second_args, &allowed_ids) {
+                            Ok(d) => d,
+                            Err(_) => InferenceDecision::Abstain {
+                                cause: AbstainCause::Ambiguous,
+                            },
+                        }
+                    }
+                    CallResult::Malformed => InferenceDecision::Abstain {
                         cause: AbstainCause::Ambiguous,
                     },
+                    CallResult::TransportError(msg) => {
+                        return Err(InferenceError::Transport(msg));
+                    }
+                }
+            }
+            CallResult::TransportError(msg) => {
+                // Non-2xx status or network failure. Retry once.
+                match self.call_once(&req, &allowed_ids).await {
+                    CallResult::Success(second_args) => {
+                        match validate_decision(&second_args, &allowed_ids) {
+                            Ok(d) => d,
+                            Err(_) => InferenceDecision::Abstain {
+                                cause: AbstainCause::Ambiguous,
+                            },
+                        }
+                    }
+                    CallResult::Malformed => InferenceDecision::Abstain {
+                        cause: AbstainCause::Ambiguous,
+                    },
+                    CallResult::TransportError(second_msg) => {
+                        // Both attempts failed with transport errors.
+                        return Err(InferenceError::Transport(format!(
+                            "first: {}; retry: {}",
+                            msg, second_msg
+                        )));
+                    }
                 }
             }
         };
