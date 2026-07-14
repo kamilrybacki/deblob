@@ -1,7 +1,7 @@
 //! The bucketed structural index (spec §6, Task 8).
 //!
 //! Every published schema lands in a small Redis `SET`, keyed by a
-//! deterministic bucket derived from a lossy [`ShapeSummary`] of its shape
+//! deterministic bucket derived from a lossy [`deblob_fingerprint::ShapeSummary`] of its shape
 //! (`deblob-fingerprint`): field-count band, nesting depth, and a short
 //! hash of the required top-level keys. Buckets are small *by
 //! construction* — looking a schema up is always a bounded operation on
@@ -15,12 +15,9 @@
 //! canonical bytes. [`RedisRegistry::verify_index`] cross-checks the two
 //! directions (bucket → schema, schema → bucket) and reports drift.
 
-use data_encoding::HEXLOWER;
 use deblob_core::error::CoreError;
 use deblob_core::id::SchemaId;
-use deblob_fingerprint::ShapeSummary;
 use redis::AsyncCommands;
-use sha2::{Digest, Sha256};
 
 use crate::registry::{redis_err, RedisRegistry};
 
@@ -29,32 +26,17 @@ use crate::registry::{redis_err, RedisRegistry};
 /// `verify_index` walks it to check bucket → schema consistency.
 pub const INDEX_KEY_PATTERN: &str = "deblob:index:*";
 
-/// Deterministic Redis key for the bucket a schema with this [`ShapeSummary`]
+/// Deterministic Redis key for the bucket a schema with this `ShapeSummary`
 /// belongs to: `"deblob:index:{fieldband}:{depth}:{reqhash8}"`.
 ///
-/// - `fieldband` = `top_level_fields.next_power_of_two()`, with `0` mapped
-///   to `0` (Rust's `next_power_of_two` would otherwise round `0` up to
-///   `1`, which would collide the "no top-level fields" case with "exactly
-///   one top-level field").
-/// - `reqhash8` = first 8 lowercase hex characters of
-///   `sha256(top_keys_sorted.join("\0"))`.
-///
-/// Pure and deterministic: the same `ShapeSummary` always produces the same
-/// key, on any run, on any machine (pinned by a golden-string test).
-pub fn bucket_key(summary: &ShapeSummary) -> String {
-    let fieldband = if summary.top_level_fields == 0 {
-        0
-    } else {
-        summary.top_level_fields.next_power_of_two()
-    };
-    let joined = summary.top_keys_sorted.join("\0");
-    let mut hasher = Sha256::new();
-    hasher.update(joined.as_bytes());
-    let digest = hasher.finalize();
-    let hex = HEXLOWER.encode(&digest);
-    let reqhash8 = &hex[..8];
-    format!("deblob:index:{fieldband}:{}:{reqhash8}", summary.depth)
-}
+/// Re-exported from `deblob-fingerprint`, which is the single source of
+/// truth for the bucket-key algorithm (see [`deblob_fingerprint::bucket_key`]
+/// for the full algorithm docs and its pinned golden test). Both this crate
+/// (indexing a schema at publish time) and the hot-path matcher in
+/// `deblob` (looking a fingerprint up) depend on `deblob-fingerprint` and
+/// call the same function, so the two can never compute different keys for
+/// the same shape.
+pub use deblob_fingerprint::bucket_key;
 
 /// The bucket-set member recorded for `schema_id`: `"<fp_b32>=<sch_id>"`.
 ///
@@ -317,6 +299,7 @@ async fn delete_matching(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use deblob_fingerprint::ShapeSummary;
 
     #[test]
     fn bucket_key_is_stable() {

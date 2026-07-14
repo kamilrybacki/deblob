@@ -15,10 +15,9 @@ use std::sync::Arc;
 use deblob_core::error::QuarantineReason;
 use deblob_core::id::{CandidateId, SchemaId, SchemaRef};
 use deblob_core::ports::Registry;
-use deblob_fingerprint::{fingerprint, parse_bounded, shape_of, summarize, Limits, ShapeSummary};
+use deblob_fingerprint::{bucket_key, fingerprint, parse_bounded, shape_of, summarize, Limits};
 use lru::LruCache;
 use parking_lot::Mutex;
-use sha2::{Digest, Sha256};
 
 /// Outcome of classifying one message on the hot path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,30 +113,6 @@ impl HotMatcher {
             bucket: Some(bucket),
         }
     }
-}
-
-/// Deterministic bucket key for a [`ShapeSummary`], matching
-/// `deblob-redis::index::bucket_key`'s format
-/// (`"deblob:index:{fieldband}:{depth}:{reqhash8}"`) byte-for-byte so a
-/// schema published under `deblob-redis`'s bucketing scheme resolves via
-/// the same key computed here. Duplicated rather than imported because
-/// this crate deliberately does not depend on the concrete `deblob-redis`
-/// adapter (spec §3.3 hexagonal boundary — the bin crate only wires a
-/// concrete `Registry` impl in at Task 18); kept in lockstep with the
-/// golden-string test below.
-fn bucket_key(summary: &ShapeSummary) -> String {
-    let fieldband = if summary.top_level_fields == 0 {
-        0
-    } else {
-        summary.top_level_fields.next_power_of_two()
-    };
-    let joined = summary.top_keys_sorted.join("\0");
-    let mut hasher = Sha256::new();
-    hasher.update(joined.as_bytes());
-    let digest = hasher.finalize();
-    let hex = data_encoding::HEXLOWER.encode(&digest);
-    let reqhash8 = &hex[..8];
-    format!("deblob:index:{fieldband}:{}:{reqhash8}", summary.depth)
 }
 
 #[cfg(test)]
