@@ -12,6 +12,7 @@ deblob-kafka = { path = "../deblob-kafka" }
 deblob-match = { path = "../deblob-match" }
 deblob-monoid = { path = "../deblob-monoid" }
 deblob-redis = { path = "../deblob-redis" }
+rdkafka = { version = "0.37", features = ["cmake-build", "tokio", "ssl"] }
 tokio = { workspace = true, features = ["net", "process"] }
 tokio-util = "0.7"
 async-trait.workspace = true

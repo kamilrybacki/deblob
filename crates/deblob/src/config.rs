@@ -18,7 +18,13 @@ use deblob_redis::RedisOpts;
 use serde::Deserialize;
 
 /// Non-secret operational configuration loaded from a TOML file.
+///
+/// `deny_unknown_fields` (on this and every nested config struct below):
+/// a typo'd TOML key (e.g. `[kafak]` or `discovry_topic`) errors loudly at
+/// startup instead of silently falling back to a default the operator
+/// never intended.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub kafka: KafkaConfig,
     #[serde(default)]
@@ -30,6 +36,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KafkaConfig {
     pub raw_topic: String,
     pub tagged_topic: String,
@@ -45,6 +52,7 @@ pub struct KafkaConfig {
 /// (`max_key_len`/`max_string_len`/`max_array_inspect`) from
 /// `Limits::default()`.
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct LimitsConfig {
     pub max_bytes: usize,
     pub max_depth: u32,
@@ -78,6 +86,7 @@ impl LimitsConfig {
 /// Promotion guard thresholds (spec §5/§6). Mirrors
 /// `crate::policy::PromotionPolicy`.
 #[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PromotionConfig {
     pub min_samples: u64,
     pub min_age_ms: i64,
@@ -105,6 +114,7 @@ impl PromotionConfig {
 /// The management API's listen address (spec §8) — a SEPARATE port from
 /// the Kafka ingest path, never reachable from the producer network path.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ManagementConfig {
     pub addr: String,
 }

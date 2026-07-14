@@ -497,6 +497,7 @@ dependencies = [
  "governor",
  "http-body-util",
  "prometheus",
+ "rdkafka",
  "redis",
  "serde",
  "serde_json",

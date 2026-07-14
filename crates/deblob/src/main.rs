@@ -20,6 +20,7 @@ use clap::Parser;
 use deblob::api::{self, ApiState, SecretToken};
 use deblob::coldlane::ColdLane;
 use deblob::config::{self, Config};
+use deblob::discovery_consumer::{self, DiscoveryConsumerCfg};
 use deblob::matcher::HotMatcher;
 use deblob::metrics::{init_tracing, Metrics};
 use deblob::policy::Promoter as ConcretePromoter;
@@ -146,11 +147,12 @@ async fn run(cli: Cli) -> Result<(), AppError> {
         HOT_MATCHER_LRU_CAPACITY,
         metrics.clone(),
     ));
-    // Constructed per spec/brief so the object graph is wireable end to
-    // end; P1 has no discovery-topic CONSUMER yet (`deblob-kafka::Relay`
-    // only ever PRODUCES to it) — a future task wires a consumer loop that
-    // calls `ColdLane::ingest` for each `DiscoveryMsg`.
-    let _cold_lane = Arc::new(ColdLane::with_metrics(evidence.clone(), metrics.clone()));
+    // Fed by the discovery-topic consumer spawned below —
+    // `deblob-kafka::Relay` PRODUCES `DiscoveryMsg`s to the discovery
+    // topic; `discovery_consumer::run` is what actually drives
+    // `ColdLane::ingest` for each one, so candidates accumulate and
+    // promotion has something to promote.
+    let cold_lane = Arc::new(ColdLane::with_metrics(evidence.clone(), metrics.clone()));
     let promoter: Arc<dyn PromoterTrait> = Arc::new(ConcretePromoter::with_policy(
         registry.clone(),
         evidence.clone(),
@@ -206,8 +208,26 @@ async fn run(cli: Cli) -> Result<(), AppError> {
     let relay_handle =
         tokio::spawn(async move { Relay::run(relay_cfg, relay_matcher, relay_shutdown).await });
 
+    // --- Discovery-topic consumer: feeds `cold_lane` from what the relay
+    // produces above. Without this task the cold lane never ingests
+    // anything. ---
+    let discovery_cfg = DiscoveryConsumerCfg {
+        brokers: secrets.kafka_brokers.clone(),
+        group_id: app_config.kafka.group_id.clone(),
+        discovery_topic: app_config.kafka.discovery_topic.clone(),
+        limits: app_config.limits.to_limits(),
+        sasl: secrets.kafka_sasl.clone(),
+    };
+    let discovery_shutdown = shutdown.clone();
+    let discovery_cold_lane = cold_lane.clone();
+    let discovery_handle = tokio::spawn(async move {
+        discovery_consumer::run(discovery_cfg, discovery_cold_lane, discovery_shutdown).await
+    });
+
     wait_for_shutdown_signal().await;
-    tracing::info!("shutdown signal received; draining relay and management API");
+    tracing::info!(
+        "shutdown signal received; draining relay, discovery consumer, and management API"
+    );
     shutdown.cancel();
 
     // Relay first: spec §3.2 wants any open Kafka transaction aborted/
@@ -216,6 +236,13 @@ async fn run(cli: Cli) -> Result<(), AppError> {
         Ok(Ok(())) => tracing::info!("relay drained cleanly"),
         Ok(Err(e)) => tracing::error!(error = %e, "relay exited with error during shutdown"),
         Err(e) => tracing::error!(error = %e, "relay task panicked"),
+    }
+    match discovery_handle.await {
+        Ok(Ok(())) => tracing::info!("discovery consumer drained cleanly"),
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "discovery consumer exited with error during shutdown")
+        }
+        Err(e) => tracing::error!(error = %e, "discovery consumer task panicked"),
     }
     match api_handle.await {
         Ok(Ok(())) => tracing::info!("management api shut down cleanly"),

@@ -19,6 +19,7 @@
 pub mod api;
 pub mod coldlane;
 pub mod config;
+pub mod discovery_consumer;
 pub mod policy;
 pub mod promote;
 
