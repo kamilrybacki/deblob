@@ -204,7 +204,10 @@ mod tests {
                 let node =
                     deblob_fingerprint::parse_bounded(payload.as_bytes(), &Default::default())
                         .ok()?;
-                Some(Profile::from_shape(&deblob_fingerprint::shape_of(&node)))
+                // Use from_node (not from_shape) to retain number source text,
+                // so numeric_buckets is populated and the merge laws actually exercise
+                // the NumericBuckets::merge logic with non-identity flag combinations.
+                Some(Profile::from_node(&node))
             },
         )
     }
@@ -264,5 +267,72 @@ mod tests {
         let digest = p.generalized_fingerprint();
         let hex = format!("{:02x?}", digest);
         insta::assert_snapshot!(hex);
+    }
+
+    #[test]
+    fn numeric_buckets_merge_coverage_non_default() {
+        // Verify that NumericBuckets::merge with non-default (non-all-false)
+        // flag combinations is actually exercised by the proptest laws.
+        // This test confirms the fix to arb_profile(): now using from_node
+        // instead of from_shape, so number source text is retained and
+        // numeric_buckets gets populated with varied flag combinations.
+
+        // Create profiles with distinctly different numeric_buckets flags.
+        // The root is an object, so we access the nested "num" field.
+        let p_negative = profile_of(br#"{"num": -42}"#);
+        let p_zero = profile_of(br#"{"num": 0}"#);
+        let p_small = profile_of(br#"{"num": 5}"#);
+        let p_large = profile_of(br#"{"num": 500}"#);
+
+        // Verify each nested field has its expected flag set
+        let neg_field = &p_negative.root.children["num"];
+        assert!(neg_field.numeric_buckets.negative);
+        assert!(!neg_field.numeric_buckets.zero);
+        assert!(!neg_field.numeric_buckets.small_positive);
+
+        let zero_field = &p_zero.root.children["num"];
+        assert!(zero_field.numeric_buckets.zero);
+        assert!(!zero_field.numeric_buckets.negative);
+        assert!(!zero_field.numeric_buckets.small_positive);
+
+        let small_field = &p_small.root.children["num"];
+        assert!(small_field.numeric_buckets.small_positive);
+        assert!(!small_field.numeric_buckets.negative);
+        assert!(!small_field.numeric_buckets.zero);
+
+        let large_field = &p_large.root.children["num"];
+        assert!(large_field.numeric_buckets.large_positive);
+        assert!(!large_field.numeric_buckets.negative);
+        assert!(!large_field.numeric_buckets.small_positive);
+
+        // Test OR-merge: merging profiles with different flags combines them
+        let merged_neg_small = Profile::merge(&p_negative, &p_small);
+        let merged_field = &merged_neg_small.root.children["num"];
+        assert!(merged_field.numeric_buckets.negative);
+        assert!(merged_field.numeric_buckets.small_positive);
+        assert!(!merged_field.numeric_buckets.zero);
+        assert!(!merged_field.numeric_buckets.large_positive);
+
+        let merged_all = Profile::merge(&Profile::merge(&merged_neg_small, &p_zero), &p_large);
+        let merged_all_field = &merged_all.root.children["num"];
+        assert!(merged_all_field.numeric_buckets.negative);
+        assert!(merged_all_field.numeric_buckets.zero);
+        assert!(merged_all_field.numeric_buckets.small_positive);
+        assert!(merged_all_field.numeric_buckets.large_positive);
+
+        // Verify commutativity and associativity hold even with non-default flags
+        let alt1 = Profile::merge(&p_negative, &Profile::merge(&p_small, &p_large));
+        let alt2 = Profile::merge(&Profile::merge(&p_negative, &p_small), &p_large);
+        assert_eq!(
+            alt1.root.children["num"].numeric_buckets,
+            alt2.root.children["num"].numeric_buckets
+        );
+
+        let swap1 = Profile::merge(&p_negative, &p_small);
+        let swap2 = Profile::merge(&p_small, &p_negative);
+        assert_eq!(
+            swap1.root.children["num"].numeric_buckets,
+            swap2.root.children["num"].numeric_buckets
+        );
     }
 }
