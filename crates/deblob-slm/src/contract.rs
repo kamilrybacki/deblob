@@ -175,12 +175,20 @@ pub struct InferenceBudget {
 /// The full input to `SemanticInferencer::classify`: the redacted candidate
 /// view + the retrieved top-k + the contract version being spoken + the
 /// budget for this call.
+///
+/// `prompt` is the already-rendered prompt text sent to the model. Task 2
+/// (`HttpInferencer`) only consumes this field verbatim — it does not build
+/// prompts. The real PII-safe builder (monoid stats + redacted, length-capped,
+/// injection-checked field NAMES only; never raw payload values) is Task 4
+/// (`deblob-slm::prompt`). Until Task 4 lands, callers (including this
+/// crate's own tests) may pass a placeholder string here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InferenceRequest {
     pub candidate: CandidateProfileView,
     pub retrieved: Vec<FamilyCandidate>,
     pub contract_version: u32,
     pub budget: InferenceBudget,
+    pub prompt: String,
 }
 
 /// Failure modes from a `SemanticInferencer` implementation. Every variant

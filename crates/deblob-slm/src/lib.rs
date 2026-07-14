@@ -11,10 +11,13 @@
 //! since only `deblob-slm` implementations (`HttpInferencer`, later
 //! `LocalInferencer`) and callers of this port need it.
 
+pub mod cache;
 pub mod contract;
+pub mod http;
 
 pub use contract::{
     validate_decision, AbstainCause, CandidateProfileView, ContractError, FamilyCandidate,
     InferenceBudget, InferenceDecision, InferenceError, InferenceRequest, Novelty, Relation,
     SemanticInferencer,
 };
+pub use http::{HttpInferencer, SlmHttpConfig};
