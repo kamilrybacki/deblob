@@ -13,3 +13,5 @@ Task 4: complete (commits 610583a..ad53292, review clean — bounded JSON parser
   MINOR (final review): over-limit field/string is fully materialized before length rejection (bounded by max_bytes overall, not a security issue; could pre-check to fail faster).
   MINOR: unpaired low-surrogate escape → Utf8Error (semantic stretch, acceptable given fixed enum).
   NOTE: oversized string VALUES reuse SizeExceeded (no dedicated variant) — adjudicated reasonable.
+Task 5: complete (commits 2313009..879bef1, review Important fixed — shape extraction + canonical hashing; value/key-order independence, empty-array distinction, deterministic BTree canon, pinned golden all verified; fingerprint version tag now derived from CANONICALIZER const)
+  MINOR (final review): canonical_bytes object-key escaping covers only " \ and <0x20 controls; not guaranteed to round-trip a generic JSON parser (e.g. U+2028). Fine for preimage injectivity; doc note for consumers.
