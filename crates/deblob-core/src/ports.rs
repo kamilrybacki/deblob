@@ -46,11 +46,28 @@ pub trait Registry: Send + Sync {
     /// caller-side guess; implementations must never trust it for storage
     /// or echo it back — the registry (e.g. Redis `HINCRBY` on the family
     /// key) is the sole authority for version numbers.
+    ///
+    /// `variant_members` (Task 14 fix): every CONCRETE shape observed while
+    /// this candidate was accumulating evidence, as `(bucket_key, fp_b32)`
+    /// pairs — `fp_b32` is the base32 body of that concrete observation's
+    /// OWN raw `deblob-fingerprint::fingerprint` digest, NOT `record`'s
+    /// generalized `schema_id` digest. `record.schema_id` is derived from
+    /// the candidate's GENERALIZED profile (a different fingerprint domain
+    /// than any single concrete observation, spec §5) — a hot-path lookup
+    /// for a concrete message can therefore never match `record.schema_id`'s
+    /// own digest. Implementations must additionally index each
+    /// `variant_members` pair so `resolve_structural(bucket_key,
+    /// SchemaId::from_digest(fp))` finds `record.schema_id` for every
+    /// concrete shape that was actually observed, not just the one the
+    /// candidate happened to be seeded from. An empty slice is valid (a
+    /// candidate promoted without any recorded variants indexes nothing
+    /// extra, but must not fail).
     async fn publish(
         &self,
         record: SchemaRecord,
         alias_from: &CandidateId,
         bucket_key: &str,
+        variant_members: &[(String, String)],
         actor: &str,
         reason: &str,
     ) -> Result<FamilyVersion, CoreError>;
@@ -86,6 +103,28 @@ pub trait EvidenceStore: Send + Sync {
     async fn get_cluster(&self, gen_fp: &str) -> Result<Option<CandidateId>, CoreError>;
     /// Records (or refreshes) that `gen_fp` clusters onto `cand_id`.
     async fn set_cluster(&self, gen_fp: &str, cand_id: &CandidateId) -> Result<(), CoreError>;
+
+    /// Records (idempotently, de-duplicated) that a CONCRETE shape observed
+    /// for `cand_id` belongs to structural bucket `bucket_key` and has raw
+    /// fingerprint base32-body `fp_b32` (Task 14 fix). `ColdLane::ingest`
+    /// calls this once per distinct observed shape so `Promoter::promote`
+    /// can later replay every one of them into the structural index
+    /// (`Registry::publish`'s `variant_members`), bridging the hot path's
+    /// raw-shape lookups to the promoted schema's generalized identity.
+    async fn add_variant(
+        &self,
+        cand_id: &CandidateId,
+        bucket_key: &str,
+        fp_b32: &str,
+    ) -> Result<(), CoreError>;
+
+    /// Every `(bucket_key, fp_b32)` pair recorded for `cand_id` via
+    /// [`EvidenceStore::add_variant`] so far, de-duplicated. Empty if none
+    /// were ever recorded (e.g. a candidate promoted without ingest
+    /// history) — implementations must return `Ok(vec![])`, never an error,
+    /// for that case.
+    async fn get_variants(&self, cand_id: &CandidateId)
+        -> Result<Vec<(String, String)>, CoreError>;
 }
 
 #[async_trait]

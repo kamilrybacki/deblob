@@ -66,7 +66,7 @@ async fn resolve_after_publish() {
     let (record, bucket) = record_and_bucket(br#"{"id":"x","name":"y"}"#, FamilyId::new_v7());
     let cand = CandidateId::from_digest(&[55u8; 32]);
 
-    reg.publish(record.clone(), &cand, &bucket, "kamil", "publish")
+    reg.publish(record.clone(), &cand, &bucket, &[], "kamil", "publish")
         .await
         .unwrap();
 
@@ -96,7 +96,7 @@ async fn rebuild_restores_resolution() {
     let (record, bucket) = record_and_bucket(br#"{"id":"x","count":1}"#, FamilyId::new_v7());
     let cand = CandidateId::from_digest(&[56u8; 32]);
 
-    reg.publish(record.clone(), &cand, &bucket, "kamil", "publish")
+    reg.publish(record.clone(), &cand, &bucket, &[], "kamil", "publish")
         .await
         .unwrap();
 
@@ -166,7 +166,7 @@ async fn verify_reports_poisoned_index() {
     let (record, bucket) = record_and_bucket(br#"{"id":"x","flag":true}"#, FamilyId::new_v7());
     let cand = CandidateId::from_digest(&[57u8; 32]);
 
-    reg.publish(record.clone(), &cand, &bucket, "kamil", "publish")
+    reg.publish(record.clone(), &cand, &bucket, &[], "kamil", "publish")
         .await
         .unwrap();
 

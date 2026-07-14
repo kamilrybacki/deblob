@@ -98,7 +98,14 @@ async fn publish_frozen_when_gate_degraded() {
     let rec = sample_record();
     let cand = CandidateId::from_digest(&[99u8; 32]);
     let err = reg
-        .publish(rec.clone(), &cand, "bucket:health:abc", "kamil", "frozen")
+        .publish(
+            rec.clone(),
+            &cand,
+            "bucket:health:abc",
+            &[],
+            "kamil",
+            "frozen",
+        )
         .await
         .unwrap_err();
     assert!(

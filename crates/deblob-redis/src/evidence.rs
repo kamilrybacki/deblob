@@ -79,6 +79,14 @@ fn cluster_key(gen_fp: &str) -> String {
     format!("deblob:cluster:{gen_fp}")
 }
 
+/// Task 14 fix: the set of every distinct CONCRETE shape observed for a
+/// candidate, recorded by `ColdLane::ingest` so `Promoter::promote` can
+/// replay them into the structural index at publish time. Members are
+/// `"<bucket_key>=<fp_b32>"` — see `add_variant`/`get_variants`.
+fn variant_key(id: &CandidateId) -> String {
+    format!("deblob:candidate-variants:{}", id.as_str())
+}
+
 fn state_str(state: CandidateState) -> &'static str {
     match state {
         CandidateState::Provisional => "provisional",
@@ -381,5 +389,53 @@ impl EvidenceStore for RedisEvidence {
             .await
             .map_err(redis_err)?;
         Ok(())
+    }
+
+    async fn add_variant(
+        &self,
+        cand_id: &CandidateId,
+        bucket_key: &str,
+        fp_b32: &str,
+    ) -> Result<(), CoreError> {
+        let mut conn = self.conn();
+        let key = variant_key(cand_id);
+        let member = format!("{bucket_key}={fp_b32}");
+        // One atomic round trip: SADD the member (Redis SETs are naturally
+        // de-duplicated) and refresh the key's TTL to match the candidate's
+        // own — same pattern as `set_cluster` above, for the same reason: a
+        // variant set outliving its candidate would just be dead weight.
+        let _: () = redis::pipe()
+            .atomic()
+            .cmd("SADD")
+            .arg(&key)
+            .arg(&member)
+            .ignore()
+            .cmd("EXPIRE")
+            .arg(&key)
+            .arg(self.candidate_ttl_secs)
+            .ignore()
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_err)?;
+        Ok(())
+    }
+
+    async fn get_variants(
+        &self,
+        cand_id: &CandidateId,
+    ) -> Result<Vec<(String, String)>, CoreError> {
+        let mut conn = self.conn();
+        let members: Vec<String> = redis::cmd("SMEMBERS")
+            .arg(variant_key(cand_id))
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_err)?;
+        Ok(members
+            .into_iter()
+            .filter_map(|m| {
+                m.split_once('=')
+                    .map(|(bucket, fp_b32)| (bucket.to_string(), fp_b32.to_string()))
+            })
+            .collect())
     }
 }

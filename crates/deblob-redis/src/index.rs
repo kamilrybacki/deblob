@@ -54,6 +54,48 @@ pub fn bucket_member(schema_id: &SchemaId) -> String {
     format!("{fp_b32}={full}")
 }
 
+/// A bucket-set member for an arbitrary observed `fp_b32` pointing at
+/// `schema_id`: `"<fp_b32>=<sch_id>"`. Generalizes `bucket_member` (which is
+/// just `variant_member` called with `schema_id`'s own digest) to Task 14's
+/// variant-indexing fix: any CONCRETE shape's raw-fingerprint base32 body
+/// can be indexed here, not only the schema's own (generalized) digest.
+pub fn variant_member(fp_b32: &str, schema_id: &SchemaId) -> String {
+    format!("{fp_b32}={}", schema_id.as_str())
+}
+
+/// Serializes a schema's observed concrete-shape variants — `(bucket_key,
+/// fp_b32)` pairs — into the JSON array stored on the schema hash's
+/// `variants` field: `["<bucket>=<fp_b32>", ...]`. This is what
+/// [`RedisRegistry::rebuild_index`] reads back to restore variant
+/// membership from the authoritative schema record alone (spec §6:
+/// rebuildable from schema records), without needing the (ephemeral,
+/// TTL'd) `EvidenceStore` candidate-variant sets to still exist.
+pub fn encode_variants_field(variants: &[(String, String)]) -> String {
+    let entries: Vec<String> = variants
+        .iter()
+        .map(|(bucket, fp_b32)| format!("{bucket}={fp_b32}"))
+        .collect();
+    serde_json::to_string(&entries).unwrap_or_else(|_| "[]".to_string())
+}
+
+/// Inverse of [`encode_variants_field`]: parses the schema hash's `variants`
+/// field JSON back into `(bucket_key, fp_b32)` pairs. Malformed entries
+/// (no `=`) are silently skipped rather than failing the whole rebuild —
+/// mirrors `rebuild_index`'s existing "skip what can't be reconstructed"
+/// posture for pre-Task-14 schema records that have no `variants` field at
+/// all (handled by the caller via `Option`, not here).
+fn decode_variants_field(json: &str) -> Vec<(String, String)> {
+    let entries: Vec<String> = serde_json::from_str(json).unwrap_or_default();
+    entries
+        .into_iter()
+        .filter_map(|entry| {
+            entry
+                .split_once('=')
+                .map(|(bucket, fp_b32)| (bucket.to_string(), fp_b32.to_string()))
+        })
+        .collect()
+}
+
 /// The `fp_b32=*` match pattern used to find `schema_id`'s membership
 /// within a bucket via a bounded `SSCAN`.
 fn fp_match_pattern(schema_id: &SchemaId) -> String {
@@ -152,6 +194,27 @@ impl RedisRegistry {
                 let member = bucket_member(&schema_id);
                 let _: () = conn.sadd(&bucket, member).await.map_err(redis_err)?;
                 count += 1;
+
+                // Task 14 fix: also restore every CONCRETE-shape variant
+                // member recorded on this schema's `variants` field at
+                // publish time, into ITS OWN bucket (which may differ from
+                // the schema's own self-referential `bucket` above — an
+                // observed variant with more/fewer top-level fields can
+                // band into a different structural bucket). Absent for
+                // schemas published before this field existed (or with no
+                // recorded variants) — `decode_variants_field` returns an
+                // empty vec for both, so this loop is simply a no-op then.
+                let variants_json: Option<String> =
+                    conn.hget(key, "variants").await.map_err(redis_err)?;
+                if let Some(variants_json) = variants_json {
+                    for (variant_bucket, fp_b32) in decode_variants_field(&variants_json) {
+                        let vmember = variant_member(&fp_b32, &schema_id);
+                        let _: () = conn
+                            .sadd(&variant_bucket, vmember)
+                            .await
+                            .map_err(redis_err)?;
+                    }
+                }
             }
 
             if next_cursor == "0" {

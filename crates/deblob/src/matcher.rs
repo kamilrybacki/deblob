@@ -183,6 +183,7 @@ mod tests {
             _record: SchemaRecord,
             _alias_from: &CandidateId,
             _bucket_key: &str,
+            _variant_members: &[(String, String)],
             _actor: &str,
             _reason: &str,
         ) -> Result<FamilyVersion, CoreError> {

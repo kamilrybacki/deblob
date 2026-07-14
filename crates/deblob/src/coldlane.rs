@@ -18,12 +18,12 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
-use data_encoding::HEXLOWER;
+use data_encoding::{BASE32_NOPAD, HEXLOWER};
 use deblob_core::envelope::SourceCursor;
 use deblob_core::error::CoreError;
 use deblob_core::id::CandidateId;
 use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore};
-use deblob_fingerprint::Node;
+use deblob_fingerprint::{bucket_key, fingerprint, shape_of, summarize, Node};
 use deblob_monoid::{FieldNode, Profile};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use serde::{Deserialize, Serialize};
@@ -172,6 +172,21 @@ impl ColdLane {
             self.evidence.set_cluster(&hex, &target_id).await?;
         }
 
+        // Task 14 fix (promote→resolve round trip): record this
+        // observation's own CONCRETE-shape (bucket_key, raw fp base32 body)
+        // against `target_id`, de-duplicated via the underlying Redis SET.
+        // `Promoter::promote` later replays every variant recorded here
+        // into the structural index, which is what lets a hot-path lookup
+        // for THIS EXACT raw shape resolve to the schema once the
+        // candidate is promoted — the schema's own `schema_id` is derived
+        // from the GENERALIZED profile (a different fingerprint domain,
+        // spec §5) and can never equal a concrete observation's raw digest
+        // on its own.
+        let (variant_bucket, variant_fp_b32) = concrete_variant(node);
+        self.evidence
+            .add_variant(&target_id, &variant_bucket, &variant_fp_b32)
+            .await?;
+
         // §9: append ONLY this observation's presence/type-count stats —
         // `Profile` never retains a raw observed value, so serializing it
         // cannot leak payload contents.
@@ -240,6 +255,23 @@ fn reduced_generalized_fps(profile: &Profile) -> Vec<[u8; 32]> {
     out
 }
 
+/// The `(bucket_key, fp_b32)` pair identifying `node`'s own CONCRETE shape —
+/// exactly what the hot path (`crate::matcher::HotMatcher::classify`)
+/// computes for an incoming message: `deblob_fingerprint::bucket_key` of its
+/// summarized shape, and the base32 body of its raw
+/// `deblob_fingerprint::fingerprint` digest (the same encoding
+/// `SchemaId`/`CandidateId` use, computed directly rather than round-
+/// tripping through either id type). Recorded per observation via
+/// [`EvidenceStore::add_variant`] so promotion can index every concrete
+/// shape actually seen, not just the candidate's generalized identity.
+fn concrete_variant(node: &Node) -> (String, String) {
+    let shape = shape_of(node);
+    let raw_fp = fingerprint(&shape);
+    let bucket = bucket_key(&summarize(&shape));
+    let fp_b32 = BASE32_NOPAD.encode(&raw_fp).to_ascii_lowercase();
+    (bucket, fp_b32)
+}
+
 fn now_ms() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -260,6 +292,7 @@ mod tests {
     struct FakeEvidence {
         candidates: StdMutex<HashMap<CandidateId, CandidateRecord>>,
         clusters: StdMutex<HashMap<String, CandidateId>>,
+        variants: StdMutex<HashMap<CandidateId, Vec<(String, String)>>>,
     }
 
     #[async_trait::async_trait]
@@ -327,6 +360,34 @@ mod tests {
                 .insert(gen_fp.to_string(), cand_id.clone());
             Ok(())
         }
+
+        async fn add_variant(
+            &self,
+            cand_id: &CandidateId,
+            bucket_key: &str,
+            fp_b32: &str,
+        ) -> Result<(), CoreError> {
+            let mut variants = self.variants.lock().unwrap();
+            let entry = variants.entry(cand_id.clone()).or_default();
+            let pair = (bucket_key.to_string(), fp_b32.to_string());
+            if !entry.contains(&pair) {
+                entry.push(pair);
+            }
+            Ok(())
+        }
+
+        async fn get_variants(
+            &self,
+            cand_id: &CandidateId,
+        ) -> Result<Vec<(String, String)>, CoreError> {
+            Ok(self
+                .variants
+                .lock()
+                .unwrap()
+                .get(cand_id)
+                .cloned()
+                .unwrap_or_default())
+        }
     }
 
     fn node_of(json: &str) -> Node {
@@ -370,12 +431,33 @@ mod tests {
         assert_eq!(out2, IngestOutcome::Ingested);
 
         // Exactly one candidate stored, at the FIRST raw id observed
-        // (base_id) — the variant clustered onto it.
-        let candidates = evidence.candidates.lock().unwrap();
-        assert_eq!(candidates.len(), 1);
-        let stored = candidates.get(&base_id).expect("base_id candidate stored");
-        assert_eq!(stored.sample_count, 2);
-        assert!(!candidates.contains_key(&variant_id));
+        // (base_id) — the variant clustered onto it. Scoped in a block (not
+        // just an explicit `drop`) so the `MutexGuard` is provably released
+        // before the `.await` below — `clippy::await_holding_lock` doesn't
+        // always credit a bare `drop()` call.
+        {
+            let candidates = evidence.candidates.lock().unwrap();
+            assert_eq!(candidates.len(), 1);
+            let stored = candidates.get(&base_id).expect("base_id candidate stored");
+            assert_eq!(stored.sample_count, 2);
+            assert!(!candidates.contains_key(&variant_id));
+        }
+
+        // Task 14 fix: BOTH concrete variants' (bucket, fp_b32) pairs must
+        // be recorded against base_id (where they clustered), even though
+        // only base_id ever entered a `CandidateRecord` — this is what
+        // lets `Promoter::promote` later index both raw shapes, not just
+        // whichever one seeded the candidate.
+        let recorded = evidence.get_variants(&base_id).await.unwrap();
+        assert_eq!(
+            recorded.len(),
+            2,
+            "both variants must be recorded: {recorded:?}"
+        );
+        let expected_base = concrete_variant(&node_of(base));
+        let expected_variant = concrete_variant(&node_of(variant));
+        assert!(recorded.contains(&expected_base));
+        assert!(recorded.contains(&expected_variant));
     }
 
     #[tokio::test]

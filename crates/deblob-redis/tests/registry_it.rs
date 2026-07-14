@@ -54,7 +54,7 @@ async fn publish_is_atomic_and_write_once() {
     let rec = sample_record(); // helper building a SchemaRecord
     let cand = CandidateId::from_digest(&[9u8; 32]);
     let v1 = reg
-        .publish(rec.clone(), &cand, "bucket:3:abc", "kamil", "initial")
+        .publish(rec.clone(), &cand, "bucket:3:abc", &[], "kamil", "initial")
         .await
         .unwrap();
     assert_eq!(v1, FamilyVersion(1), "first publish allocates version 1");
@@ -65,7 +65,7 @@ async fn publish_is_atomic_and_write_once() {
     assert_eq!(stored.version, v1);
     assert_eq!(reg.get_alias(&cand).await.unwrap().unwrap(), rec.schema_id);
     let v2 = reg
-        .publish(rec.clone(), &cand, "bucket:3:abc", "kamil", "retry")
+        .publish(rec.clone(), &cand, "bucket:3:abc", &[], "kamil", "retry")
         .await
         .unwrap();
     assert_eq!(
@@ -79,7 +79,7 @@ async fn publish_is_atomic_and_write_once() {
     let mut tampered = rec.clone();
     tampered.canonical = "{\"t\":\"obj\",\"f\":{}}".into();
     let err = reg
-        .publish(tampered, &cand, "bucket:3:abc", "kamil", "tamper")
+        .publish(tampered, &cand, "bucket:3:abc", &[], "kamil", "tamper")
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::ImmutabilityViolation(_)));
@@ -111,7 +111,7 @@ async fn republish_with_different_provenance_is_idempotent() {
     let cand = CandidateId::from_digest(&[40u8; 32]);
     let rec = sample_record();
     let v1 = reg
-        .publish(rec.clone(), &cand, "bucket:4:abc", "kamil", "initial")
+        .publish(rec.clone(), &cand, "bucket:4:abc", &[], "kamil", "initial")
         .await
         .unwrap();
     assert_eq!(v1, FamilyVersion(1));
@@ -125,6 +125,7 @@ async fn republish_with_different_provenance_is_idempotent() {
             retried,
             &cand,
             "bucket:4:abc",
+            &[],
             "kamil",
             "retry-with-new-provenance",
         )
@@ -162,14 +163,28 @@ async fn alias_reassignment_rejected() {
     let cand = CandidateId::from_digest(&[7u8; 32]);
 
     let rec_a = record_with([10u8; 32], FamilyId::new_v7());
-    reg.publish(rec_a.clone(), &cand, "bucket:1:aaa", "kamil", "publish-a")
-        .await
-        .unwrap();
+    reg.publish(
+        rec_a.clone(),
+        &cand,
+        "bucket:1:aaa",
+        &[],
+        "kamil",
+        "publish-a",
+    )
+    .await
+    .unwrap();
 
     // different schema_id, same alias_from (cand) → write-once alias rejects
     let rec_b = record_with([11u8; 32], FamilyId::new_v7());
     let err = reg
-        .publish(rec_b.clone(), &cand, "bucket:1:bbb", "kamil", "publish-b")
+        .publish(
+            rec_b.clone(),
+            &cand,
+            "bucket:1:bbb",
+            &[],
+            "kamil",
+            "publish-b",
+        )
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::Conflict(_)));
@@ -212,7 +227,14 @@ async fn family_versions_allocate_atomically() {
     let cand1_c = cand1.clone();
     let task_a = tokio::spawn(async move {
         reg_a
-            .publish(rec1_c, &cand1_c, "bucket:2:aaa", "kamil", "concurrent-a")
+            .publish(
+                rec1_c,
+                &cand1_c,
+                "bucket:2:aaa",
+                &[],
+                "kamil",
+                "concurrent-a",
+            )
             .await
     });
 
@@ -221,7 +243,14 @@ async fn family_versions_allocate_atomically() {
     let cand2_c = cand2.clone();
     let task_b = tokio::spawn(async move {
         reg_b
-            .publish(rec2_c, &cand2_c, "bucket:2:bbb", "kamil", "concurrent-b")
+            .publish(
+                rec2_c,
+                &cand2_c,
+                "bucket:2:bbb",
+                &[],
+                "kamil",
+                "concurrent-b",
+            )
             .await
     });
 

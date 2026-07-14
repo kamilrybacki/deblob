@@ -9,6 +9,14 @@
 //!   4. bucket key            deblob:index:<fieldband>:<depth>:<reqhash8>
 //!   5. audit stream key      deblob:audit:log
 //!   6. published-marker key  deblob:published:<sch_id>
+//!   - variant bucket keys (KEYS[7..6+N], Task 14 fix): one structural-index
+//!     SET key per observed CONCRETE shape recorded against the promoted
+//!     candidate (`EvidenceStore::get_variants`), possibly a DIFFERENT
+//!     bucket than KEYS[4]: an observed variant with more/fewer top-level
+//!     fields than the candidate's generalized profile can band into a
+//!     different `ShapeSummary` bucket. `N` is derived from `#KEYS - 6`, so
+//!     `N == 0` (no extra KEYS beyond the fixed six) is a valid, no-op call
+//!     — a candidate promoted with no recorded variants must not fail.
 //!
 //! `KEYS[4]` (Task 8) is the real per-bucket structural-index SET this
 //! schema belongs to, computed by the caller from its `ShapeSummary`. It is
@@ -28,6 +36,17 @@
 //!   7. actor
 //!   8. reason
 //!   9. now_ms
+//!   10. variants_json (Task 14 fix) JSON array of `"<bucket>=<fp_b32>"`
+//!       strings — one per KEYS[7..], in the SAME order — persisted onto
+//!       the schema hash's `variants` field so `rebuild_index` can restore
+//!       every variant's bucket membership from the authoritative schema
+//!       record alone (spec §6), without depending on the (ephemeral,
+//!       TTL'd) `EvidenceStore` candidate-variant set still existing.
+//!       `"[]"` when there are no variants.
+//!   - variant_member strings (ARGV[11..10+N], Task 14 fix): one per
+//!     KEYS[7..], in the SAME order: `"<fp_b32>=<sch_id>"` (same shape as
+//!     ARGV[6], just for a concrete observation's own digest instead of
+//!     the schema's).
 //!
 //! Semantics (all decided BEFORE any write, so a rejected call leaves no
 //! partial state):
@@ -75,6 +94,7 @@ local bucket_member = ARGV[6]
 local actor = ARGV[7]
 local reason = ARGV[8]
 local now_ms = ARGV[9]
+local variants_json = ARGV[10]
 
 -- Immutability compares CANONICAL IDENTITY ONLY. Differing provenance or
 -- version must never raise IMMUTABILITY.
@@ -119,6 +139,25 @@ if not existing_alias then
 end
 
 redis.call('SADD', index_key, bucket_member)
+
+-- Task 14 fix: index every observed CONCRETE shape recorded against this
+-- candidate, into ITS OWN bucket (KEYS[7..], one per variant, possibly
+-- distinct from index_key), so a hot-path lookup of any previously
+-- observed shape resolves to schema_id — not just the schema's own
+-- generalized digest. Unconditional (not gated behind `not
+-- existing_canonical`/`not existing_alias`) and idempotent (SADD), so a
+-- republish that now knows about MORE variants than the original publish
+-- still gets them indexed. The `variants` field is likewise always
+-- refreshed to the fullest set of variants any publish call has supplied,
+-- so `rebuild_index` can restore all of them later purely from this hash.
+redis.call('HSET', schema_key, 'variants', variants_json)
+local variant_count = #KEYS - 6
+for i = 1, variant_count do
+  local variant_bucket_key = KEYS[6 + i]
+  local variant_member = ARGV[10 + i]
+  redis.call('SADD', variant_bucket_key, variant_member)
+end
+
 redis.call('XADD', audit_key, '*', 'actor', actor, 'reason', reason, 'schema', schema_id, 'ts', now_ms)
 
 return version

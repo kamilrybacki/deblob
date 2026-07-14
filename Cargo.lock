@@ -390,10 +390,12 @@ dependencies = [
  "http-body-util",
  "lru",
  "parking_lot",
+ "redis",
  "serde",
  "serde_json",
  "sha2",
  "subtle",
+ "testcontainers-modules",
  "tokio",
  "tower",
 ]

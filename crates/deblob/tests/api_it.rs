@@ -56,6 +56,7 @@ impl Registry for FakeRegistry {
         _record: SchemaRecord,
         _alias_from: &CandidateId,
         _bucket_key: &str,
+        _variant_members: &[(String, String)],
         _actor: &str,
         _reason: &str,
     ) -> Result<FamilyVersion, CoreError> {
@@ -146,6 +147,22 @@ impl EvidenceStore for FakeEvidence {
     }
 
     async fn set_cluster(&self, _gen_fp: &str, _cand_id: &CandidateId) -> Result<(), CoreError> {
+        unimplemented!("not exercised by the management API")
+    }
+
+    async fn add_variant(
+        &self,
+        _cand_id: &CandidateId,
+        _bucket_key: &str,
+        _fp_b32: &str,
+    ) -> Result<(), CoreError> {
+        unimplemented!("not exercised by the management API")
+    }
+
+    async fn get_variants(
+        &self,
+        _cand_id: &CandidateId,
+    ) -> Result<Vec<(String, String)>, CoreError> {
         unimplemented!("not exercised by the management API")
     }
 }

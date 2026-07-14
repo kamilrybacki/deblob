@@ -145,9 +145,21 @@ impl PromoterTrait for Promoter {
 
         let bucket = bucket_key(&generalized_shape_summary(&profile));
 
+        // Task 14 fix: replay every CONCRETE shape observed for this
+        // candidate (recorded by `ColdLane::ingest` via
+        // `EvidenceStore::add_variant`) into the structural index alongside
+        // the schema itself, atomically. `schema_id` above is derived from
+        // the GENERALIZED profile — a different fingerprint domain than any
+        // single concrete observation (spec §5) — so without this, a
+        // hot-path lookup for a message that's actually been seen can never
+        // match `schema_id`'s own digest. An empty vec (a candidate
+        // promoted with no ingest history) is valid: it just means nothing
+        // extra gets indexed, never a hard failure.
+        let variants = self.evidence.get_variants(cand).await?;
+
         let version = self
             .registry
-            .publish(draft.clone(), cand, &bucket, actor, &req.reason)
+            .publish(draft.clone(), cand, &bucket, &variants, actor, &req.reason)
             .await?;
 
         Ok(SchemaRecord { version, ..draft })
@@ -200,6 +212,7 @@ mod tests {
     struct FakeEvidence {
         candidates: StdMutex<HashMap<CandId, CandidateRecord>>,
         clusters: StdMutex<HashMap<String, CandId>>,
+        variants: StdMutex<HashMap<CandId, Vec<(String, String)>>>,
     }
 
     #[async_trait::async_trait]
@@ -242,6 +255,29 @@ mod tests {
                 .insert(gen_fp.to_string(), cand_id.clone());
             Ok(())
         }
+        async fn add_variant(
+            &self,
+            cand_id: &CandId,
+            bucket_key: &str,
+            fp_b32: &str,
+        ) -> Result<(), CoreError> {
+            self.variants
+                .lock()
+                .unwrap()
+                .entry(cand_id.clone())
+                .or_default()
+                .push((bucket_key.to_string(), fp_b32.to_string()));
+            Ok(())
+        }
+        async fn get_variants(&self, cand_id: &CandId) -> Result<Vec<(String, String)>, CoreError> {
+            Ok(self
+                .variants
+                .lock()
+                .unwrap()
+                .get(cand_id)
+                .cloned()
+                .unwrap_or_default())
+        }
     }
 
     /// One recorded `Registry::publish` call, captured verbatim so tests
@@ -250,6 +286,7 @@ mod tests {
         record: CoreSchemaRecord,
         alias_from: CandId,
         bucket_key: String,
+        variant_members: Vec<(String, String)>,
         actor: String,
         reason: String,
     }
@@ -289,6 +326,7 @@ mod tests {
             record: CoreSchemaRecord,
             alias_from: &CandId,
             bucket_key: &str,
+            variant_members: &[(String, String)],
             actor: &str,
             reason: &str,
         ) -> Result<FamilyVersion, CoreError> {
@@ -296,6 +334,7 @@ mod tests {
                 record,
                 alias_from: alias_from.clone(),
                 bucket_key: bucket_key.to_string(),
+                variant_members: variant_members.to_vec(),
                 actor: actor.to_string(),
                 reason: reason.to_string(),
             });
@@ -418,6 +457,16 @@ mod tests {
             ))
             .await
             .unwrap();
+        // Task 14 fix: two concrete variants recorded against this
+        // candidate by (the real) `ColdLane::ingest` before promotion.
+        evidence
+            .add_variant(&cand_id, "deblob:index:2:2:aaaaaaaa", "rawfpvariantone")
+            .await
+            .unwrap();
+        evidence
+            .add_variant(&cand_id, "deblob:index:4:2:bbbbbbbb", "rawfpvarianttwo")
+            .await
+            .unwrap();
         let promoter = Promoter::new(registry.clone(), evidence);
 
         let schema = promoter
@@ -436,6 +485,54 @@ mod tests {
         assert_eq!(call.record.canonicalizer, CANONICALIZER);
         assert_eq!(call.record.schema_id, schema.schema_id);
         assert!(call.bucket_key.starts_with("deblob:index:"));
+
+        // The candidate's recorded concrete variants must be threaded
+        // through to `Registry::publish` verbatim — this is what lets the
+        // registry index each of them onto the promoted schema id.
+        let mut variants = call.variant_members.clone();
+        variants.sort();
+        let mut expected = vec![
+            (
+                "deblob:index:2:2:aaaaaaaa".to_string(),
+                "rawfpvariantone".to_string(),
+            ),
+            (
+                "deblob:index:4:2:bbbbbbbb".to_string(),
+                "rawfpvarianttwo".to_string(),
+            ),
+        ];
+        expected.sort();
+        assert_eq!(variants, expected);
+    }
+
+    /// Task 14 fix: a candidate promoted with NO recorded variants (e.g.
+    /// seeded without ingest history) must still promote successfully —
+    /// `get_variants` returning empty is a valid, non-error case that just
+    /// means nothing extra gets indexed.
+    #[tokio::test]
+    async fn promote_with_no_recorded_variants_still_publishes() {
+        let evidence = Arc::new(FakeEvidence::default());
+        let registry = Arc::new(FakeRegistry::new(1));
+        let cand_id = some_cand_id();
+        evidence
+            .upsert_candidate(candidate_record(
+                cand_id.clone(),
+                DEFAULT_MIN_SAMPLES,
+                0,
+                DEFAULT_MIN_AGE_MS + 1,
+            ))
+            .await
+            .unwrap();
+        let promoter = Promoter::new(registry.clone(), evidence);
+
+        let schema = promoter
+            .promote(&cand_id, request(), "alice")
+            .await
+            .unwrap();
+
+        assert_eq!(schema.version, FamilyVersion(1));
+        let published = registry.published.lock().unwrap();
+        assert!(published[0].variant_members.is_empty());
     }
 
     #[test]

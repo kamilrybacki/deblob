@@ -192,11 +192,20 @@ impl Registry for RedisRegistry {
 
     /// Atomic publication: schema + family version + index + alias + audit
     /// (§6), performed entirely inside one server-side Lua script.
+    ///
+    /// `variant_members` (Task 14 fix): threaded straight into the Lua
+    /// script as extra `KEYS`/`ARGV` pairs — see `crate::lua::PUBLISH_SCRIPT`
+    /// docs — so every observed concrete shape is indexed into ITS OWN
+    /// bucket atomically alongside the schema record itself, and the
+    /// `variants` field persisted onto the schema hash lets
+    /// `rebuild_index` restore them later purely from the authoritative
+    /// record.
     async fn publish(
         &self,
         record: SchemaRecord,
         alias_from: &CandidateId,
         bucket_key: &str,
+        variant_members: &[(String, String)],
         actor: &str,
         reason: &str,
     ) -> Result<FamilyVersion, CoreError> {
@@ -227,6 +236,17 @@ impl Registry for RedisRegistry {
         // schema id so a bucket can be SSCAN-matched — see `crate::index`.
         let bucket_member = crate::index::bucket_member(&record.schema_id);
 
+        // Task 14 fix: every observed CONCRETE shape recorded against the
+        // promoted candidate gets its own SADD, into ITS OWN bucket (which
+        // may differ from `bucket_key` above), plus a `variants` field on
+        // the schema hash recording the full set so `rebuild_index` can
+        // restore them later from the authoritative record alone.
+        let variant_members_str: Vec<String> = variant_members
+            .iter()
+            .map(|(_, fp_b32)| crate::index::variant_member(fp_b32, &record.schema_id))
+            .collect();
+        let variants_json = crate::index::encode_variants_field(variant_members);
+
         // The Lua script is the sole authority for the version (HINCRBY on
         // fresh publish, or the previously-allocated version on an
         // idempotent republish) — `record.version` is never trusted for
@@ -235,14 +255,18 @@ impl Registry for RedisRegistry {
         // SADD) and the value persisted to the schema hash's `bucket` field
         // (for `rebuild_index` to read back directly), since it's the same
         // string either way.
-        let result: redis::RedisResult<i64> = self
-            .publish_script
+        let mut invocation = self.publish_script.prepare_invoke();
+        invocation
             .key(schema_key(&record.schema_id))
             .key(family_key(&record.family_id))
             .key(alias_key(alias_from))
             .key(bucket_key)
             .key(AUDIT_KEY)
-            .key(published_key(&record.schema_id))
+            .key(published_key(&record.schema_id));
+        for (variant_bucket, _) in variant_members {
+            invocation.key(variant_bucket);
+        }
+        invocation
             .arg(&schema_json)
             .arg(&record.canonical)
             .arg(&record.canonicalizer)
@@ -252,8 +276,12 @@ impl Registry for RedisRegistry {
             .arg(actor)
             .arg(reason)
             .arg(&now_ms)
-            .invoke_async(&mut conn)
-            .await;
+            .arg(&variants_json);
+        for member in &variant_members_str {
+            invocation.arg(member);
+        }
+
+        let result: redis::RedisResult<i64> = invocation.invoke_async(&mut conn).await;
 
         result
             .map(|version| FamilyVersion(version as u32))
