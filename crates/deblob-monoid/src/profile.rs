@@ -46,8 +46,8 @@ pub struct FieldNode {
     pub array_empty_seen: bool,
     /// Whether a truncated (bound-limited) array was ever observed here.
     pub array_partial_seen: bool,
-    /// Whether at least one integer-text number (no `.`/`e`/`E`) was ever
-    /// observed here.
+    /// Whether all numbers observed at this field were integer-text (no `.`/`e`/`E`);
+    /// AND-merged across profiles. False once any non-integer number is seen.
     pub int_only: bool,
     /// Whether a negative-zero number text was ever observed here.
     pub neg_zero_seen: bool,
@@ -65,7 +65,7 @@ impl FieldNode {
             array_elem: None,
             array_empty_seen: false,
             array_partial_seen: false,
-            int_only: false,
+            int_only: true,
             neg_zero_seen: false,
         }
     }

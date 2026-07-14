@@ -33,8 +33,8 @@ impl FieldNode {
     /// mutates `a` or `b`. Element-wise `u64` addition, recursive
     /// `BTreeMap` union merge of children, `array_elem` merge, and bool
     /// flags combined with OR (each records whether the property was ever
-    /// observed in either operand — `int_only` and `neg_zero_seen` read as
-    /// "at least one number seen here was int-text / negative-zero").
+    /// observed in either operand), except `int_only` which merges with AND
+    /// (it is a universal claim: "all numbers seen here were integer-text").
     pub(crate) fn merge(a: &FieldNode, b: &FieldNode) -> FieldNode {
         FieldNode {
             present: a.present + b.present,
@@ -44,7 +44,7 @@ impl FieldNode {
             array_elem: merge_array_elem(&a.array_elem, &b.array_elem),
             array_empty_seen: a.array_empty_seen || b.array_empty_seen,
             array_partial_seen: a.array_partial_seen || b.array_partial_seen,
-            int_only: a.int_only || b.int_only,
+            int_only: a.int_only && b.int_only,
             neg_zero_seen: a.neg_zero_seen || b.neg_zero_seen,
         }
     }
@@ -244,5 +244,13 @@ mod tests {
         );
         // and the raw shapes differ:
         assert_ne!(raw_fp(br#"{"a":1}"#), raw_fp(br#"{"a":1,"opt":"x"}"#));
+    }
+
+    #[test]
+    fn generalized_fp_differs_from_raw_shape_fp() {
+        let p = profile_of(br#"{"a":1}"#);
+        let generalized = p.generalized_fingerprint();
+        let raw = raw_fp(br#"{"a":1}"#);
+        assert_ne!(generalized, raw);
     }
 }
