@@ -585,6 +585,7 @@ name = "deblob-monoid"
 version = "0.1.0"
 dependencies = [
  "deblob-fingerprint",
+ "insta",
  "proptest",
  "serde",
  "sha2",
