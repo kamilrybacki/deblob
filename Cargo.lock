@@ -608,6 +608,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "deblob-slm"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "deblob-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "deranged"
 version = "0.5.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -8,6 +8,7 @@ members = [
     "crates/deblob-match",
     "crates/deblob-monoid",
     "crates/deblob-redis",
+    "crates/deblob-slm",
 ]
 exclude = ["crates/deblob-fingerprint/fuzz"]
 
