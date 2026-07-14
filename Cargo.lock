@@ -575,6 +575,7 @@ dependencies = [
  "tower",
  "tracing",
  "unicode-normalization",
+ "uuid",
 ]
 
 [[package]]
