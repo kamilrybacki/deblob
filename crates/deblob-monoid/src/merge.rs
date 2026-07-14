@@ -3,7 +3,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::profile::{FieldNode, Profile, TypeCounts};
+use crate::profile::{FieldNode, NumericBuckets, Profile, TypeCounts};
 
 impl Profile {
     /// The neutral element: zero observed documents, empty root.
@@ -46,6 +46,7 @@ impl FieldNode {
             array_partial_seen: a.array_partial_seen || b.array_partial_seen,
             int_only: a.int_only && b.int_only,
             neg_zero_seen: a.neg_zero_seen || b.neg_zero_seen,
+            numeric_buckets: NumericBuckets::merge(&a.numeric_buckets, &b.numeric_buckets),
         }
     }
 }

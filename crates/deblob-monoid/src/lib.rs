@@ -7,4 +7,4 @@
 pub mod merge;
 pub mod profile;
 
-pub use profile::{FieldNode, Profile, TypeCounts, GENERALIZER};
+pub use profile::{FieldNode, NumericBuckets, Profile, TypeCounts, GENERALIZER};

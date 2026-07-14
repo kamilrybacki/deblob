@@ -669,6 +669,8 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "deblob-core",
+ "deblob-fingerprint",
+ "deblob-monoid",
  "reqwest",
  "serde",
  "serde_json",

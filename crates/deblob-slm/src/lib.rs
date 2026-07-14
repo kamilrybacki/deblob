@@ -14,10 +14,14 @@
 pub mod cache;
 pub mod contract;
 pub mod http;
+pub mod prompt;
 
 pub use contract::{
-    validate_decision, AbstainCause, CandidateProfileView, ContractError, FamilyCandidate,
-    InferenceBudget, InferenceDecision, InferenceError, InferenceRequest, Novelty, Relation,
-    SemanticInferencer,
+    validate_decision, AbstainCause, ContractError, FamilyCandidate, InferenceBudget,
+    InferenceDecision, InferenceError, InferenceRequest, Novelty, Relation, SemanticInferencer,
 };
 pub use http::{HttpInferencer, SlmHttpConfig};
+pub use prompt::{
+    build_prompt, detect_injection, redact_field_name, CandidateProfileView, NumericBucket, Prompt,
+    RedactedFieldStat, RedactedName, MAX_FIELDS, MAX_NAME_LEN, MAX_PATH_DEPTH,
+};

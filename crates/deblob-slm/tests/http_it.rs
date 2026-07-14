@@ -5,6 +5,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use deblob_core::id::{FamilyId, SchemaId};
+use deblob_monoid::Profile;
 use deblob_slm::contract::{
     AbstainCause, CandidateProfileView, FamilyCandidate, InferenceBudget, InferenceDecision,
     InferenceError, InferenceRequest, Relation, SemanticInferencer,
@@ -26,9 +27,7 @@ fn candidate(id: &SchemaId, rank: u32) -> FamilyCandidate {
 
 fn request(retrieved: Vec<FamilyCandidate>) -> InferenceRequest {
     InferenceRequest {
-        candidate: CandidateProfileView {
-            stats: json!({"field_count": 5}),
-        },
+        candidate: CandidateProfileView::from_profile(&Profile::identity()),
         retrieved,
         contract_version: 1,
         budget: InferenceBudget {

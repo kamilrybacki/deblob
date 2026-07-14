@@ -144,14 +144,12 @@ pub fn validate_decision(
 
 // --- Minimal request/port scaffolding, consumed by Tasks 2-5 -------------
 
-/// Redacted, monoid-statistics view of the candidate cluster. A placeholder
-/// container until Task 4 (PII-safe prompt builder) defines the concrete
-/// redacted shape; carrying an opaque `serde_json::Value` for now keeps this
-/// crate compiling for later tasks without pre-committing to that shape.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CandidateProfileView {
-    pub stats: serde_json::Value,
-}
+/// Redacted, monoid-statistics-only view of the candidate cluster — see
+/// [`crate::prompt::CandidateProfileView`] (Task 4) for the concrete shape
+/// and its `from_profile` constructor. Re-exported here (rather than
+/// defined here) because [`InferenceRequest`] needs the type but the
+/// PII-safe redaction logic that produces it belongs to `crate::prompt`.
+pub use crate::prompt::CandidateProfileView;
 
 /// One retrieved top-k family candidate (deterministic retrieval, Task 3),
 /// offered to the model as part of the allowed `schema_id` set.
