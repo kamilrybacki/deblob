@@ -23,14 +23,18 @@
 //! latency, distinct from the registry-call-only
 //! `registry_operation_duration_seconds`).
 //!
-//! P1 can only ever *emit* a subset of the canonical set from the code
-//! that exists today (the hot-path matcher and the cold lane); the rest
-//! (relay/transactions/cold-lane-lag/promotions) are registered up front
-//! so the `/metrics` exposition surface is stable across phases, even
-//! though nothing increments them yet. `deblob_slm_decisions_total` (P2,
-//! shadow-mode SLM) is deliberately NOT registered here — P1 has no SLM
-//! lane, and a metric nothing ever emits would misrepresent what this
-//! binary tracks.
+//! This crate's own code (the hot-path matcher and the cold lane) only
+//! ever emits a subset of the canonical set directly; `deblob_relay_
+//! records_total` and `deblob_relay_transactions_total{result}` are
+//! incremented from `deblob-kafka::Relay::run` (Task 16) via the `pub`
+//! `inc_relay_records`/`record_relay_transaction` methods below, against
+//! the SAME `Metrics` instance passed in through `RelayCfg`. The remainder
+//! (`deblob_cold_lane_lag_records`, `deblob_candidate_promotions_total`)
+//! are registered up front so the `/metrics` exposition surface is stable
+//! across phases, even though nothing increments them yet.
+//! `deblob_slm_decisions_total` (P2, shadow-mode SLM) is deliberately NOT
+//! registered here — P1 has no SLM lane, and a metric nothing ever emits
+//! would misrepresent what this binary tracks.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -326,10 +330,9 @@ impl Metrics {
     }
 
     /// Registered but not yet incremented anywhere in P1 (no code path
-    /// promotes/relays/reports cold-lane lag today) — kept `pub(crate)` so
-    /// future tasks (promotion policy, Kafka relay wiring) can start
-    /// emitting into the same series without touching this module's
-    /// public shape.
+    /// promotes candidates today) — kept `pub(crate)` so a future
+    /// promotion-policy task can start emitting into this series without
+    /// touching this module's public shape.
     #[allow(dead_code)]
     pub(crate) fn record_promotion(&self, result: &str) {
         self.candidate_promotions_total
@@ -337,13 +340,16 @@ impl Metrics {
             .inc();
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn inc_relay_records(&self) {
+    /// Increments `deblob_relay_records_total` — call once per record read
+    /// off the raw relay topic (Task 16's `deblob-kafka::Relay::run`).
+    pub fn inc_relay_records(&self) {
         self.relay_records_total.inc();
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn record_relay_transaction(&self, result: &str) {
+    /// Increments `deblob_relay_transactions_total{result}` — call once per
+    /// relay transaction outcome, `result` one of `"committed"`/
+    /// `"aborted"` (Task 16).
+    pub fn record_relay_transaction(&self, result: &str) {
         self.relay_transactions_total
             .with_label_values(&[result])
             .inc();

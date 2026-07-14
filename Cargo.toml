@@ -4,6 +4,7 @@ members = [
     "crates/deblob",
     "crates/deblob-core",
     "crates/deblob-fingerprint",
+    "crates/deblob-kafka",
     "crates/deblob-monoid",
     "crates/deblob-redis",
 ]

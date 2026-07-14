@@ -1,0 +1,22 @@
+[package]
+name = "deblob-kafka"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deblob-core = { path = "../deblob-core" }
+deblob-fingerprint = { path = "../deblob-fingerprint" }
+deblob = { path = "../deblob" }
+rdkafka = { version = "0.37", features = ["cmake-build", "tokio", "ssl"] }
+tokio.workspace = true
+async-trait.workspace = true
+tracing.workspace = true
+serde_json.workspace = true
+bytes.workspace = true
+thiserror.workspace = true
+tokio-util = "0.7"
+
+[dev-dependencies]
+testcontainers-modules = { version = "0.11", features = ["kafka"] }
