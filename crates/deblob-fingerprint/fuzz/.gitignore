@@ -1,0 +1,10 @@
+target
+artifacts
+coverage
+# The curated seed corpus (parse_fuzz/) is committed; libFuzzer only ever
+# *adds* to it locally/in CI, so ignore anything beyond the tracked seeds
+# instead of ignoring the whole corpus/ directory.
+corpus/*
+!corpus/parse_fuzz/
+corpus/parse_fuzz/*
+!corpus/parse_fuzz/*.json

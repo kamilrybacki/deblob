@@ -1,0 +1,39 @@
+[package]
+name = "deblob"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deblob-core = { path = "../deblob-core" }
+deblob-fingerprint = { path = "../deblob-fingerprint" }
+deblob-kafka = { path = "../deblob-kafka" }
+deblob-match = { path = "../deblob-match" }
+deblob-monoid = { path = "../deblob-monoid" }
+deblob-redis = { path = "../deblob-redis" }
+rdkafka = { version = "0.37", features = ["cmake-build", "tokio", "ssl"] }
+tokio = { workspace = true, features = ["net", "process", "io-util"] }
+tokio-util = "0.7"
+async-trait.workspace = true
+sha2.workspace = true
+data-encoding.workspace = true
+bytes.workspace = true
+axum = "0.8"
+tower = "0.5"
+serde.workspace = true
+serde_json.workspace = true
+subtle = "2"
+base64 = "0.22"
+governor = "0.6"
+prometheus = "0.13"
+tracing.workspace = true
+thiserror.workspace = true
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+testcontainers-modules = { version = "0.11", features = ["redis", "kafka"] }

@@ -1,0 +1,5 @@
+---
+source: crates/deblob-fingerprint/src/shape.rs
+expression: hex
+---
+7df45aab054600db18d644866d96b4c26dfcf233e9bda43b732d2f246609b7f6

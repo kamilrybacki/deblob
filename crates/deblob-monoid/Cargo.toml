@@ -1,0 +1,15 @@
+[package]
+name = "deblob-monoid"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deblob-fingerprint = { path = "../deblob-fingerprint" }
+sha2.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+insta = "1"
+proptest.workspace = true

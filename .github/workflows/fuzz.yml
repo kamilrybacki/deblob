@@ -1,0 +1,24 @@
+name: fuzz
+# Fuzzing is slow, so this runs on a nightly cron rather than on every push
+# (see ci.yml for the fast per-push/PR checks). It hardens the
+# deblob-fingerprint parser, the untrusted-input security boundary (Task 4).
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch: {}
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - run: cargo install cargo-fuzz --locked
+      - run: cargo fuzz run parse_fuzz -- -max_total_time=60
+        working-directory: crates/deblob-fingerprint
+      - name: Upload crash artifact
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crash-parse_fuzz
+          path: crates/deblob-fingerprint/fuzz/artifacts/parse_fuzz/
+          if-no-files-found: ignore

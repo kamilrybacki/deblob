@@ -1,0 +1,22 @@
+[package]
+name = "deblob-match"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+deblob-core = { path = "../deblob-core" }
+deblob-fingerprint = { path = "../deblob-fingerprint" }
+lru = "0.12"
+parking_lot = "0.12"
+prometheus = "0.13"
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+
+[dev-dependencies]
+tokio.workspace = true
+async-trait.workspace = true

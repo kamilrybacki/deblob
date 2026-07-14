@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="deblob Imprintling mark (geometric stand-in)">
+  <!-- Simplified monochrome Imprintling mark: wide asymmetric blob, rigid square core as negative space.
+       Geometric STAND-IN per docs/brand/design-book.md — replace with canonical art when available. -->
+  <path fill="#35D0B2" fill-rule="evenodd" d="
+    M 10 52
+    C 4 52 3 40 5 33
+    C 6 22 12 11 23 11
+    C 30 11 31 17 36 17
+    C 42 17 46 8 55 11
+    C 62 14 61 27 60 35
+    C 59 45 54 52 46 52
+    Z
+    M 30 33 h 12 a 2 2 0 0 1 2 2 v 11 a 2 2 0 0 1 -2 2 h -12 a 2 2 0 0 1 -2 -2 v -11 a 2 2 0 0 1 2 -2 Z
+  "/>
+</svg>

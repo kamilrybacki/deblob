@@ -1,0 +1,26 @@
+[package]
+name = "deblob-fingerprint-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.deblob-fingerprint]
+path = ".."
+
+[[bin]]
+name = "parse_fuzz"
+path = "fuzz_targets/parse_fuzz.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone workspace root: keeps this cargo-fuzz project isolated from the
+# top-level workspace (sanitizer-instrumented deps must not leak into the
+# regular build). Complements `workspace.exclude` in the root Cargo.toml.
+[workspace]
