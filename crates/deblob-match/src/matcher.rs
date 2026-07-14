@@ -236,6 +236,13 @@ mod tests {
         ) -> Result<(Vec<SchemaRecord>, Option<String>), CoreError> {
             unimplemented!("hot-path matcher must never list schemas")
         }
+
+        async fn list_families_in_buckets(
+            &self,
+            _bucket_keys: &[String],
+        ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+            unimplemented!("hot-path matcher must never run retrieval")
+        }
     }
 
     // Silence "unused" on evidence-store-shaped items pulled in only so the

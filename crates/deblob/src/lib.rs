@@ -22,6 +22,7 @@ pub mod config;
 pub mod discovery_consumer;
 pub mod policy;
 pub mod promote;
+pub mod retrieval;
 pub mod serve;
 
 pub use deblob_match::{matcher, metrics};

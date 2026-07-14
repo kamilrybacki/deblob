@@ -178,7 +178,10 @@ impl PromoterTrait for Promoter {
 /// fields), and `depth` walks children/array-element nesting the same way
 /// `deblob_fingerprint::shape::shape_depth` does (scalar/empty container
 /// depth 1, `1 + max(child depths)` otherwise).
-fn generalized_shape_summary(profile: &Profile) -> ShapeSummary {
+/// `pub(crate)`: reused by `crate::retrieval` (deblob-p2ab Task 3) to
+/// derive the same structural-index bucket a candidate's generalized
+/// profile would be published under, without duplicating this logic.
+pub(crate) fn generalized_shape_summary(profile: &Profile) -> ShapeSummary {
     let root = &profile.root;
     ShapeSummary {
         top_level_fields: root.children.len(),
@@ -187,7 +190,7 @@ fn generalized_shape_summary(profile: &Profile) -> ShapeSummary {
     }
 }
 
-fn field_depth(field: &FieldNode) -> u32 {
+pub(crate) fn field_depth(field: &FieldNode) -> u32 {
     let mut max_child = 0u32;
     for child in field.children.values() {
         max_child = max_child.max(field_depth(child));
@@ -348,6 +351,13 @@ mod tests {
             _cursor: Option<String>,
             _limit: usize,
         ) -> Result<(Vec<CoreSchemaRecord>, Option<String>), CoreError> {
+            unimplemented!("not exercised by promoter tests")
+        }
+
+        async fn list_families_in_buckets(
+            &self,
+            _bucket_keys: &[String],
+        ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
             unimplemented!("not exercised by promoter tests")
         }
     }

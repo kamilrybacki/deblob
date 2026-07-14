@@ -96,6 +96,13 @@ impl Registry for MissRegistry {
     ) -> Result<(Vec<SchemaRecord>, Option<String>), CoreError> {
         Ok((vec![], None))
     }
+
+    async fn list_families_in_buckets(
+        &self,
+        _bucket_keys: &[String],
+    ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+        Ok(vec![])
+    }
 }
 
 // Silence "unused" on evidence/candidate-shaped items pulled in only to

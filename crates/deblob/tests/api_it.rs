@@ -88,6 +88,13 @@ impl Registry for FakeRegistry {
         };
         Ok((page, next))
     }
+
+    async fn list_families_in_buckets(
+        &self,
+        _bucket_keys: &[String],
+    ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+        unimplemented!("not exercised by the management API")
+    }
 }
 
 /// In-memory `EvidenceStore` fake, keyed by `CandidateId`.

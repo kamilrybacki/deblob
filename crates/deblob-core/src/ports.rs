@@ -31,6 +31,19 @@ pub enum CandidateState {
     Rejected,
 }
 
+/// One schema found in a structural-index bucket, as returned by
+/// [`Registry::list_families_in_buckets`] (deblob-p2ab Task 3: deterministic
+/// structural-distance retrieval). Carries the same generalized-canonical
+/// JSON [`SchemaRecord::canonical`] holds, so the caller can score
+/// structural distance against it without a second per-schema round trip.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FamilyRef {
+    pub family_id: FamilyId,
+    pub schema_id: SchemaId,
+    pub version: FamilyVersion,
+    pub canonical: String,
+}
+
 #[async_trait]
 pub trait Registry: Send + Sync {
     async fn get_schema(&self, id: &SchemaId) -> Result<Option<SchemaRecord>, CoreError>;
@@ -77,6 +90,18 @@ pub trait Registry: Send + Sync {
         cursor: Option<String>,
         limit: usize,
     ) -> Result<(Vec<SchemaRecord>, Option<String>), CoreError>;
+
+    /// Every schema whose structural-index membership lives in any of
+    /// `bucket_keys` (deblob-p2ab Task 3 retrieval), de-duplicated by
+    /// `schema_id` across buckets. Each bucket lookup is a bounded per-bucket
+    /// scan — buckets are small by construction (spec §6) — never a scan
+    /// over `deblob:schema:*`. An empty `bucket_keys` slice is valid and
+    /// returns `Ok(vec![])`; this is the gold-ABSENT case (no nearby
+    /// families for a candidate), never an error.
+    async fn list_families_in_buckets(
+        &self,
+        bucket_keys: &[String],
+    ) -> Result<Vec<FamilyRef>, CoreError>;
 }
 
 #[async_trait]
