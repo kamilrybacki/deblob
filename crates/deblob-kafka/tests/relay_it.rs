@@ -11,14 +11,14 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use deblob::coldlane::DiscoveryMsg;
-use deblob::matcher::HotMatcher;
-use deblob::metrics::Metrics;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyVersion, SchemaId};
 use deblob_core::ports::{CandidateRecord, CandidateState, Registry, SchemaRecord};
 use deblob_fingerprint::Limits;
 use deblob_kafka::{Relay, RelayCfg};
+use deblob_match::discovery::DiscoveryMsg;
+use deblob_match::matcher::HotMatcher;
+use deblob_match::metrics::Metrics;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -56,7 +56,7 @@ async fn start_kafka() -> ContainerAsync<apache::Kafka> {
 /// doesn't depend on ever observing a real `Known` classification, only on
 /// `HotMatcher::classify` reaching a decision at all. `publish` is never
 /// reachable from the hot path and panics if called, matching the pattern
-/// `deblob::matcher`'s own unit tests use for the same reason.
+/// `deblob-match`'s own unit tests use for the same reason.
 struct MissRegistry;
 
 #[async_trait::async_trait]
@@ -160,6 +160,7 @@ fn relay_cfg(brokers: &str, t: &TestTopics, group_id: &str, txn_id: &str) -> Rel
         limits: Limits::default(),
         fault: None,
         metrics: Metrics::new(),
+        sasl: None,
     }
 }
 

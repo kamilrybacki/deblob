@@ -18,12 +18,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::Bytes;
-use deblob::coldlane::DiscoveryMsg;
-use deblob::matcher::HotMatcher;
-use deblob::metrics::Metrics;
 use deblob_core::envelope::SourceCursor;
 use deblob_core::id::SchemaRef;
 use deblob_fingerprint::Limits;
+use deblob_match::discovery::DiscoveryMsg;
+use deblob_match::matcher::HotMatcher;
+use deblob_match::metrics::Metrics;
 use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, Rebalance, StreamConsumer};
@@ -74,6 +74,38 @@ pub struct RelayCfg {
     /// topic, and `deblob_relay_transactions_total{result}` once per
     /// transaction outcome.
     pub metrics: Arc<Metrics>,
+    /// Optional SASL credentials (spec §9: "rdkafka TLS/SASL supported").
+    /// `None` (the default in every existing call site) leaves both the
+    /// consumer and producer `ClientConfig` exactly as before this field
+    /// existed — plaintext/PLAINTEXT brokers, unchanged. Task 18's
+    /// `main.rs` is the only caller that ever constructs `Some`, from the
+    /// env-only `DEBLOB_KAFKA_SASL_*` secrets — SASL credentials must never
+    /// live in the TOML config file.
+    pub sasl: Option<KafkaSasl>,
+}
+
+/// SASL credentials for the relay's Kafka clients (spec §9). Never
+/// `Debug`/`Display`-derived with the raw fields exposed — see the
+/// hand-written [`std::fmt::Debug`] impl below, which redacts `password`.
+#[derive(Clone)]
+pub struct KafkaSasl {
+    /// `sasl.mechanism` (e.g. `PLAIN`, `SCRAM-SHA-512`).
+    pub mechanism: String,
+    /// `security.protocol` (e.g. `SASL_SSL`, `SASL_PLAINTEXT`).
+    pub security_protocol: String,
+    pub username: String,
+    pub password: String,
+}
+
+impl std::fmt::Debug for KafkaSasl {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KafkaSasl")
+            .field("mechanism", &self.mechanism)
+            .field("security_protocol", &self.security_protocol)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
 }
 
 /// Errors [`Relay::run`] can return. Every variant is a genuine relay
@@ -443,6 +475,7 @@ pub(crate) fn consumer_client_config(cfg: &RelayCfg) -> ClientConfig {
         // topic is transactional either. `read_committed` is what
         // DOWNSTREAM consumers of tagged/discovery/quarantine must set.
         .set("isolation.level", "read_uncommitted");
+    apply_sasl(&mut c, &cfg.sasl);
     c
 }
 
@@ -455,7 +488,20 @@ fn producer_client_config(cfg: &RelayCfg) -> ClientConfig {
         .set("enable.idempotence", "true")
         .set("message.timeout.ms", "10000")
         .set("transaction.timeout.ms", "30000");
+    apply_sasl(&mut c, &cfg.sasl);
     c
+}
+
+/// Applies SASL credentials to a `ClientConfig` if present — shared by
+/// both the consumer and producer builders so the two clients never drift
+/// on how `security.protocol`/`sasl.mechanism` get set.
+fn apply_sasl(c: &mut ClientConfig, sasl: &Option<KafkaSasl>) {
+    if let Some(sasl) = sasl {
+        c.set("security.protocol", &sasl.security_protocol)
+            .set("sasl.mechanism", &sasl.mechanism)
+            .set("sasl.username", &sasl.username)
+            .set("sasl.password", &sasl.password);
+    }
 }
 
 #[cfg(test)]
@@ -474,6 +520,7 @@ mod tests {
             limits: Limits::default(),
             fault: None,
             metrics: Metrics::new(),
+            sasl: None,
         }
     }
 
@@ -502,5 +549,49 @@ mod tests {
         let c = producer_client_config(&cfg());
         assert_eq!(c.get("transactional.id"), Some("deblob-relay-test-txn"));
         assert_eq!(c.get("enable.idempotence"), Some("true"));
+    }
+
+    // Spec §9: "rdkafka TLS/SASL supported" — `sasl: None` (every existing
+    // call site) leaves both client configs exactly as before this field
+    // existed; `Some` applies identically to consumer and producer.
+    #[test]
+    fn no_sasl_by_default() {
+        let c = consumer_client_config(&cfg());
+        assert_eq!(c.get("security.protocol"), None);
+        assert_eq!(c.get("sasl.mechanism"), None);
+    }
+
+    #[test]
+    fn sasl_applies_to_both_consumer_and_producer_configs() {
+        let mut with_sasl = cfg();
+        with_sasl.sasl = Some(KafkaSasl {
+            mechanism: "SCRAM-SHA-512".to_string(),
+            security_protocol: "SASL_SSL".to_string(),
+            username: "deblob".to_string(),
+            password: "s3cr3t".to_string(),
+        });
+
+        let consumer = consumer_client_config(&with_sasl);
+        assert_eq!(consumer.get("security.protocol"), Some("SASL_SSL"));
+        assert_eq!(consumer.get("sasl.mechanism"), Some("SCRAM-SHA-512"));
+        assert_eq!(consumer.get("sasl.username"), Some("deblob"));
+        assert_eq!(consumer.get("sasl.password"), Some("s3cr3t"));
+
+        let producer = producer_client_config(&with_sasl);
+        assert_eq!(producer.get("security.protocol"), Some("SASL_SSL"));
+        assert_eq!(producer.get("sasl.mechanism"), Some("SCRAM-SHA-512"));
+    }
+
+    #[test]
+    fn kafka_sasl_debug_redacts_password() {
+        let sasl = KafkaSasl {
+            mechanism: "PLAIN".to_string(),
+            security_protocol: "SASL_PLAINTEXT".to_string(),
+            username: "deblob".to_string(),
+            password: "s3cr3t".to_string(),
+        };
+        let rendered = format!("{sasl:?}");
+        assert!(!rendered.contains("s3cr3t"), "rendered: {rendered}");
+        assert!(rendered.contains("<redacted>"));
     }
 }

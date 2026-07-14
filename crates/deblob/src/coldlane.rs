@@ -17,7 +17,6 @@ use std::num::NonZeroU32;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use bytes::Bytes;
 use data_encoding::{BASE32_NOPAD, HEXLOWER};
 use deblob_core::envelope::SourceCursor;
 use deblob_core::error::CoreError;
@@ -26,9 +25,14 @@ use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore};
 use deblob_fingerprint::{bucket_key, fingerprint, shape_of, summarize, Node};
 use deblob_monoid::{FieldNode, Profile};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
-use serde::{Deserialize, Serialize};
 
 use crate::metrics::Metrics;
+
+/// Re-exported so `deblob::coldlane::DiscoveryMsg` keeps resolving after
+/// Task 18 moved the type's definition to `deblob-match` (so `deblob-kafka`
+/// can depend on it without depending on the `deblob` package — see
+/// `deblob_match`'s crate docs).
+pub use deblob_match::discovery::DiscoveryMsg;
 
 /// Default per-source rate limit on newly minted candidates: 10/minute
 /// (spec §9 abuse-resistance — a compromised/misbehaving producer must not
@@ -43,20 +47,6 @@ pub const DEFAULT_NEW_CANDIDATES_PER_MIN: u32 = 10;
 pub struct SampleMeta {
     pub source: String,
     pub cursor: Option<SourceCursor>,
-}
-
-/// One message forwarded to the discovery topic for cold-lane processing
-/// (Task 16's Kafka wiring consumes this). Carries the RAW payload bytes —
-/// unlike the stats-only evidence `ColdLane::ingest` appends to the
-/// `EvidenceStore`, this is the transport envelope between the hot path and
-/// the cold-lane consumer, not a permanent record (spec §9 governs what
-/// gets *persisted*, not what's in flight on the discovery topic).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DiscoveryMsg {
-    pub cand_id: String,
-    pub payload: Bytes,
-    pub source: String,
-    pub cursor: SourceCursor,
 }
 
 /// Outcome of one `ColdLane::ingest` call. Rate-limited ingestion is
@@ -449,6 +439,34 @@ mod tests {
         }
     }
 
+    /// The counter/gauge value of the family `name`, optionally filtered to
+    /// the metric instance carrying label `(key, value)`. Duplicated (not
+    /// reused) from `deblob_match::metrics`'s own `#[cfg(test)]`-only
+    /// `test_support` module: that module is crate-private and only
+    /// compiled under `deblob-match`'s OWN test config, so it isn't visible
+    /// here across the crate boundary Task 18 introduced. Panics if the
+    /// family doesn't exist at all (a real bug in the test).
+    fn value_of(families: &[prometheus::proto::MetricFamily], name: &str) -> f64 {
+        let family = families
+            .iter()
+            .find(|f| f.get_name() == name)
+            .unwrap_or_else(|| panic!("metric family {name:?} not found in gathered output"));
+        family
+            .get_metric()
+            .iter()
+            .find(|m| m.get_label().is_empty())
+            .map(|m| {
+                if m.has_counter() {
+                    m.get_counter().get_value()
+                } else if m.has_gauge() {
+                    m.get_gauge().get_value()
+                } else {
+                    0.0
+                }
+            })
+            .unwrap_or(0.0)
+    }
+
     #[tokio::test]
     async fn optional_variants_cluster_to_one_candidate() {
         let evidence = Arc::new(FakeEvidence::default());
@@ -600,20 +618,14 @@ mod tests {
             .unwrap();
 
         let families = metrics.registry().gather();
-        assert_eq!(
-            crate::metrics::test_support::value_of(&families, "deblob_candidates_active", None),
-            1.0
-        );
+        assert_eq!(value_of(&families, "deblob_candidates_active"), 1.0);
 
         // Re-observing the same candidate must not double-count it.
         lane.ingest(cand_id_of(payload), &node_of(payload), meta("src-a"))
             .await
             .unwrap();
         let families = metrics.registry().gather();
-        assert_eq!(
-            crate::metrics::test_support::value_of(&families, "deblob_candidates_active", None),
-            1.0
-        );
+        assert_eq!(value_of(&families, "deblob_candidates_active"), 1.0);
     }
 
     #[test]

@@ -26,13 +26,13 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use std::time::Duration;
 
-use deblob::matcher::HotMatcher;
-use deblob::metrics::Metrics;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyVersion, SchemaId};
 use deblob_core::ports::{Registry, SchemaRecord};
 use deblob_fingerprint::Limits;
 use deblob_kafka::{FaultPoint, Relay, RelayCfg, RelayError};
+use deblob_match::matcher::HotMatcher;
+use deblob_match::metrics::Metrics;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::client::DefaultClientContext;
 use rdkafka::consumer::{Consumer, StreamConsumer};
@@ -188,6 +188,7 @@ fn relay_cfg(
         limits: Limits::default(),
         fault,
         metrics: Metrics::new(),
+        sasl: None,
     }
 }
 

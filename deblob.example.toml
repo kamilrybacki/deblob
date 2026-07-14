@@ -1,0 +1,30 @@
+# deblob.example.toml
+#
+# Non-secret operational configuration for the `deblob` binary (spec §9).
+# Copy this file to `deblob.toml` (the default `--config` path) and adjust
+# per environment.
+#
+# SECRETS NEVER GO IN THIS FILE. `DEBLOB_API_TOKEN`, `DEBLOB_REDIS_URL`,
+# `DEBLOB_KAFKA_BROKERS`, and the optional `DEBLOB_KAFKA_SASL_*` /
+# `DEBLOB_KAFKA_SECURITY_PROTOCOL` credentials are read exclusively from
+# environment variables at startup — see `crates/deblob/src/config.rs`.
+
+[kafka]
+raw_topic = "events.raw"
+tagged_topic = "events.tagged"
+discovery_topic = "deblob.discovery"
+quarantine_topic = "deblob.quarantine"
+group_id = "deblob"
+transactional_id = "deblob-relay-1"
+
+[limits]
+max_bytes = 1048576
+max_depth = 32
+max_fields_per_object = 1024
+
+[promotion]
+min_samples = 10
+min_age_ms = 300000
+
+[management]
+addr = "127.0.0.1:9615"

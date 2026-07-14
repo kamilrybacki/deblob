@@ -8,15 +8,16 @@ rust-version.workspace = true
 [dependencies]
 deblob-core = { path = "../deblob-core" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
+deblob-kafka = { path = "../deblob-kafka" }
+deblob-match = { path = "../deblob-match" }
 deblob-monoid = { path = "../deblob-monoid" }
 deblob-redis = { path = "../deblob-redis" }
-tokio.workspace = true
+tokio = { workspace = true, features = ["net", "process"] }
+tokio-util = "0.7"
 async-trait.workspace = true
 sha2.workspace = true
 data-encoding.workspace = true
 bytes.workspace = true
-lru = "0.12"
-parking_lot = "0.12"
 axum = "0.8"
 tower = "0.5"
 serde.workspace = true
@@ -26,10 +27,12 @@ base64 = "0.22"
 governor = "0.6"
 prometheus = "0.13"
 tracing.workspace = true
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
+thiserror.workspace = true
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+redis = { version = "0.27", features = ["tokio-comp"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
-redis = { version = "0.27", features = ["tokio-comp", "script"] }
 testcontainers-modules = { version = "0.11", features = ["redis"] }

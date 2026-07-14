@@ -324,8 +324,11 @@ impl Metrics {
     }
 
     /// Increments `deblob_candidates_active` — call exactly once per
-    /// genuinely new candidate the cold lane creates.
-    pub(crate) fn inc_candidates_active(&self) {
+    /// genuinely new candidate the cold lane creates. `pub` (not
+    /// `pub(crate)`): Task 18 moved `deblob::coldlane::ColdLane` (the only
+    /// caller) into the `deblob` crate while this `Metrics` type stayed in
+    /// `deblob-match`, so this is now a cross-crate call.
+    pub fn inc_candidates_active(&self) {
         self.candidates_active.inc();
     }
 
