@@ -7,10 +7,13 @@ rust-version.workspace = true
 
 [dependencies]
 deblob-core = { path = "../deblob-core" }
+deblob-fingerprint = { path = "../deblob-fingerprint" }
 async-trait.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 redis = { version = "0.27", features = ["tokio-comp", "script"] }
+sha2.workspace = true
+data-encoding.workspace = true
 
 [dev-dependencies]
 testcontainers-modules = { version = "0.11", features = ["redis"] }

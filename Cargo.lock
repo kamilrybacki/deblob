@@ -330,9 +330,12 @@ name = "deblob-redis"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "data-encoding",
  "deblob-core",
+ "deblob-fingerprint",
  "redis",
  "serde_json",
+ "sha2",
  "testcontainers-modules",
  "tokio",
 ]

@@ -15,3 +15,10 @@ Task 4: complete (commits 610583a..ad53292, review clean — bounded JSON parser
   NOTE: oversized string VALUES reuse SizeExceeded (no dedicated variant) — adjudicated reasonable.
 Task 5: complete (commits 2313009..879bef1, review Important fixed — shape extraction + canonical hashing; value/key-order independence, empty-array distinction, deterministic BTree canon, pinned golden all verified; fingerprint version tag now derived from CANONICALIZER const)
   MINOR (final review): canonical_bytes object-key escaping covers only " \ and <0x20 controls; not guaranteed to round-trip a generic JSON parser (e.g. U+2028). Fine for preimage injectivity; doc note for consumers.
+Task 6: complete (commits 879bef1..4bd83d4, review Important fixed — schema monoid; associativity/commutativity/identity proptest-proven, generalized_fingerprint != raw shape fp verified)
+  DEVIATION FROM BRIEF (intentional): brief said "bool flags OR'd"; corrected int_only to AND-merge (universal "all numbers integer" claim; identity().int_only=true) while keeping existential _seen flags OR. Reviewer-confirmed brief defect; int_only has zero consumers until P2.
+  MINOR: added direct generalized-vs-raw fingerprint assert_ne test (was implicit).
+Task 7: complete (commits 4bd83d4..d3eb2a8, two Important fixed + focused re-review clean — Redis schema vault, atomic Lua publication; CHECKPOINT CLOSED)
+  FIX A: immutability compare narrowed to canonical+canonicalizer only (schema now stored as HASH) — idempotent retries with fresh provenance no longer wrongly violate.
+  FIX B: Registry::publish now returns authoritative FamilyVersion (HINCRBY-allocated); caller-supplied record.version never trusted; get_schema/list_schemas return authoritative version. TRAIT SIGNATURE CHANGED in deblob-core (only impl so far).
+  MINOR (final review): version cast i64->u32 truncates rather than errors (unreachable in practice).

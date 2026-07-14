@@ -10,4 +10,4 @@ pub mod shape;
 pub use canon::{canonical_bytes, fingerprint, CANONICALIZER};
 pub use limits::Limits;
 pub use parse::{parse_bounded, Node};
-pub use shape::{shape_of, Emptiness, Shape, ShapeSet};
+pub use shape::{shape_of, summarize, Emptiness, Shape, ShapeSet, ShapeSummary};

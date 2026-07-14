@@ -37,6 +37,51 @@ pub enum Shape {
     Object(BTreeMap<String, Shape>),
 }
 
+/// A compact, derived summary of a [`Shape`] used to bucket schemas for the
+/// structural index (deblob-redis Task 8): how many fields sit at the top
+/// level, how deeply the shape nests, and which top-level keys it requires.
+/// Two shapes with the same summary are *candidates* for the same bucket —
+/// the summary is intentionally lossy (many shapes collapse to one
+/// summary), which is what keeps buckets small.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShapeSummary {
+    /// Number of keys in a top-level `Object` shape; `0` for any other
+    /// top-level shape (including an empty object's sibling cases — a
+    /// non-object top level has no "fields" at all).
+    pub top_level_fields: usize,
+    /// Maximum nesting depth of the shape. A scalar (`Null`/`Bool`/`Number`/
+    /// `String`) has depth `1`; a container's depth is `1 +` the maximum
+    /// depth of its contents (`0` if it has none, e.g. an empty object or
+    /// array), so `{}` is depth `1` and `{"a":{"b":1}}` is depth `3`.
+    pub depth: u32,
+    /// Top-level object keys in ascending code-point order (matches the
+    /// `BTreeMap` order `Shape::Object` already stores them in); empty for
+    /// any non-object top-level shape.
+    pub top_keys_sorted: Vec<String>,
+}
+
+/// Derive the [`ShapeSummary`] of `shape`. Pure and total — every `Shape`
+/// (including scalars and arrays at the top level) produces a summary.
+pub fn summarize(shape: &Shape) -> ShapeSummary {
+    let (top_level_fields, top_keys_sorted) = match shape {
+        Shape::Object(fields) => (fields.len(), fields.keys().cloned().collect()),
+        _ => (0, Vec::new()),
+    };
+    ShapeSummary {
+        top_level_fields,
+        depth: shape_depth(shape),
+        top_keys_sorted,
+    }
+}
+
+fn shape_depth(shape: &Shape) -> u32 {
+    match shape {
+        Shape::Null | Shape::Bool | Shape::Number | Shape::String => 1,
+        Shape::Array(set, _) => 1 + set.iter().map(shape_depth).max().unwrap_or(0),
+        Shape::Object(fields) => 1 + fields.values().map(shape_depth).max().unwrap_or(0),
+    }
+}
+
 /// Fold a parsed [`Node`] into its [`Shape`], erasing concrete values.
 pub fn shape_of(node: &Node) -> Shape {
     match node {
@@ -119,6 +164,64 @@ mod tests {
         let s = shape_of(&parse_bounded(br#"{"a":1}"#, &Limits::default()).unwrap());
         let hex = data_encoding::HEXLOWER.encode(&fingerprint(&s));
         insta::assert_snapshot!(hex); // golden: canonicalizer version bump must break this test
+    }
+
+    #[test]
+    fn summarize_top_level_object_reports_field_count_and_sorted_keys() {
+        let s =
+            shape_of(&parse_bounded(br#"{"b":1,"a":"x","c":true}"#, &Limits::default()).unwrap());
+        let summary = summarize(&s);
+        assert_eq!(summary.top_level_fields, 3);
+        assert_eq!(summary.top_keys_sorted, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn summarize_non_object_top_level_has_zero_fields_and_no_keys() {
+        for src in [br#""hello""#.as_slice(), b"42", b"true", b"null", b"[1,2]"] {
+            let s = shape_of(&parse_bounded(src, &Limits::default()).unwrap());
+            let summary = summarize(&s);
+            assert_eq!(summary.top_level_fields, 0);
+            assert!(summary.top_keys_sorted.is_empty());
+        }
+    }
+
+    #[test]
+    fn summarize_depth_of_scalar_is_one() {
+        let s = shape_of(&parse_bounded(b"42", &Limits::default()).unwrap());
+        assert_eq!(summarize(&s).depth, 1);
+    }
+
+    #[test]
+    fn summarize_depth_of_empty_object_is_one() {
+        let s = shape_of(&parse_bounded(b"{}", &Limits::default()).unwrap());
+        assert_eq!(summarize(&s).depth, 1);
+    }
+
+    #[test]
+    fn summarize_depth_grows_with_nesting() {
+        let flat = shape_of(&parse_bounded(br#"{"a":1}"#, &Limits::default()).unwrap());
+        let nested = shape_of(&parse_bounded(br#"{"a":{"b":1}}"#, &Limits::default()).unwrap());
+        let deeper =
+            shape_of(&parse_bounded(br#"{"a":{"b":{"c":1}}}"#, &Limits::default()).unwrap());
+        assert_eq!(summarize(&flat).depth, 2);
+        assert_eq!(summarize(&nested).depth, 3);
+        assert_eq!(summarize(&deeper).depth, 4);
+    }
+
+    #[test]
+    fn summarize_depth_takes_max_across_fields_and_array_elements() {
+        // "a" is shallow, "b" is deep — depth must follow the deepest branch.
+        let s = shape_of(
+            &parse_bounded(br#"{"a":1,"b":[{"c":{"d":1}}]}"#, &Limits::default()).unwrap(),
+        );
+        assert_eq!(summarize(&s).depth, 5); // obj -> b -> arr -> obj{c} -> obj{d} -> num
+    }
+
+    #[test]
+    fn values_do_not_change_summary() {
+        let a = shape_of(&parse_bounded(br#"{"a":1,"b":"x"}"#, &Limits::default()).unwrap());
+        let b = shape_of(&parse_bounded(br#"{"a":99,"b":"y"}"#, &Limits::default()).unwrap());
+        assert_eq!(summarize(&a), summarize(&b));
     }
 
     #[test]

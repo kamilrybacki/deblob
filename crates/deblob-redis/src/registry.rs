@@ -52,10 +52,9 @@ fn published_key(id: &SchemaId) -> String {
     format!("deblob:published:{}", id.as_str())
 }
 
-const INDEX_KEY: &str = "deblob:index:structural";
 const AUDIT_KEY: &str = "deblob:audit:log";
 
-fn redis_err(e: redis::RedisError) -> CoreError {
+pub(crate) fn redis_err(e: redis::RedisError) -> CoreError {
     CoreError::RegistryUnavailable(e.to_string())
 }
 
@@ -133,7 +132,7 @@ impl RedisRegistry {
     /// MultiplexedConnection` is designed to be cloned per concurrent
     /// caller — it pipelines requests over one socket rather than opening a
     /// new connection each time.
-    fn conn(&self) -> redis::aio::MultiplexedConnection {
+    pub(crate) fn conn(&self) -> redis::aio::MultiplexedConnection {
         self.conn.clone()
     }
 }
@@ -160,13 +159,12 @@ impl Registry for RedisRegistry {
         bucket_key: &str,
         fingerprint: &SchemaId,
     ) -> Result<Option<SchemaId>, CoreError> {
-        // Task 8 owns the real bucketed structural index; Task 7 only wires
-        // the SADD side of publication into `deblob:index:structural` using
-        // the same "<bucket_key>:<schema_id>" member shape checked here.
-        let mut conn = self.conn();
-        let member = format!("{bucket_key}:{}", fingerprint.as_str());
-        let is_member: bool = conn.sismember(INDEX_KEY, member).await.map_err(redis_err)?;
-        Ok(is_member.then(|| fingerprint.clone()))
+        // The real bucketed structural index (Task 8): `bucket_key` is
+        // itself the Redis key of a small per-bucket SET, so this is a
+        // bounded SSCAN over that one bucket — never a scan over
+        // `deblob:schema:*`. See `crate::index`.
+        self.resolve_structural_bucketed(bucket_key, fingerprint)
+            .await
     }
 
     /// Atomic publication: schema + family version + index + alias + audit
@@ -187,19 +185,26 @@ impl Registry for RedisRegistry {
             .unwrap_or_default()
             .as_millis()
             .to_string();
-        let bucket_member = format!("{bucket_key}:{}", record.schema_id.as_str());
+        // Task 8: `bucket_key` is the real Redis key of the schema's
+        // structural-index bucket set (not a member prefix within one
+        // global set), and the member records the fingerprint alongside the
+        // schema id so a bucket can be SSCAN-matched — see `crate::index`.
+        let bucket_member = crate::index::bucket_member(&record.schema_id);
 
         // The Lua script is the sole authority for the version (HINCRBY on
         // fresh publish, or the previously-allocated version on an
         // idempotent republish) — `record.version` is never trusted for
         // storage; only `canonical`/`canonicalizer` gate the immutability
-        // check (Fix A).
+        // check (Fix A). KEYS[4] doubles as the bucket's Redis key (for the
+        // SADD) and the value persisted to the schema hash's `bucket` field
+        // (for `rebuild_index` to read back directly), since it's the same
+        // string either way.
         let result: redis::RedisResult<i64> = self
             .publish_script
             .key(schema_key(&record.schema_id))
             .key(family_key(&record.family_id))
             .key(alias_key(alias_from))
-            .key(INDEX_KEY)
+            .key(bucket_key)
             .key(AUDIT_KEY)
             .key(published_key(&record.schema_id))
             .arg(&schema_json)

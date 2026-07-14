@@ -6,9 +6,15 @@
 //!   1. schema key            deblob:schema:<sch_id>  (HASH)
 //!   2. family key            deblob:family:<fam_id>
 //!   3. alias key             deblob:alias:<cand_id>
-//!   4. structural index key  deblob:index:structural
+//!   4. bucket key            deblob:index:<fieldband>:<depth>:<reqhash8>
 //!   5. audit stream key      deblob:audit:log
 //!   6. published-marker key  deblob:published:<sch_id>
+//!
+//! `KEYS[4]` (Task 8) is the real per-bucket structural-index SET this
+//! schema belongs to, computed by the caller from its `ShapeSummary`. It is
+//! also persisted onto the schema hash's `bucket` field below, so
+//! `rebuild_index` can reconstruct the index without re-deriving a
+//! `ShapeSummary` from `canonical`.
 //!
 //! ARGV:
 //!   1. schema_json    full serialized `SchemaRecord` JSON, stored verbatim
@@ -18,7 +24,7 @@
 //!   3. canonicalizer  the record's canonicalizer tag (e.g. "deblob-canon-v1")
 //!   4. family_id      recorded for parity / future audit use
 //!   5. schema_id      the terminal schema id the alias resolves to
-//!   6. bucket_member  structural index member to add
+//!   6. bucket_member  bucket-set member to add: "<fp_b32>=<sch_id>"
 //!   7. actor
 //!   8. reason
 //!   9. now_ms
@@ -105,7 +111,8 @@ if not existing_canonical then
     'canonical', canonical,
     'canonicalizer', canonicalizer,
     'family', family_id,
-    'version', tostring(version))
+    'version', tostring(version),
+    'bucket', index_key)
 end
 if not existing_alias then
   redis.call('SET', alias_key, schema_id)
