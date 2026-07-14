@@ -23,6 +23,7 @@ use serde::Serialize;
 
 pub use auth::SecretToken;
 
+use crate::metrics::Metrics;
 use crate::promote::Promoter;
 
 /// Shared state for every management-API handler.
@@ -33,6 +34,7 @@ pub struct ApiState {
     pub health: HealthGate,
     pub token: SecretToken,
     pub promoter: Arc<dyn Promoter>,
+    pub metrics: Arc<Metrics>,
 }
 
 /// Standard error envelope, spec §8: `{"error":{"code","message","details"}}`.
@@ -179,15 +181,23 @@ async fn readyz(State(state): State<ApiState>) -> StatusCode {
     }
 }
 
-/// Placeholder body: Task 15 wires up the real `prometheus` registry and
-/// instruments the matcher/coldlane/API. This just proves the endpoint
-/// exists and answers 200 with a text/plain content type so scrapers don't
-/// error out during P1 while metrics are still being built out.
-async fn metrics() -> impl IntoResponse {
-    (
-        [("content-type", "text/plain; version=0.0.4")],
-        "# deblob metrics placeholder — Task 15 wires up the real exposition\n",
-    )
+/// `GET /metrics` — Prometheus text exposition (version 0.0.4) of
+/// `state.metrics`'s registry (spec §11). Unauthenticated, like `/healthz`/
+/// `/readyz`, so scrapers don't need a credential.
+async fn metrics(State(state): State<ApiState>) -> Response {
+    match state.metrics.gather_text() {
+        Ok(body) => (
+            StatusCode::OK,
+            [("content-type", "text/plain; version=0.0.4")],
+            body,
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("failed to encode metrics: {e}"),
+        )
+            .into_response(),
+    }
 }
 
 /// Builds the management API router. Callers (Task 18's `main.rs`) are

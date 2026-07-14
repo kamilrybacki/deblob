@@ -8,5 +8,6 @@
 pub mod api;
 pub mod coldlane;
 pub mod matcher;
+pub mod metrics;
 pub mod policy;
 pub mod promote;

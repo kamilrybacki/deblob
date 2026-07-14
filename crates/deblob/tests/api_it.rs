@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use deblob::api::{self, ApiState, SecretToken};
+use deblob::metrics::Metrics;
 use deblob::promote::{FamilyChoice, PromoteRequest, Promoter};
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyVersion, SchemaId};
@@ -252,6 +253,7 @@ fn make_state(
         health,
         token: SecretToken::new(TOKEN),
         promoter: Arc::new(promoter),
+        metrics: Metrics::new(),
     }
 }
 
@@ -492,4 +494,26 @@ async fn metrics_200() {
     let app = api::router(empty_state());
     let resp = app.oneshot(get("/metrics", None)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn metrics_endpoint_exposes_text() {
+    let app = api::router(empty_state());
+    let resp = app.oneshot(get("/metrics", None)).await.unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let content_type = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    assert_eq!(content_type, "text/plain; version=0.0.4");
+
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    let body = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        body.contains("deblob_messages_total"),
+        "expected deblob_messages_total in exposition text:\n{body}"
+    );
 }

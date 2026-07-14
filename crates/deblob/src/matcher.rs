@@ -11,6 +11,7 @@
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;
+use std::time::Instant;
 
 use deblob_core::error::QuarantineReason;
 use deblob_core::id::{CandidateId, SchemaId, SchemaRef};
@@ -18,6 +19,8 @@ use deblob_core::ports::Registry;
 use deblob_fingerprint::{bucket_key, fingerprint, parse_bounded, shape_of, summarize, Limits};
 use lru::LruCache;
 use parking_lot::Mutex;
+
+use crate::metrics::Metrics;
 
 /// Outcome of classifying one message on the hot path.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,18 +52,20 @@ pub struct Classification {
 pub struct HotMatcher {
     registry: Arc<dyn Registry>,
     lru: Mutex<LruCache<[u8; 32], SchemaId>>,
+    metrics: Arc<Metrics>,
 }
 
 impl HotMatcher {
     /// Build a matcher backed by `registry`, with an exact-match LRU cache
-    /// holding up to `lru_capacity` fingerprint → schema entries. A
-    /// `lru_capacity` of `0` is treated as `1` so `LruCache::new` never
-    /// panics on a degenerate config value.
-    pub fn new(registry: Arc<dyn Registry>, lru_capacity: usize) -> Self {
+    /// holding up to `lru_capacity` fingerprint → schema entries, reporting
+    /// into `metrics` (spec §11). A `lru_capacity` of `0` is treated as `1`
+    /// so `LruCache::new` never panics on a degenerate config value.
+    pub fn new(registry: Arc<dyn Registry>, lru_capacity: usize, metrics: Arc<Metrics>) -> Self {
         let capacity = NonZeroUsize::new(lru_capacity).unwrap_or(NonZeroUsize::MIN);
         Self {
             registry,
             lru: Mutex::new(LruCache::new(capacity)),
+            metrics,
         }
     }
 
@@ -68,16 +73,33 @@ impl HotMatcher {
     /// docs. Never panics on malformed input — every failure mode of
     /// `parse_bounded` becomes `Malformed` with a reason, and a registry
     /// error becomes `Unresolved` rather than propagating.
+    ///
+    /// Every outcome increments `deblob_messages_total{fate}` and observes
+    /// `deblob_tag_latency_seconds` exactly once (spec §11); the payload
+    /// itself is never touched by a metric label or a log field — only
+    /// bounded, derived values (fate, quarantine reason, latency) ever
+    /// leave this function via `self.metrics`.
     pub async fn classify(&self, payload: &[u8], limits: &Limits) -> Classification {
+        let started = Instant::now();
+
         let node = match parse_bounded(payload, limits) {
             Ok(node) => node,
             Err(reason) => {
-                return Classification {
+                self.metrics.record_quarantine(reason);
+                let classification = Classification {
                     schema_ref: SchemaRef::Malformed,
                     quarantine: Some(reason),
                     raw_fp: None,
                     bucket: None,
                 };
+                self.metrics
+                    .record_classification(&classification.schema_ref);
+                self.metrics.observe_tag_latency(started.elapsed());
+                tracing::debug!(
+                    reason = crate::metrics::quarantine_reason_label(reason),
+                    "quarantined malformed message"
+                );
+                return classification;
             }
         };
 
@@ -86,16 +108,26 @@ impl HotMatcher {
         let bucket = bucket_key(&summarize(&shape));
 
         if let Some(known) = self.lru.lock().get(&raw_fp).cloned() {
-            return Classification {
+            self.metrics.record_cache_hit();
+            let classification = Classification {
                 schema_ref: SchemaRef::Known(known),
                 quarantine: None,
                 raw_fp: Some(raw_fp),
                 bucket: Some(bucket),
             };
+            self.metrics
+                .record_classification(&classification.schema_ref);
+            self.metrics.observe_tag_latency(started.elapsed());
+            return classification;
         }
 
         let fp_id = SchemaId::from_digest(&raw_fp);
-        let schema_ref = match self.registry.resolve_structural(&bucket, &fp_id).await {
+        let registry_started = Instant::now();
+        let resolved = self.registry.resolve_structural(&bucket, &fp_id).await;
+        self.metrics
+            .observe_registry_op("resolve_structural", registry_started.elapsed());
+
+        let schema_ref = match resolved {
             Ok(Some(known)) => {
                 self.lru.lock().put(raw_fp, known.clone());
                 SchemaRef::Known(known)
@@ -105,13 +137,16 @@ impl HotMatcher {
             // create a candidate storm once the registry recovers (§10).
             Err(_) => SchemaRef::Unresolved,
         };
+        self.metrics.record_classification(&schema_ref);
 
-        Classification {
+        let classification = Classification {
             schema_ref,
             quarantine: None,
             raw_fp: Some(raw_fp),
             bucket: Some(bucket),
-        }
+        };
+        self.metrics.observe_tag_latency(started.elapsed());
+        classification
     }
 }
 
@@ -211,7 +246,14 @@ mod tests {
     }
 
     fn matcher(fake: Arc<FakeRegistry>) -> HotMatcher {
-        HotMatcher::new(fake, 16)
+        HotMatcher::new(fake, 16, Metrics::new())
+    }
+
+    /// Like [`matcher`], but also hands back the `Metrics` instance so a
+    /// test can gather its registry and assert on recorded values.
+    fn matcher_with_metrics(fake: Arc<FakeRegistry>) -> (HotMatcher, Arc<Metrics>) {
+        let metrics = Metrics::new();
+        (HotMatcher::new(fake, 16, metrics.clone()), metrics)
     }
 
     // Row 1: parse fails → Malformed + reason, no registry call attempted.
@@ -335,5 +377,89 @@ mod tests {
             SchemaRef::Provisional(_) => {}
             other => panic!("expected Provisional, got {other:?}"),
         }
+    }
+
+    // Task 15 (spec §11): a malformed, duplicate-key payload must tag
+    // `deblob_messages_total{fate="malformed"}` AND
+    // `deblob_quarantine_records_total{reason="duplicate_key"}`, each
+    // exactly once, in the SAME registry gather.
+    #[tokio::test]
+    async fn quarantine_metric_increments() {
+        let fake = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
+        let (m, metrics) = matcher_with_metrics(fake);
+
+        let out = m.classify(br#"{"a":1,"a":2}"#, &Limits::default()).await;
+        assert_eq!(out.schema_ref, SchemaRef::Malformed);
+        assert_eq!(out.quarantine, Some(QuarantineReason::DuplicateKey));
+
+        let families = metrics.registry().gather();
+        assert_eq!(
+            crate::metrics::test_support::value_of(
+                &families,
+                "deblob_messages_total",
+                Some(("fate", "malformed"))
+            ),
+            1.0
+        );
+        assert_eq!(
+            crate::metrics::test_support::value_of(
+                &families,
+                "deblob_quarantine_records_total",
+                Some(("reason", "duplicate_key"))
+            ),
+            1.0
+        );
+    }
+
+    // Task 15 (spec §11): a known-schema classify increments
+    // `deblob_messages_total{fate="known"}`; a SECOND identical classify
+    // (now an LRU exact-match hit) increments `deblob_cache_hits_total`
+    // without a second registry call.
+    #[tokio::test]
+    async fn known_and_cache_metrics() {
+        let known = SchemaId::from_digest(&[11u8; 32]);
+        let fake = Arc::new(FakeRegistry::new(ResolveResponse::Hit(known)));
+        let (m, metrics) = matcher_with_metrics(fake.clone());
+        let payload = br#"{"cached":true}"#;
+
+        let first = m.classify(payload, &Limits::default()).await;
+        assert!(matches!(first.schema_ref, SchemaRef::Known(_)));
+
+        let families = metrics.registry().gather();
+        assert_eq!(
+            crate::metrics::test_support::value_of(
+                &families,
+                "deblob_messages_total",
+                Some(("fate", "known"))
+            ),
+            1.0
+        );
+        assert_eq!(
+            crate::metrics::test_support::value_of(&families, "deblob_cache_hits_total", None),
+            0.0,
+            "first classify is a registry hit, not an LRU cache hit"
+        );
+
+        let second = m.classify(payload, &Limits::default()).await;
+        assert!(matches!(second.schema_ref, SchemaRef::Known(_)));
+        assert_eq!(
+            fake.resolve_call_count(),
+            1,
+            "second classify must be an LRU hit"
+        );
+
+        let families = metrics.registry().gather();
+        assert_eq!(
+            crate::metrics::test_support::value_of(
+                &families,
+                "deblob_messages_total",
+                Some(("fate", "known"))
+            ),
+            2.0
+        );
+        assert_eq!(
+            crate::metrics::test_support::value_of(&families, "deblob_cache_hits_total", None),
+            1.0
+        );
     }
 }

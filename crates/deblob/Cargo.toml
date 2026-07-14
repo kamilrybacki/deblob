@@ -24,6 +24,9 @@ serde_json.workspace = true
 subtle = "2"
 base64 = "0.22"
 governor = "0.6"
+prometheus = "0.13"
+tracing.workspace = true
+tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

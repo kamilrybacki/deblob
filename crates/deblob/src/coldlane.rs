@@ -28,6 +28,8 @@ use deblob_monoid::{FieldNode, Profile};
 use governor::{DefaultKeyedRateLimiter, Quota, RateLimiter};
 use serde::{Deserialize, Serialize};
 
+use crate::metrics::Metrics;
+
 /// Default per-source rate limit on newly minted candidates: 10/minute
 /// (spec §9 abuse-resistance — a compromised/misbehaving producer must not
 /// be able to mint unbounded candidates).
@@ -73,24 +75,52 @@ pub enum IngestOutcome {
 pub struct ColdLane {
     evidence: Arc<dyn EvidenceStore>,
     limiter: DefaultKeyedRateLimiter<String>,
+    /// `None` for the plain constructors (existing call sites, unit/
+    /// integration tests that don't care about observability) — `ingest`
+    /// simply skips the `deblob_candidates_active` increment when this is
+    /// unset rather than requiring every caller to thread a `Metrics`
+    /// handle through.
+    metrics: Option<Arc<Metrics>>,
 }
 
 impl ColdLane {
     /// Build a `ColdLane` with the default rate limit
-    /// ([`DEFAULT_NEW_CANDIDATES_PER_MIN`] new candidates/min/source).
+    /// ([`DEFAULT_NEW_CANDIDATES_PER_MIN`] new candidates/min/source) and no
+    /// metrics wired up.
     pub fn new(evidence: Arc<dyn EvidenceStore>) -> Self {
         Self::with_rate_limit(evidence, DEFAULT_NEW_CANDIDATES_PER_MIN)
     }
 
     /// Build a `ColdLane` with a caller-supplied new-candidates-per-minute
-    /// limit (per source). `per_minute == 0` is treated as `1` so
-    /// `Quota::per_minute` never panics on a degenerate config value.
+    /// limit (per source) and no metrics wired up. `per_minute == 0` is
+    /// treated as `1` so `Quota::per_minute` never panics on a degenerate
+    /// config value.
     pub fn with_rate_limit(evidence: Arc<dyn EvidenceStore>, per_minute: u32) -> Self {
         let quota = Quota::per_minute(NonZeroU32::new(per_minute).unwrap_or(NonZeroU32::MIN));
         Self {
             evidence,
             limiter: RateLimiter::keyed(quota),
+            metrics: None,
         }
+    }
+
+    /// Build a `ColdLane` with the default rate limit, reporting into
+    /// `metrics` (spec §11): every genuinely new candidate increments
+    /// `deblob_candidates_active`.
+    pub fn with_metrics(evidence: Arc<dyn EvidenceStore>, metrics: Arc<Metrics>) -> Self {
+        Self::with_rate_limit_and_metrics(evidence, DEFAULT_NEW_CANDIDATES_PER_MIN, metrics)
+    }
+
+    /// Build a `ColdLane` with a caller-supplied rate limit AND metrics
+    /// wired up.
+    pub fn with_rate_limit_and_metrics(
+        evidence: Arc<dyn EvidenceStore>,
+        per_minute: u32,
+        metrics: Arc<Metrics>,
+    ) -> Self {
+        let mut lane = Self::with_rate_limit(evidence, per_minute);
+        lane.metrics = Some(metrics);
+        lane
     }
 
     /// Merge one observed `node` into the candidate `cand_id` resolves to
@@ -128,12 +158,16 @@ impl ColdLane {
         let target_id = clustered.unwrap_or(cand_id);
 
         let existing = self.evidence.get_candidate(&target_id).await?;
+        // Same "genuinely brand-new" test the rate limiter uses below,
+        // captured once so the `deblob_candidates_active` increment after a
+        // successful ingest and the rate-limit check can't drift apart.
+        let is_new_candidate = existing.is_none();
 
         // Only a genuinely brand-new candidate (no cluster hit AND no
         // existing record under its raw id) counts against the per-source
         // rate limit — repeat observations of an already-known candidate
         // are not new candidates.
-        if existing.is_none() && self.limiter.check_key(&meta.source).is_err() {
+        if is_new_candidate && self.limiter.check_key(&meta.source).is_err() {
             return Ok(IngestOutcome::RateLimited);
         }
 
@@ -162,6 +196,14 @@ impl ColdLane {
         };
 
         self.evidence.upsert_candidate(record).await?;
+        // §11: report a brand-new candidate exactly once, on the ingest
+        // call that actually created its `CandidateRecord` — never on
+        // repeat observations of an already-tracked candidate.
+        if is_new_candidate {
+            if let Some(metrics) = &self.metrics {
+                metrics.inc_candidates_active();
+            }
+        }
         // Register every projection (full fingerprint + each top-level
         // single-field-dropped variant) as an alias for `target_id`, so a
         // FUTURE sample that's this one plus/minus exactly one top-level
@@ -541,6 +583,37 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(out, IngestOutcome::Ingested);
+    }
+
+    // Task 15 (spec §11): a brand-new candidate increments
+    // `deblob_candidates_active`; a repeat observation of the SAME
+    // candidate must not increment it again.
+    #[tokio::test]
+    async fn candidate_creation_increments_active_gauge() {
+        let evidence = Arc::new(FakeEvidence::default());
+        let metrics = Metrics::new();
+        let lane = ColdLane::with_metrics(evidence.clone(), metrics.clone());
+
+        let payload = r#"{"brand_new":true}"#;
+        lane.ingest(cand_id_of(payload), &node_of(payload), meta("src-a"))
+            .await
+            .unwrap();
+
+        let families = metrics.registry().gather();
+        assert_eq!(
+            crate::metrics::test_support::value_of(&families, "deblob_candidates_active", None),
+            1.0
+        );
+
+        // Re-observing the same candidate must not double-count it.
+        lane.ingest(cand_id_of(payload), &node_of(payload), meta("src-a"))
+            .await
+            .unwrap();
+        let families = metrics.registry().gather();
+        assert_eq!(
+            crate::metrics::test_support::value_of(&families, "deblob_candidates_active", None),
+            1.0
+        );
     }
 
     #[test]
