@@ -23,7 +23,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use deblob_core::error::CoreError;
 use deblob_core::ports::{FamilyRef, Registry};
-use deblob_fingerprint::bucket_key;
+use deblob_fingerprint::fieldband;
 use deblob_monoid::{FieldNode, Profile};
 use deblob_slm::contract::FamilyCandidate;
 use unicode_normalization::UnicodeNormalization;
@@ -34,7 +34,7 @@ use crate::policy::generalized_shape_summary;
 /// weighting formula, neighbor-bucket algorithm, or family-representative
 /// dedup rule changes, so a shadow-log record (Task 5) can distinguish
 /// "same candidate, different retrieval behavior" from noise.
-pub const RETRIEVAL_VERSION: u32 = 1;
+pub const RETRIEVAL_VERSION: u32 = 2;
 
 /// Default `k` (Hermes review, Task 3): the offline eval separately
 /// exercises k = 1, 3, 5.
@@ -386,22 +386,35 @@ fn compute_distance(a: &StructuralFeatures, b: &StructuralFeatures) -> DistanceC
 
 // --- Bucket neighborhood ---------------------------------------------------
 
-/// The candidate's own structural-index bucket plus its neighbors: same
-/// top-level key set, field count in `{n-1, n, n+1}`, nesting depth in
-/// `{d-1, d, d+1}` (deblob-p2ab Task 3: "same field-count band ±1,
-/// same/near depth"). `reqhash8` in `bucket_key`'s format depends only on
-/// the sorted top-level key set (never on the count/depth values used
-/// alongside it in the key string), so every perturbed key here is a
-/// deterministic function of the candidate ALONE — no registry round trip
-/// or global bucket scan is needed to enumerate them. Deduplicated.
-fn neighbor_bucket_keys(profile: &Profile) -> Vec<String> {
+/// The `(band, depth)` neighborhood [`retrieve_topk`] discovers buckets
+/// across: the field-count bands `{n-1, n, n+1}` map to (via
+/// [`deblob_fingerprint::fieldband`]), and nesting depth in `{d-1, d,
+/// d+1}` (deblob-p2ab Task 3: "same field-count band ±1, same/near
+/// depth").
+///
+/// Deliberately independent of `top_keys_sorted` / `reqhash8` — unlike an
+/// exact [`deblob_fingerprint::bucket_key`], which hashes the candidate's
+/// OWN top-level key names, this neighborhood is blind to field NAMES
+/// entirely. That is the fix: a family whose top-level fields were merely
+/// renamed (e.g. `widgetCount` -> `widget_count`, any case/separator
+/// variant, same structure) hashes to a DIFFERENT `reqhash8` at the SAME
+/// band/depth, so an exact bucket_key lookup can never find it, but
+/// `Registry::list_families_by_band_depth`'s prefix scan over this
+/// neighborhood can — the six-component distance scorer (in particular its
+/// normalized name-overlap component) gets a chance to actually rank it
+/// instead of the family being invisible to retrieval altogether.
+///
+/// A deterministic function of the candidate ALONE — no registry round
+/// trip is needed to compute it. Deduplicated.
+fn neighbor_bands_and_depths(profile: &Profile) -> (Vec<u32>, Vec<u32>) {
     let summary = generalized_shape_summary(profile);
-    let counts: BTreeSet<usize> = [
+    let bands: BTreeSet<u32> = [
         summary.top_level_fields.saturating_sub(1),
         summary.top_level_fields,
         summary.top_level_fields + 1,
     ]
     .into_iter()
+    .map(fieldband)
     .collect();
     let depths: BTreeSet<u32> = [
         summary.depth.saturating_sub(1),
@@ -411,18 +424,7 @@ fn neighbor_bucket_keys(profile: &Profile) -> Vec<String> {
     .into_iter()
     .collect();
 
-    let mut keys = BTreeSet::new();
-    for &top_level_fields in &counts {
-        for &depth in &depths {
-            let neighbor = deblob_fingerprint::ShapeSummary {
-                top_level_fields,
-                depth,
-                top_keys_sorted: summary.top_keys_sorted.clone(),
-            };
-            keys.insert(bucket_key(&neighbor));
-        }
-    }
-    keys.into_iter().collect()
+    (bands.into_iter().collect(), depths.into_iter().collect())
 }
 
 // --- Ranking + family-representative dedup ---------------------------------
@@ -566,11 +568,13 @@ fn rank_candidates(
 }
 
 /// Retrieves the deterministic top-`k` family candidates for `candidate`'s
-/// structural cluster: gathers every family in `candidate`'s own
-/// structural-index bucket plus its neighbors ([`neighbor_bucket_keys`]),
-/// scores each by weighted structural distance, collapses to one
-/// representative per family, and returns the nearest `k`, ranked
-/// ascending by distance.
+/// structural cluster: gathers every family across `candidate`'s
+/// `(band, depth)` bucket neighborhood ([`neighbor_bands_and_depths`]) via
+/// [`Registry::list_families_by_band_depth`] — a widened, name-blind
+/// discovery that finds renamed-top-level-field families an exact-key
+/// lookup would miss (deblob-p2ab Task 3 recall fix) — scores each by
+/// weighted structural distance, collapses to one representative per
+/// family, and returns the nearest `k`, ranked ascending by distance.
 ///
 /// A candidate with no nearby families returns an empty `candidates` (the
 /// gold-ABSENT arm) — never an error; the caller (the Task 5 shadow
@@ -584,8 +588,10 @@ pub async fn retrieve_topk(
     let candidate_sig = field_sig_from_node(&candidate.root, candidate.count);
     let candidate_features = extract_features(&candidate_sig);
 
-    let bucket_keys = neighbor_bucket_keys(candidate);
-    let refs = registry.list_families_in_buckets(&bucket_keys).await?;
+    let (bands, depths) = neighbor_bands_and_depths(candidate);
+    let refs = registry
+        .list_families_by_band_depth(&bands, &depths)
+        .await?;
 
     Ok(rank_candidates(&candidate_features, &refs, k))
 }
@@ -697,6 +703,120 @@ mod tests {
         ) -> Result<Vec<FamilyRef>, CoreError> {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.families.clone())
+        }
+        async fn list_families_by_band_depth(
+            &self,
+            _bands: &[u32],
+            _depths: &[u32],
+        ) -> Result<Vec<FamilyRef>, CoreError> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(self.families.clone())
+        }
+    }
+
+    /// A `Registry` fake that, unlike [`FakeRegistry`] above, actually
+    /// simulates the real bucket-key semantics: every family is stored
+    /// alongside the REAL `bucket_key` it would have been published under
+    /// (derived from its own canonical shape via `bucket_key`), and
+    /// `list_families_in_buckets`/`list_families_by_band_depth` genuinely
+    /// filter by it — exact-key match for the former, `(band, depth)`
+    /// prefix match (ignoring `reqhash8`) for the latter. This is what lets
+    /// [`renamed_top_level_field_family_is_retrieved`] actually distinguish
+    /// "found via the old exact-key path" from "found via the new widened
+    /// path" instead of a mock that returns every family regardless of the
+    /// query, which would pass even with the pre-fix bug present.
+    struct BucketAwareFakeRegistry {
+        families: Vec<(String, FamilyRef)>,
+    }
+
+    impl BucketAwareFakeRegistry {
+        fn new(families: Vec<(String, FamilyRef)>) -> Self {
+            Self { families }
+        }
+    }
+
+    /// Splits a stored `"deblob:index:{band}:{depth}:{reqhash8}"` bucket
+    /// key into its `(band, depth)` components, for
+    /// `BucketAwareFakeRegistry::list_families_by_band_depth`'s prefix
+    /// simulation. `None` for a malformed key (never produced by the real
+    /// `bucket_key`, but defensive all the same).
+    fn band_and_depth_of(bucket_key: &str) -> Option<(u32, u32)> {
+        let mut parts = bucket_key.split(':');
+        if parts.next()? != "deblob" || parts.next()? != "index" {
+            return None;
+        }
+        let band: u32 = parts.next()?.parse().ok()?;
+        let depth: u32 = parts.next()?.parse().ok()?;
+        Some((band, depth))
+    }
+
+    #[async_trait::async_trait]
+    impl Registry for BucketAwareFakeRegistry {
+        async fn get_schema(
+            &self,
+            _id: &SchemaId,
+        ) -> Result<Option<deblob_core::ports::SchemaRecord>, CoreError> {
+            unimplemented!("retrieval never reads a schema by id directly")
+        }
+        async fn resolve_structural(
+            &self,
+            _bucket_key: &str,
+            _fingerprint: &SchemaId,
+        ) -> Result<Option<SchemaId>, CoreError> {
+            unimplemented!("retrieval never resolves the hot-path exact index")
+        }
+        async fn publish(
+            &self,
+            _record: deblob_core::ports::SchemaRecord,
+            _alias_from: &deblob_core::id::CandidateId,
+            _bucket_key: &str,
+            _variant_members: &[(String, String)],
+            _actor: &str,
+            _reason: &str,
+        ) -> Result<FamilyVersion, CoreError> {
+            unimplemented!("retrieval never publishes")
+        }
+        async fn get_alias(
+            &self,
+            _id: &deblob_core::id::CandidateId,
+        ) -> Result<Option<SchemaId>, CoreError> {
+            unimplemented!("retrieval never resolves aliases")
+        }
+        async fn list_schemas(
+            &self,
+            _cursor: Option<String>,
+            _limit: usize,
+        ) -> Result<(Vec<deblob_core::ports::SchemaRecord>, Option<String>), CoreError> {
+            unimplemented!("retrieval never lists all schemas")
+        }
+        async fn list_families_in_buckets(
+            &self,
+            bucket_keys: &[String],
+        ) -> Result<Vec<FamilyRef>, CoreError> {
+            let wanted: BTreeSet<&str> = bucket_keys.iter().map(String::as_str).collect();
+            Ok(self
+                .families
+                .iter()
+                .filter(|(k, _)| wanted.contains(k.as_str()))
+                .map(|(_, r)| r.clone())
+                .collect())
+        }
+        async fn list_families_by_band_depth(
+            &self,
+            bands: &[u32],
+            depths: &[u32],
+        ) -> Result<Vec<FamilyRef>, CoreError> {
+            let bands: BTreeSet<u32> = bands.iter().copied().collect();
+            let depths: BTreeSet<u32> = depths.iter().copied().collect();
+            Ok(self
+                .families
+                .iter()
+                .filter(|(k, _)| match band_and_depth_of(k) {
+                    Some((b, d)) => bands.contains(&b) && depths.contains(&d),
+                    None => false,
+                })
+                .map(|(_, r)| r.clone())
+                .collect())
         }
     }
 
@@ -973,5 +1093,198 @@ mod tests {
         assert_eq!(a, expected);
         assert_eq!(b, expected);
         assert_eq!(c, expected);
+    }
+
+    // -- 8. renamed_top_level_field_family_is_retrieved -------------------
+    //
+    // Core proof of the deblob-p2ab Task 3 recall fix: a family whose
+    // top-level fields are a pure case/separator rename of the candidate's
+    // (same structure, different NAMES) lands in a DIFFERENT reqhash8
+    // bucket at the SAME field-count band + depth. Before the fix,
+    // retrieval only ever fetched the candidate's own EXACT bucket_key, so
+    // this family was never even handed to the distance scorer — a hard 0%
+    // recall case. After the fix, `retrieve_topk` discovers it via
+    // `Registry::list_families_by_band_depth`'s widened (band, depth)
+    // prefix scan, and the scorer's 0.25-weighted name-overlap component
+    // (the only component keyed on NORMALIZED names rather than literal
+    // field-path strings — `field_path_type`/`presence_overlap` still key
+    // off the raw, un-renamed path string, so a rename doesn't collapse
+    // distance to ~0) gives it real credit: it must rank strictly closer
+    // than a totally unrelated family.
+
+    #[tokio::test]
+    async fn renamed_top_level_field_family_is_retrieved() {
+        use deblob_fingerprint::{bucket_key, ShapeSummary};
+
+        // Candidate: camelCase top-level fields.
+        let candidate = profile_from_json(r#"{"widgetCount":1,"itemName":"a"}"#);
+        let candidate_bucket = bucket_key(&generalized_shape_summary(&candidate));
+
+        // Family: snake_case rename of the SAME two fields/types, same
+        // structure (flat 2-field object) -> same field-count band + depth
+        // as the candidate, but a DIFFERENT reqhash8 (different top-level
+        // key names hash differently).
+        let fam_renamed = FamilyId::new_v7();
+        let renamed_canonical = gen_canonical(&[
+            ("widget_count", &["number"], false),
+            ("item_name", &["string"], false),
+        ]);
+        let renamed_bucket = bucket_key(&ShapeSummary {
+            top_level_fields: 2,
+            depth: 2,
+            top_keys_sorted: vec!["item_name".to_string(), "widget_count".to_string()],
+        });
+
+        // Control: a family sharing nothing with the candidate, in the
+        // SAME (band, depth) neighborhood, so it's discoverable too — this
+        // is what "strictly closer than an unrelated family" is measured
+        // against.
+        let fam_unrelated = FamilyId::new_v7();
+        let unrelated_canonical = gen_canonical(&[
+            ("totally_different", &["bool"], false),
+            ("also", &["null"], false),
+        ]);
+        let unrelated_bucket = bucket_key(&ShapeSummary {
+            top_level_fields: 2,
+            depth: 2,
+            top_keys_sorted: vec!["also".to_string(), "totally_different".to_string()],
+        });
+
+        // Sanity on the fixture itself: the renamed family must actually
+        // land in a DIFFERENT bucket than the candidate's own, or the test
+        // would prove nothing about the fix.
+        assert_ne!(
+            candidate_bucket, renamed_bucket,
+            "fixture must land in a different reqhash8 bucket to exercise the defect"
+        );
+
+        let registry = BucketAwareFakeRegistry::new(vec![
+            (
+                renamed_bucket,
+                family_ref(&fam_renamed, 1, 1, renamed_canonical),
+            ),
+            (
+                unrelated_bucket,
+                family_ref(&fam_unrelated, 2, 1, unrelated_canonical),
+            ),
+        ]);
+
+        // Pin the OLD (pre-fix) behavior directly: an exact-bucket_key
+        // lookup restricted to the candidate's own bucket finds nothing.
+        let old_style = registry
+            .list_families_in_buckets(&[candidate_bucket])
+            .await
+            .unwrap();
+        assert!(
+            old_style.is_empty(),
+            "exact reqhash8 bucket lookup must miss the renamed-field family — this is the defect being fixed"
+        );
+
+        // NEW behavior: retrieve_topk now uses widened (band, depth)
+        // discovery, so it MUST find and score BOTH families.
+        let result = retrieve_topk(&candidate, &registry, 3).await.unwrap();
+
+        assert_eq!(
+            result.candidates.len(),
+            2,
+            "both same-band/depth families must now be retrieved, got {:?}",
+            result.candidates
+        );
+        assert_eq!(
+            result.candidates[0].family_id, fam_renamed,
+            "the renamed family must rank ahead of the unrelated one"
+        );
+        assert_eq!(result.candidates[0].rank, 1);
+        assert_eq!(result.candidates[1].family_id, fam_unrelated);
+
+        // Exact composition check: field_path_type (0.35) and
+        // presence_overlap (0.15) are keyed on the literal, un-normalized
+        // field-path string, so a rename still maxes them out at 1.0 each;
+        // name_overlap (0.25), depth_similarity (0.10), nullability
+        // (0.10), and array_map_shape (0.05) all score 0.0 (normalized
+        // names match, and every other structural signal is identical) ->
+        // 0.35*1.0 + 0.15*1.0 = 0.5 exactly.
+        assert!(
+            (result.candidates[0].distance - 0.5).abs() < 1e-6,
+            "renamed-field family's distance should be exactly the un-normalized-path-component weight sum, got {}",
+            result.candidates[0].distance
+        );
+        assert!(
+            result.candidates[0].distance < result.candidates[1].distance,
+            "renamed family (distance {}) must score strictly closer than the unrelated family (distance {})",
+            result.candidates[0].distance,
+            result.candidates[1].distance
+        );
+    }
+
+    // -- 9. ties_field_populated -------------------------------------------
+    //
+    // Closes review concern (b): pins `ties` semantics with a dedicated
+    // test before Task 5 depends on them. Two families tie EXACTLY on
+    // distance (both reproduce the candidate's field set/types); with
+    // k=1 only one can be returned in `candidates`, but the other must
+    // surface in `ties` rather than being silently dropped. A third,
+    // clearly-farther family must never appear in `ties`.
+
+    #[tokio::test]
+    async fn ties_field_populated() {
+        let candidate = profile_from_json(r#"{"a":1,"b":2}"#);
+
+        let fam_x = FamilyId::new_v7();
+        let fam_y = FamilyId::new_v7();
+        let fam_z = FamilyId::new_v7();
+
+        let families = vec![
+            // fam_x and fam_y are EXACT structural ties (distance 0.0):
+            // both reproduce the candidate's own field set/types.
+            family_ref(
+                &fam_x,
+                1,
+                1,
+                gen_canonical(&[("a", &["number"], false), ("b", &["number"], false)]),
+            ),
+            family_ref(
+                &fam_y,
+                2,
+                1,
+                gen_canonical(&[("a", &["number"], false), ("b", &["number"], false)]),
+            ),
+            // fam_z shares nothing with the candidate -> clearly farther,
+            // must never appear in `ties`.
+            family_ref(
+                &fam_z,
+                3,
+                1,
+                gen_canonical(&[("nothing_shared", &["bool"], false)]),
+            ),
+        ];
+
+        let registry = FakeRegistry::new(families);
+        let result = retrieve_topk(&candidate, &registry, 1).await.unwrap();
+
+        assert_eq!(result.candidates.len(), 1, "k=1 must cap candidates at one");
+        let winner = result.candidates[0].family_id.clone();
+        assert!(winner == fam_x || winner == fam_y);
+
+        assert_eq!(
+            result.ties.len(),
+            1,
+            "the OTHER exact-tie family must surface in `ties`, not be silently dropped, got {:?}",
+            result.ties
+        );
+        let expected_loser = if winner == fam_x { &fam_y } else { &fam_x };
+        assert_eq!(&result.ties[0].family_id, expected_loser);
+        assert_eq!(
+            result.ties[0].rank, 1,
+            "ties are recorded at the boundary rank they were excluded from"
+        );
+        assert!(
+            approx_eq(result.ties[0].distance, result.candidates[0].distance),
+            "a tie must have the same distance as the boundary candidate"
+        );
+        assert!(
+            !result.ties.iter().any(|t| t.family_id == fam_z),
+            "fam_z is not part of the tie and must never appear in `ties`"
+        );
     }
 }

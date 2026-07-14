@@ -360,6 +360,13 @@ mod tests {
         ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
             unimplemented!("not exercised by promoter tests")
         }
+        async fn list_families_by_band_depth(
+            &self,
+            _bands: &[u32],
+            _depths: &[u32],
+        ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+            unimplemented!("not exercised by promoter tests")
+        }
     }
 
     fn profile_of(json: &str) -> MonoidProfile {

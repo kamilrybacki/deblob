@@ -103,6 +103,14 @@ impl Registry for MissRegistry {
     ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
         Ok(vec![])
     }
+
+    async fn list_families_by_band_depth(
+        &self,
+        _bands: &[u32],
+        _depths: &[u32],
+    ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+        Ok(vec![])
+    }
 }
 
 // Silence "unused" on evidence/candidate-shaped items pulled in only to

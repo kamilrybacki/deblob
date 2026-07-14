@@ -102,6 +102,31 @@ pub trait Registry: Send + Sync {
         &self,
         bucket_keys: &[String],
     ) -> Result<Vec<FamilyRef>, CoreError>;
+
+    /// Every schema whose structural-index bucket falls under ANY `(band,
+    /// depth)` pair in `bands` × `depths` — i.e. `deblob:index:{band}:{depth}:*`
+    /// — regardless of the bucket's `reqhash8` suffix (deblob-p2ab Task 3
+    /// recall fix). `reqhash8` is a hash of a schema's own top-level key
+    /// NAMES, so a family whose top-level fields were merely
+    /// renamed/case-changed (e.g. `widgetCount` -> `widget_count`) lands in
+    /// a DIFFERENT bucket at the SAME field-count band and depth — an
+    /// exact-key lookup via [`Registry::list_families_in_buckets`] can
+    /// never find it, but this widened, name-blind discovery can.
+    /// De-duplicated by `schema_id` across every discovered bucket.
+    ///
+    /// Still bounded, never a global scan: `bands`/`depths` are the
+    /// caller's small local neighborhood (a candidate's own field-count
+    /// band plus its immediate neighbors, and nearby depths), so this is
+    /// one bounded `SCAN MATCH` per `(band, depth)` pair to discover that
+    /// prefix's bucket keys, followed by one bounded per-bucket scan for
+    /// each discovered bucket — the cold retrieval path, run once per
+    /// candidate cluster, never per record. An empty `bands` or `depths`
+    /// slice is valid and returns `Ok(vec![])`, never an error.
+    async fn list_families_by_band_depth(
+        &self,
+        bands: &[u32],
+        depths: &[u32],
+    ) -> Result<Vec<FamilyRef>, CoreError>;
 }
 
 #[async_trait]

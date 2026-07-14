@@ -8,7 +8,7 @@ pub mod limits;
 pub mod parse;
 pub mod shape;
 
-pub use bucket::bucket_key;
+pub use bucket::{band_depth_prefix, bucket_key, fieldband};
 pub use canon::{canonical_bytes, fingerprint, CANONICALIZER};
 pub use limits::Limits;
 pub use parse::{parse_bounded, Node};

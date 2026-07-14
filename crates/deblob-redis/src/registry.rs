@@ -354,4 +354,16 @@ impl Registry for RedisRegistry {
     ) -> Result<Vec<FamilyRef>, CoreError> {
         self.list_families_in_buckets_bucketed(bucket_keys).await
     }
+
+    /// deblob-p2ab Task 3 recall fix: delegates to the prefix-scanning
+    /// lookup in `crate::index` (same module that owns every other
+    /// structural-index operation).
+    async fn list_families_by_band_depth(
+        &self,
+        bands: &[u32],
+        depths: &[u32],
+    ) -> Result<Vec<FamilyRef>, CoreError> {
+        self.list_families_by_band_depth_bucketed(bands, depths)
+            .await
+    }
 }

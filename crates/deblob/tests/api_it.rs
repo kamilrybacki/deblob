@@ -95,6 +95,14 @@ impl Registry for FakeRegistry {
     ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
         unimplemented!("not exercised by the management API")
     }
+
+    async fn list_families_by_band_depth(
+        &self,
+        _bands: &[u32],
+        _depths: &[u32],
+    ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+        unimplemented!("not exercised by the management API")
+    }
 }
 
 /// In-memory `EvidenceStore` fake, keyed by `CandidateId`.

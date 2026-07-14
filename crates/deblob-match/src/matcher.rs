@@ -243,6 +243,13 @@ mod tests {
         ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
             unimplemented!("hot-path matcher must never run retrieval")
         }
+        async fn list_families_by_band_depth(
+            &self,
+            _bands: &[u32],
+            _depths: &[u32],
+        ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+            unimplemented!("hot-path matcher must never run retrieval")
+        }
     }
 
     // Silence "unused" on evidence-store-shaped items pulled in only so the

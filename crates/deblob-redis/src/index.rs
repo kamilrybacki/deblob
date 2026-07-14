@@ -218,6 +218,54 @@ impl RedisRegistry {
         Ok(out)
     }
 
+    /// Every schema found across the `(band, depth)` cross product of
+    /// `bands` × `depths` (deblob-p2ab Task 3 recall fix: widened bucket
+    /// DISCOVERY, ignoring the `reqhash8` component of the bucket key
+    /// entirely — see [`Registry::list_families_by_band_depth`]'s docs for
+    /// why). For each `(band, depth)` pair, a bounded `SCAN MATCH
+    /// "deblob:index:{band}:{depth}:*"` enumerates that prefix's bucket
+    /// keys — never a scan over `deblob:index:*` as a whole, let alone
+    /// `deblob:schema:*` — and the union of discovered bucket keys is then
+    /// read exactly like [`Self::list_families_in_buckets_bucketed`]
+    /// already does (which this delegates to once bucket-key discovery is
+    /// done, so bucket-membership reading + de-dup logic lives in exactly
+    /// one place).
+    pub(crate) async fn list_families_by_band_depth_bucketed(
+        &self,
+        bands: &[u32],
+        depths: &[u32],
+    ) -> Result<Vec<FamilyRef>, CoreError> {
+        let mut conn = self.conn();
+        let mut bucket_keys: BTreeSet<String> = BTreeSet::new();
+
+        for &band in bands {
+            for &depth in depths {
+                let pattern = deblob_fingerprint::band_depth_prefix(band, depth);
+                let mut cursor = "0".to_string();
+                loop {
+                    let (next_cursor, keys): (String, Vec<String>) = redis::cmd("SCAN")
+                        .arg(&cursor)
+                        .arg("MATCH")
+                        .arg(&pattern)
+                        .arg("COUNT")
+                        .arg(200)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(redis_err)?;
+                    bucket_keys.extend(keys);
+
+                    if next_cursor == "0" {
+                        break;
+                    }
+                    cursor = next_cursor;
+                }
+            }
+        }
+
+        let keys: Vec<String> = bucket_keys.into_iter().collect();
+        self.list_families_in_buckets_bucketed(&keys).await
+    }
+
     /// Rebuild the entire structural index from scratch, purely from the
     /// authoritative `deblob:schema:*` records: drops every key matching
     /// [`INDEX_KEY_PATTERN`], then re-`SADD`s each schema's membership into
