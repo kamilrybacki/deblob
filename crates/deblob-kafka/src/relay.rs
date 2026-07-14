@@ -317,6 +317,11 @@ async fn run_transaction_body(
             queue_timeout,
         )
         .await?;
+
+        if cfg.fault == Some(FaultPoint::AfterProduceBeforeCommit) {
+            return Ok(TransactionBody::Fault);
+        }
+
         return Ok(TransactionBody::Produced);
     };
 
