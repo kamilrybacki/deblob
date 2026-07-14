@@ -140,6 +140,14 @@ impl EvidenceStore for FakeEvidence {
         }
         Ok(())
     }
+
+    async fn get_cluster(&self, _gen_fp: &str) -> Result<Option<CandidateId>, CoreError> {
+        unimplemented!("not exercised by the management API")
+    }
+
+    async fn set_cluster(&self, _gen_fp: &str, _cand_id: &CandidateId) -> Result<(), CoreError> {
+        unimplemented!("not exercised by the management API")
+    }
 }
 
 /// Configurable `Promoter` fake: returns whatever `outcome` was constructed
@@ -152,12 +160,14 @@ struct FakePromoter {
 /// reusable error variant without re-deriving `Clone` on the real type.
 enum CoreErrorClone {
     Conflict(String),
+    PolicyRejected(String),
 }
 
 impl From<CoreErrorClone> for CoreError {
     fn from(e: CoreErrorClone) -> Self {
         match e {
             CoreErrorClone::Conflict(msg) => CoreError::Conflict(msg),
+            CoreErrorClone::PolicyRejected(msg) => CoreError::PolicyRejected(msg),
         }
     }
 }
@@ -172,6 +182,12 @@ impl FakePromoter {
     fn conflict(msg: &str) -> Self {
         Self {
             outcome: StdMutex::new(Some(Err(CoreErrorClone::Conflict(msg.to_string())))),
+        }
+    }
+
+    fn policy_rejected(msg: &str) -> Self {
+        Self {
+            outcome: StdMutex::new(Some(Err(CoreErrorClone::PolicyRejected(msg.to_string())))),
         }
     }
 }
@@ -393,6 +409,40 @@ async fn promote_conflict_409() {
     assert_eq!(resp.status(), StatusCode::CONFLICT);
     let body = body_json(resp).await;
     assert_eq!(body["error"]["code"], "conflict");
+}
+
+/// Task 14: `CoreError::PolicyRejected` (a candidate that hasn't crossed
+/// the promotion guards) maps to 422, distinct from `Conflict`'s 409.
+#[tokio::test]
+async fn promote_policy_rejected_422() {
+    let state = make_state(
+        FakeRegistry::new(vec![]),
+        FakeEvidence::default(),
+        FakePromoter::policy_rejected("candidate has 1 sample(s), below the minimum of 10"),
+        HealthGate::new(),
+    );
+    let app = api::router(state);
+
+    let cand_id = CandidateId::from_digest(&[8u8; 32]);
+    let req_body = serde_json::to_value(PromoteRequest {
+        family: FamilyChoice::New,
+        name: Some("orders.created".to_string()),
+        reason: "too early".to_string(),
+    })
+    .unwrap();
+
+    let resp = app
+        .oneshot(post_json(
+            &format!("/api/v1/candidates/{}/promote", cand_id.as_str()),
+            Some(TOKEN),
+            &req_body,
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "unprocessable_entity");
 }
 
 #[tokio::test]

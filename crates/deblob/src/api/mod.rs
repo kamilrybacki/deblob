@@ -97,6 +97,9 @@ impl ApiError {
 
     /// Maps a core-layer error onto the HTTP/error-envelope contract in
     /// spec §8: `Conflict`/`ImmutabilityViolation` → 409, `NotFound` → 404,
+    /// `PolicyRejected` → 422 (Task 14: a well-formed request against an
+    /// existing candidate that hasn't crossed the promotion guards —
+    /// distinct from `Conflict`'s state-machine/identity clashes), and
     /// everything else (a registry/evidence-store outage) → 503 rather
     /// than a bare 500, since it's a downstream-availability problem, not
     /// an API bug.
@@ -107,6 +110,7 @@ impl ApiError {
             CoreError::Conflict(_) | CoreError::ImmutabilityViolation(_) => {
                 Self::conflict(err.to_string())
             }
+            CoreError::PolicyRejected(_) => Self::unprocessable(err.to_string()),
             CoreError::RegistryUnavailable(_) => Self::unavailable(err.to_string()),
         }
     }

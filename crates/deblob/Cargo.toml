@@ -8,11 +8,13 @@ rust-version.workspace = true
 [dependencies]
 deblob-core = { path = "../deblob-core" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
+deblob-monoid = { path = "../deblob-monoid" }
 deblob-redis = { path = "../deblob-redis" }
 tokio.workspace = true
 async-trait.workspace = true
 sha2.workspace = true
 data-encoding.workspace = true
+bytes.workspace = true
 lru = "0.12"
 parking_lot = "0.12"
 axum = "0.8"
@@ -21,6 +23,7 @@ serde.workspace = true
 serde_json.workspace = true
 subtle = "2"
 base64 = "0.22"
+governor = "0.6"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

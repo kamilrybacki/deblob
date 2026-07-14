@@ -2,7 +2,7 @@
 
 use crate::id::SchemaRef;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SourceCursor {
     pub topic: String,
     pub partition: i32,

@@ -6,5 +6,7 @@
 //! listen port) lands in Task 18.
 
 pub mod api;
+pub mod coldlane;
 pub mod matcher;
+pub mod policy;
 pub mod promote;

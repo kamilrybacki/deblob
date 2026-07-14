@@ -78,6 +78,14 @@ pub trait EvidenceStore: Send + Sync {
         stats: serde_json::Value,
     ) -> Result<(), CoreError>;
     async fn set_state(&self, id: &CandidateId, state: CandidateState) -> Result<(), CoreError>;
+    /// Cold-lane clustering (Task 14, spec §4): looks up which candidate a
+    /// *generalized* fingerprint (hex-encoded `Profile::generalized_fingerprint`)
+    /// currently clusters onto, so optional-field variants of one emerging
+    /// schema converge onto ONE candidate even when the hot path's raw
+    /// shape digest mints a different `cand_` id per variant.
+    async fn get_cluster(&self, gen_fp: &str) -> Result<Option<CandidateId>, CoreError>;
+    /// Records (or refreshes) that `gen_fp` clusters onto `cand_id`.
+    async fn set_cluster(&self, gen_fp: &str, cand_id: &CandidateId) -> Result<(), CoreError>;
 }
 
 #[async_trait]

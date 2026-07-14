@@ -23,4 +23,12 @@ pub enum CoreError {
     NotFound,
     #[error("conflict: {0}")]
     Conflict(String),
+    /// A request was well-formed and its target exists, but a business
+    /// policy guard rejected it (spec §5/§6/§8) — e.g. promoting a
+    /// candidate before it has crossed the minimum sample-count/age bar.
+    /// Deliberately distinct from `Conflict` (a state-machine/identity
+    /// clash the caller can't fix by waiting) so the API layer can map
+    /// this to `422 Unprocessable Entity` rather than `409 Conflict`.
+    #[error("policy rejected: {0}")]
+    PolicyRejected(String),
 }

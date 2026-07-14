@@ -73,6 +73,12 @@ fn evidence_key(id: &CandidateId) -> String {
     format!("deblob:evidence:{}", id.as_str())
 }
 
+/// Cold-lane cluster-alias key (Task 14, spec §4): maps a hex-encoded
+/// generalized fingerprint onto the one candidate its variants converge on.
+fn cluster_key(gen_fp: &str) -> String {
+    format!("deblob:cluster:{gen_fp}")
+}
+
 fn state_str(state: CandidateState) -> &'static str {
     match state {
         CandidateState::Provisional => "provisional",
@@ -345,5 +351,35 @@ impl EvidenceStore for RedisEvidence {
             .await;
 
         result.map(|_| ()).map_err(map_set_state_error)
+    }
+
+    async fn get_cluster(&self, gen_fp: &str) -> Result<Option<CandidateId>, CoreError> {
+        let mut conn = self.conn();
+        let raw: Option<String> = redis::cmd("GET")
+            .arg(cluster_key(gen_fp))
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_err)?;
+        raw.map(|s| {
+            CandidateId::parse(&s).map_err(|e| {
+                CoreError::RegistryUnavailable(format!("corrupt cluster target: {e:?}"))
+            })
+        })
+        .transpose()
+    }
+
+    async fn set_cluster(&self, gen_fp: &str, cand_id: &CandidateId) -> Result<(), CoreError> {
+        let mut conn = self.conn();
+        // Same TTL as the candidate itself: a cluster alias outliving its
+        // target candidate would resolve to a dangling id.
+        let _: () = redis::cmd("SET")
+            .arg(cluster_key(gen_fp))
+            .arg(cand_id.as_str())
+            .arg("EX")
+            .arg(self.candidate_ttl_secs)
+            .query_async(&mut conn)
+            .await
+            .map_err(redis_err)?;
+        Ok(())
     }
 }

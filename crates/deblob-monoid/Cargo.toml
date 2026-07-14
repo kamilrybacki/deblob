@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 deblob-fingerprint = { path = "../deblob-fingerprint" }
 sha2.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true

@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 const GENERALIZER: &str = "deblob-monoid-v1";
 
 /// Per-type observation counts at a single field position.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct TypeCounts {
     pub null: u64,
     pub bool: u64,
@@ -28,7 +28,11 @@ pub struct TypeCounts {
 /// Accumulated statistics for one field position (or the document root),
 /// mergeable across observations. Never mutated in place — every producer
 /// in this crate returns a new value.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` (Task 14): this is the wire shape persisted as
+/// `CandidateRecord::profile` (a `serde_json::Value`) — it holds ONLY
+/// presence/type-union statistics, never a raw observed value (spec §9).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct FieldNode {
     /// Number of observations where this field was present (including
     /// explicit `null`).
@@ -145,7 +149,7 @@ impl FieldNode {
 /// A mergeable structural profile of `count` observed documents, rooted at
 /// `root`. Forms a commutative monoid under [`Profile::merge`] with
 /// [`Profile::identity`] as neutral element.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Profile {
     pub count: u64,
     pub root: FieldNode,
@@ -193,6 +197,18 @@ impl Profile {
         hasher.update([0u8]);
         hasher.update(&body);
         hasher.finalize().into()
+    }
+
+    /// The bare `{"optional":...,"types":[...],...}` generalized-field body
+    /// (field set with optionality + type unions), as a UTF-8 JSON string —
+    /// the same content [`Profile::generalized_fingerprint`] hashes, minus
+    /// its `{"gen":"...","fields":` framing/version tag. Used by Task 14's
+    /// promotion path as the `SchemaRecord::canonical` snapshot of the
+    /// generalized schema derived from a candidate's merged profile.
+    pub fn generalized_canonical_json(&self) -> String {
+        let mut body = Vec::new();
+        write_generalized_field(&self.root, self.count, &mut body);
+        String::from_utf8(body).expect("write_generalized_field always emits valid UTF-8")
     }
 }
 
