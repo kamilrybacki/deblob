@@ -1,7 +1,7 @@
 use deblob_core::error::CoreError;
 use deblob_core::id::CandidateId;
 use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore};
-use deblob_redis::{RedisEvidence, RedisEvidenceOpts};
+use deblob_redis::{RedisEvidence, RedisEvidenceOpts, RedisOpts};
 use redis::AsyncCommands;
 use testcontainers_modules::{redis::Redis, testcontainers::runners::AsyncRunner};
 
@@ -27,9 +27,15 @@ fn candidate_with(digest: [u8; 32]) -> CandidateRecord {
 }
 
 async fn connect_evidence(url: &str) -> RedisEvidence {
-    RedisEvidence::connect(url, RedisEvidenceOpts::default())
-        .await
-        .unwrap()
+    RedisEvidence::connect(
+        url,
+        RedisEvidenceOpts::default(),
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap()
 }
 
 #[tokio::test]
@@ -203,4 +209,36 @@ async fn state_transition_guarded() {
         .await
         .unwrap_err();
     assert!(matches!(err, CoreError::NotFound));
+}
+
+#[tokio::test]
+async fn refuses_volatile_redis_without_flag() {
+    // container has no AOF → connect with allow_volatile: false must error
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+
+    let err = RedisEvidence::connect(
+        &url,
+        RedisEvidenceOpts::default(),
+        RedisOpts {
+            allow_volatile: false,
+        },
+    )
+    .await
+    .unwrap_err();
+    assert!(matches!(err, CoreError::RegistryUnavailable(_)));
+
+    // with the flag, the same volatile instance is accepted
+    RedisEvidence::connect(
+        &url,
+        RedisEvidenceOpts::default(),
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
 }

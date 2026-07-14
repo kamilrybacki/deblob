@@ -12,7 +12,7 @@
 //! never grow Redis memory without bound.
 
 use crate::lua::SET_STATE_SCRIPT;
-use crate::registry::redis_err;
+use crate::registry::{redis_err, RedisOpts};
 use deblob_core::error::CoreError;
 use deblob_core::id::CandidateId;
 use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore};
@@ -127,23 +127,47 @@ fn map_set_state_error(e: redis::RedisError) -> CoreError {
 }
 
 impl RedisEvidence {
-    /// Connect to Redis. Unlike `RedisRegistry::connect`, this does not run
-    /// the startup persistence gate — candidate/evidence data is
-    /// deliberately ephemeral (TTL'd) by design, so AOF persistence is not
-    /// a correctness requirement here; only the tiny, fixed-size permanent
-    /// audit stub carries that expectation, and it degrades gracefully
-    /// (worst case: losing "first ever seen" provenance on a crash, not
-    /// silent data corruption).
-    pub async fn connect(url: &str, opts: RedisEvidenceOpts) -> Result<Self, CoreError> {
+    /// Connect and run the startup persistence gate. Although ephemeral
+    /// candidate records (TTL'd) are by design, the permanent audit stub
+    /// (`deblob:candidate-audit:<id>`, never-expiring) must be durable —
+    /// persistence is therefore required by default and enforced via the
+    /// same `CONFIG GET appendonly` gate as `RedisRegistry::connect` (spec
+    /// §6). Pass `allow_volatile: true` only for test containers.
+    pub async fn connect(
+        url: &str,
+        candidate_opts: RedisEvidenceOpts,
+        persist_opts: RedisOpts,
+    ) -> Result<Self, CoreError> {
         let client = Client::open(url)
             .map_err(|e| CoreError::RegistryUnavailable(format!("invalid redis url: {e}")))?;
-        let conn = client
+        let mut conn = client
             .get_multiplexed_async_connection()
             .await
             .map_err(|e| CoreError::RegistryUnavailable(format!("connect failed: {e}")))?;
+
+        // Enforce persistence gate: permanent audit stubs must be durable.
+        let appendonly_reply: Vec<String> = redis::cmd("CONFIG")
+            .arg("GET")
+            .arg("appendonly")
+            .query_async(&mut conn)
+            .await
+            .map_err(|e| {
+                CoreError::RegistryUnavailable(format!("CONFIG GET appendonly failed: {e}"))
+            })?;
+        let appendonly = appendonly_reply
+            .get(1)
+            .cloned()
+            .unwrap_or_else(|| "no".to_string());
+
+        if appendonly == "no" && !persist_opts.allow_volatile {
+            return Err(CoreError::RegistryUnavailable(
+                "redis persistence disabled; pass allow_volatile to override".to_string(),
+            ));
+        }
+
         Ok(Self {
             conn,
-            candidate_ttl_secs: opts.candidate_ttl_secs,
+            candidate_ttl_secs: candidate_opts.candidate_ttl_secs,
             set_state_script: Script::new(SET_STATE_SCRIPT),
         })
     }
