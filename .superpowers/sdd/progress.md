@@ -9,3 +9,7 @@ Task 2: complete (commits 58aede3..f6f1cdf, review clean — identity types)
   MINOR (for final review): id.rs parse() uppercases body before base32 decode → accepts mixed-case IDs, weakens lowercase canonical invariant (two casings decode to same digest but != as SchemaId). Not brief-tested; tighten later.
   MINOR: no FamilyId::new_v7/parse roundtrip test (listed in Produces).
 Task 3: complete (commits f6f1cdf..610583a, review clean — envelope, errors, port traits; all signatures verified)
+Task 4: complete (commits 610583a..ad53292, review clean — bounded JSON parser, security boundary; depth-bomb/NaN/dup-key-via-escape all verified safe)
+  MINOR (final review): over-limit field/string is fully materialized before length rejection (bounded by max_bytes overall, not a security issue; could pre-check to fail faster).
+  MINOR: unpaired low-surrogate escape → Utf8Error (semantic stretch, acceptable given fixed enum).
+  NOTE: oversized string VALUES reuse SizeExceeded (no dedicated variant) — adjudicated reasonable.
