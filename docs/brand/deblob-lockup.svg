@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 88" role="img" aria-label="deblob logo lockup (geometric stand-in)">
+  <!-- Horizontal lockup: simplified Imprintling mark + lowercase wordmark. Geometric STAND-IN. -->
+  <g transform="translate(8 12)">
+    <!-- mascot body -->
+    <path fill="#35D0B2" stroke="#0B1118" stroke-width="2" stroke-linejoin="round" d="
+      M 12 60 C 5 60 3 44 6 36 C 8 22 16 10 30 10
+      C 38 10 40 17 47 17 C 54 17 59 6 70 10
+      C 80 13 79 30 78 40 C 77 52 70 60 58 60 Z"/>
+    <!-- schema core -->
+    <rect x="30" y="34" width="26" height="22" rx="3" fill="#F7F9FB" stroke="#0B1118" stroke-width="2"/>
+    <path d="M31 42 h24 M31 49 h24 M43 34 v10" stroke="#35D0B2" stroke-width="1.6" fill="none"/>
+    <!-- asymmetric face: capsule left eye, square right eye, diamond mouth -->
+    <rect x="26" y="22" width="5" height="11" rx="2.5" fill="#0B1118"/>
+    <rect x="42" y="24" width="7" height="7" rx="1.5" fill="#0B1118"/>
+    <path d="M35 30 l4 3 -4 3 -4 -3 Z" fill="#0B1118"/>
+  </g>
+  <text x="104" y="58" font-family="'Trebuchet MS', Verdana, sans-serif" font-size="46" font-weight="600" fill="#17202A">deblob</text>
+</svg>

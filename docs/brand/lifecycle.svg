@@ -1,0 +1,55 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 780 320" role="img" aria-label="deblob record lifecycle: fingerprint to identity, async discovery to promotion, malformed to quarantine">
+  <!-- Reusable lifecycle diagram, shared with docs. Self-contained light panel so it reads on
+       either GitHub theme. Line STYLE (not just color) distinguishes the three lanes for monochrome. -->
+  <rect x="1" y="1" width="778" height="318" rx="10" fill="#F7F9FB" stroke="#D6DEE6"/>
+  <g font-family="'Segoe UI', Verdana, sans-serif" font-size="15" fill="#17202A">
+
+    <!-- record node -->
+    <rect x="28" y="132" width="96" height="44" rx="6" fill="#EEF2F6" stroke="#556575"/>
+    <text x="76" y="159" text-anchor="middle">record</text>
+
+    <!-- HOT PATH: solid amber -->
+    <path d="M124 146 C 170 120, 190 96, 232 96" fill="none" stroke="#A85A00" stroke-width="2.6" marker-end="url(#a-amber)"/>
+    <rect x="236" y="74" width="120" height="44" rx="6" fill="#FFFFFF" stroke="#A85A00"/>
+    <text x="296" y="101" text-anchor="middle">fingerprint</text>
+    <path d="M356 96 H 452" fill="none" stroke="#A85A00" stroke-width="2.6" marker-end="url(#a-amber)"/>
+    <!-- teal identity tile (dominant rigid square) -->
+    <rect x="458" y="72" width="48" height="48" rx="4" fill="#FFFFFF" stroke="#087F6D" stroke-width="2.6"/>
+    <path d="M465 88 h34 M465 104 h34 M482 72 v48" stroke="#087F6D" stroke-width="1.8" fill="none"/>
+    <text x="524" y="90" font-family="'Consolas','Courier New',monospace" font-size="14" fill="#087F6D">sch_7M4K2W…F9Q</text>
+    <text x="524" y="110" font-size="13" fill="#556575">schema identity</text>
+
+    <!-- DISCOVERY: dashed blue -->
+    <path d="M124 160 C 170 176, 190 176, 232 176" fill="none" stroke="#1769AA" stroke-width="2.4" stroke-dasharray="6 5" marker-end="url(#a-blue)"/>
+    <rect x="236" y="154" width="86" height="42" rx="6" fill="#FFFFFF" stroke="#1769AA"/>
+    <text x="279" y="180" text-anchor="middle">sample</text>
+    <path d="M322 175 H 372" fill="none" stroke="#1769AA" stroke-width="2.4" stroke-dasharray="6 5" marker-end="url(#a-blue)"/>
+    <rect x="376" y="154" width="150" height="42" rx="6" fill="#FFFFFF" stroke="#1769AA"/>
+    <text x="451" y="175" text-anchor="middle" font-family="'Consolas','Courier New',monospace" font-size="13" fill="#1769AA">cand_2KF…</text>
+    <text x="451" y="189" text-anchor="middle" font-size="12" fill="#556575">candidate</text>
+    <path d="M526 175 H 576" fill="none" stroke="#1769AA" stroke-width="2.4" stroke-dasharray="6 5" marker-end="url(#a-blue)"/>
+    <rect x="580" y="154" width="170" height="42" rx="6" fill="#FFFFFF" stroke="#1769AA"/>
+    <text x="665" y="180" text-anchor="middle">policy → promotion</text>
+
+    <!-- QUARANTINE: dash-dot red -->
+    <path d="M124 172 C 180 236, 220 256, 268 256" fill="none" stroke="#B4232A" stroke-width="2.4" stroke-dasharray="9 4 2 4" marker-end="url(#a-red)"/>
+    <rect x="272" y="234" width="210" height="42" rx="6" fill="#FFFFFF" stroke="#B4232A"/>
+    <text x="377" y="260" text-anchor="middle">malformed → quarantine</text>
+
+    <!-- legend -->
+    <g font-size="12" fill="#556575">
+      <line x1="540" y1="244" x2="576" y2="244" stroke="#A85A00" stroke-width="2.6"/>
+      <text x="582" y="248">hot path (sync)</text>
+      <line x1="540" y1="262" x2="576" y2="262" stroke="#1769AA" stroke-width="2.4" stroke-dasharray="6 5"/>
+      <text x="582" y="266">discovery (async)</text>
+      <line x1="540" y1="280" x2="576" y2="280" stroke="#B4232A" stroke-width="2.4" stroke-dasharray="9 4 2 4"/>
+      <text x="582" y="284">quarantine</text>
+    </g>
+  </g>
+
+  <defs>
+    <marker id="a-amber" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 Z" fill="#A85A00"/></marker>
+    <marker id="a-blue" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 Z" fill="#1769AA"/></marker>
+    <marker id="a-red" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0 0 L9 4.5 L0 9 Z" fill="#B4232A"/></marker>
+  </defs>
+</svg>
