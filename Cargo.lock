@@ -334,6 +334,7 @@ dependencies = [
  "deblob-core",
  "deblob-fingerprint",
  "redis",
+ "serde",
  "serde_json",
  "sha2",
  "testcontainers-modules",

@@ -123,3 +123,43 @@ redis.call('XADD', audit_key, '*', 'actor', actor, 'reason', reason, 'schema', s
 
 return version
 "#;
+
+/// Guards `EvidenceStore::set_state` against leaving Redis's `Rejected`
+/// terminal state, atomically, in a single round trip — no client-side
+/// `WATCH`/`MULTI` dance (fragile to reason about over a shared
+/// multiplexed connection where unrelated commands from other callers may
+/// interleave between `WATCH` and `EXEC`).
+///
+/// KEYS:
+///   1. candidate key   deblob:candidate:<cand_id>  (HASH)
+///
+/// ARGV:
+///   1. new_state target state, e.g. "staged" (snake_case, matching
+///      `CandidateState`'s serde representation)
+///
+/// Semantics:
+///   - Missing candidate -> `NOT_FOUND`.
+///   - Candidate whose current `state` field is `"rejected"` -> refuses
+///     ANY transition out of it (Rejected is terminal, spec §6) with
+///     `TERMINAL_STATE`.
+///   - Otherwise `HSET`s just the `state` field to the new value. Only
+///     that one field is touched — the candidate hash's `record` blob and
+///     its `EXPIRE`-set TTL are left completely alone, since `HSET` never
+///     resets a key's expiry.
+pub const SET_STATE_SCRIPT: &str = r#"
+local candidate_key = KEYS[1]
+local new_state = ARGV[1]
+
+local exists = redis.call('EXISTS', candidate_key)
+if exists == 0 then
+  return redis.error_reply('NOT_FOUND')
+end
+
+local current_state = redis.call('HGET', candidate_key, 'state')
+if current_state == 'rejected' then
+  return redis.error_reply('TERMINAL_STATE')
+end
+
+redis.call('HSET', candidate_key, 'state', new_state)
+return 1
+"#;

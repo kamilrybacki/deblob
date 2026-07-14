@@ -6,9 +6,11 @@
 //! it enforces (write-once schema bytes, write-once alias, atomic family
 //! version allocation).
 
+pub mod evidence;
 pub mod index;
 pub mod lua;
 pub mod registry;
 
+pub use evidence::{RedisEvidence, RedisEvidenceOpts};
 pub use index::{bucket_key, bucket_member};
 pub use registry::{RedisOpts, RedisRegistry};
