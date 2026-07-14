@@ -26,49 +26,82 @@ The mascot mimics and proposes; deterministic code fingerprints; policy decides.
 
 ## Install
 
-```
-cargo install deblob
-```
-
 > Deblob is in early development and is **not yet published to crates.io**.
-> Today, build from source:
+> Build from source:
 >
 > ```
 > git clone https://github.com/<owner>/deblob && cd deblob
 > cargo build --release
 > ```
 
-The shortest real path — relay a Kafka topic, tagging every record with its
-schema identity:
+The binary is a single always-on relay process, not a subcommand tree — it
+reads a non-secret TOML config and env-only secrets, then runs until
+terminated:
 
 ```
-deblob relay kafka \
-  --raw-topic events.raw \
-  --tagged-topic events.tagged
+cp deblob.example.toml deblob.toml
+# edit deblob.toml: topic names, promotion thresholds, management.addr
+
+export DEBLOB_API_TOKEN=change-me
+export DEBLOB_REDIS_URL=redis://127.0.0.1:6379
+export DEBLOB_KAFKA_BROKERS=127.0.0.1:9092
+
+./target/release/deblob --config deblob.toml
 ```
 
-1. **Start it** — `deblob relay kafka` consumes `events.raw`.
-2. **Input** — each JSON record on the raw topic.
-3. **Produces** — the same record on `events.tagged`, plus a
+1. **Start it** — `deblob --config deblob.toml` connects to Redis (refusing
+   a non-AOF-persistent instance unless `--unsafe-volatile` is also passed),
+   then starts the Kafka relay, the discovery-topic consumer, and the
+   management API on `management.addr` (default `127.0.0.1:9615`).
+2. **Input** — each JSON record on `kafka.raw_topic`.
+3. **Produces** — the same record on `kafka.tagged_topic`, plus a
    `deblob-schema-id` header (`sch_…` for a known schema, `cand_…` for a new
-   shape, `unresolved` if the registry is briefly unavailable).
-4. **Inspect** — `deblob schema show <id>` against the schema vault.
+   shape, `unresolved` if the registry is briefly unavailable) and a
+   `deblob-origin` header recording `<topic>/<partition>/<offset>`.
+4. **Inspect** — query the management API (below) against the schema vault.
+
+Every secret (`DEBLOB_API_TOKEN`, `DEBLOB_REDIS_URL`, `DEBLOB_KAFKA_BROKERS`,
+and the optional `DEBLOB_KAFKA_SASL_USERNAME` / `DEBLOB_KAFKA_SASL_PASSWORD` /
+`DEBLOB_KAFKA_SASL_MECHANISM` / `DEBLOB_KAFKA_SECURITY_PROTOCOL`) is read
+exclusively from the environment at startup — never from the TOML file,
+never logged. `DEBLOB_MANAGEMENT_ADDR` can override `management.addr`
+without editing the config file. See `deblob.example.toml` and
+`crates/deblob/src/config.rs` for the authoritative list.
 
 ## A 30-second proof
 
-```
-$ deblob schema show sch_7M4K2W…F9Q
+The management API is bearer-authenticated and listens on its own port,
+separate from the Kafka ingest path:
 
-family       orders.created
-version      3
-identity     sch_7M4K2W…F9Q
-status       known
-provenance   deterministic fingerprint
+```
+$ curl -s http://127.0.0.1:9615/healthz
+$ curl -s -H "Authorization: Bearer $DEBLOB_API_TOKEN" \
+    http://127.0.0.1:9615/api/v1/schemas/sch_7M4K2W7QF9Q...
+
+{
+  "data": {
+    "schema_id": "sch_7M4K2W7QF9Q...",
+    "family_id": "fam_...",
+    "version": 3,
+    ...
+  }
+}
 ```
 
-Identifiers are mid-truncated (`sch_7M4K2W…F9Q`) and every transcript stays
-meaningful under `NO_COLOR`. The mascot never appears in daemon or
-machine-readable output.
+`GET /healthz` and `/readyz` are unauthenticated so orchestrators can probe
+them without a credential; `/readyz` reports unhealthy whenever the Redis
+persistence gate is degraded (see the [runbook](docs/runbook.md)).
+
+## Header contract
+
+| Header | Values | Meaning |
+|---|---|---|
+| `deblob-schema-id` | `sch_…` \| `cand_…` \| `unresolved` \| `malformed` \| `tombstone` | The durable identity this record was tagged with |
+| `deblob-origin` | `<topic>/<partition>/<offset>` | The source record's own coordinates, verbatim |
+| `deblob-quarantine-reason` | one of 8 bounded reason codes (e.g. `depth_exceeded`, `parse_error`) | Present only on quarantined records |
+
+Every inbound `deblob-*` header is stripped, case-insensitively, before a
+record is re-produced — a producer can never spoof its own tag.
 
 ## What Deblob guarantees
 
@@ -120,6 +153,7 @@ same transaction as the tagged record, so a crash can never emit a tag whose
 discovery evidence was lost. Detailed documentation:
 
 - [Design specification](docs/superpowers/specs/2026-07-14-deblob-design.md) — architecture, identity model, vault, security
+- [Operator runbook](docs/runbook.md) — outage behaviour, backup/restore, promotion, metrics
 - [Design book](docs/brand/design-book.md) — visual identity and voice
 
 Planned dedicated docs: Kafka and HTTP integration, identity construction,
@@ -130,38 +164,61 @@ security model.
 
 - Deterministic identity remains independent of SLM availability.
 - Explicit behaviour when persistence is unhealthy — promotions freeze, the
-  relay keeps tagging (`unresolved` while the registry is unreachable).
-- Stable `DBL-xxxx` error codes.
-- Bounded labels in Prometheus metrics (no schema or producer IDs in labels).
+  relay keeps tagging (`unresolved` while the registry is unreachable), and
+  Redis's `ConnectionManager` auto-reconnects (~2s fast-fail response
+  timeout) once it recovers, with no restart required.
+- The `DBL-<range><nn>` error-code convention (design book §6) — not yet
+  wired into API error bodies; today's `/api/v1/*` errors carry a string
+  `code` (`unauthorized`, `not_found`, `conflict`, `unprocessable_entity`,
+  `unavailable`) in the `{"error":{...}}` envelope.
+- Bounded labels in every `deblob_*` Prometheus metric at `/metrics` (no
+  schema or producer IDs in labels) — see the [runbook](docs/runbook.md#metrics).
 - `NO_COLOR` honoured; machine-readable output carries no decorative content.
-- Candidate promotion is an authenticated and audited boundary.
-
-```
-DBL-2204 AOF persistence is unhealthy; promotions are frozen.
-```
+- Candidate promotion is an authenticated and audited boundary:
+  `POST /api/v1/candidates/{cand_id}/promote` — see the
+  [runbook](docs/runbook.md#promoting-a-candidate).
 
 ## Project status
 
-Deblob is in **early development (pre-alpha)**. The deterministic core (P1) is
-under active construction; nothing is published to a package registry yet.
+Deblob is in **early development (pre-alpha)** — nothing is published to a
+package registry yet, and nothing here is a stability promise. The P1
+deterministic core is now implemented and has been proven end-to-end against
+real Kafka and Redis (not just mocks/unit tests):
 
-**Stable:** nothing is API-stable yet — everything may change before 0.1.0.
-
-**Under active development (P1):**
+**Implemented and e2e-proven (P1):**
 - Bounded JSON parsing and canonical fingerprinting
-- Immutable Redis schema vault with atomic publication
-- Transactional Kafka relay (topic → tag → derived topic)
-- Authenticated management API and audited promotion
+- Immutable Redis schema vault with atomic (Lua) publication
+- Transactional Kafka relay with exactly-once semantics
+  (topic → fingerprint/tag → derived topic, abort-on-crash/rebalance)
+- Hot-path schema matching with an exact-match LRU cache in front of the
+  registry
+- The cold discovery lane: sampling, monoid-merged candidate profiles,
+  bucketed structural clustering
+- Authenticated, audited candidate promotion via the management API
+- Redis outage handling: `unresolved` tagging (never a minted `cand_`),
+  frozen promotions, failing readiness, and automatic reconnection once
+  Redis recovers
 
-**Not yet supported:**
-- The semantic discovery lane and small-language-model classification (P2) —
+**Not yet implemented:**
+- `GET /api/v1/families/{fam_id}` and `.../versions` (return `501` — the
+  `Registry` trait doesn't yet expose family-indexed reads)
+- `GET /api/v1/quarantine` (returns an always-empty page — no backing store
+  yet; the quarantine Kafka topic itself is live)
+- A CLI or API entry point for structural-index rebuild/verify — the
+  operations exist (`RedisRegistry::rebuild_index`/`verify_index`) but are
+  library-only today; see the [runbook](docs/runbook.md#index-rebuild)
+
+**Not yet supported (P2+):**
+- The semantic discovery lane and small-language-model classification —
   provider-agnostic behind an OpenAI-compatible HTTP adapter, with in-process
   llama.cpp as an opt-in
-- The HTTP push reverse proxy (P2)
+- The HTTP push reverse proxy
 - Formats other than strict JSON
 
-The CLI transcripts above show the intended interface; exact flags are being
-finalised as the commands land.
+There is no subcommand tree (`deblob relay kafka`, `deblob schema show`,
+etc.) — the binary is a single process configured by `--config <file.toml>`
+plus env-only secrets, per the Install/Quickstart sections above. See
+`crates/deblob/src/main.rs` for the authoritative CLI surface.
 
 ## Contributing and governance
 

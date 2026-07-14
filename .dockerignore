@@ -1,0 +1,8 @@
+target/
+.git/
+.github/
+.superpowers/
+docs/
+*.md
+deblob.toml
+.env
