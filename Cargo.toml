@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/deblob-core", "crates/deblob-fingerprint", "crates/deblob-monoid"]
+members = [
+    "crates/deblob-core",
+    "crates/deblob-fingerprint",
+    "crates/deblob-monoid",
+    "crates/deblob-redis",
+]
 
 [workspace.package]
 edition = "2021"
