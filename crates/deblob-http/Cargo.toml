@@ -25,6 +25,7 @@ tracing.workspace = true
 uuid.workspace = true
 url = "2"
 thiserror.workspace = true
+subtle = "2"
 
 [dev-dependencies]
 serde_json.workspace = true

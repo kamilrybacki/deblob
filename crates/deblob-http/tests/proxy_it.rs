@@ -16,7 +16,9 @@ use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{CandidateRecord, CandidateState, FamilyRef, Registry, SchemaRecord};
 use deblob_fingerprint::Limits;
-use deblob_http::{DiscoveryError, DiscoverySink, HttpProxy, HttpProxyCfg, HttpProxyError};
+use deblob_http::{
+    DiscoveryError, DiscoverySink, HttpProxy, HttpProxyCfg, HttpProxyError, IngestToken,
+};
 use deblob_match::discovery::DiscoveryMsg;
 use deblob_match::matcher::HotMatcher;
 use deblob_match::metrics::Metrics;
@@ -40,6 +42,7 @@ fn generous_cfg(listen_addr: SocketAddr, upstream_allowlist: Vec<Url>, route: Ur
         header_read_timeout: Duration::from_secs(10),
         upstream_timeout: Duration::from_secs(10),
         discovery_enqueue_timeout: Duration::from_secs(10),
+        ingest_token: None,
     }
 }
 
@@ -1263,6 +1266,141 @@ async fn slow_discovery_enqueue_times_out_without_blocking_forward() {
     assert!(
         elapsed < Duration::from_secs(3),
         "hot path waited on the slow sink: {elapsed:?}"
+    );
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+// ---------------------------------------------------------------------
+// Ingest bearer-token enforcement (security fix: `require_auth` must
+// actually be checked per-request, not just validated present at
+// startup).
+// ---------------------------------------------------------------------
+
+/// Rule: when `ingest_token` is configured, `/ingest` requires a matching
+/// `Authorization: Bearer <token>` header — missing or wrong → 401,
+/// upstream NEVER called; correct token → 200, tagged + forwarded, AND
+/// the upstream does NOT receive the client's `Authorization` header
+/// (the ingest credential must never leak upstream).
+#[tokio::test]
+async fn ingest_requires_bearer_when_configured() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let mut cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    cfg.ingest_token = Some(IngestToken::new("secret123"));
+    let matcher = matcher(None);
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(async move { HttpProxy::run(cfg, matcher, None, run_shutdown).await });
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+
+    // (a) No Authorization header at all → 401, upstream never called.
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert!(
+        response.headers().get("deblob-schema-id").is_none(),
+        "an unauthenticated request must never be tagged"
+    );
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        0,
+        "an unauthenticated request must never reach the upstream"
+    );
+
+    // (b) Wrong token → 401, upstream never called.
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .header("Authorization", "Bearer wrong")
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+    assert_eq!(response.status(), reqwest::StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        0,
+        "a request with the wrong bearer token must never reach the upstream"
+    );
+
+    // (c) Correct token → 200, tagged + forwarded, and the upstream must
+    // NOT see the client's Authorization header (never leak the ingest
+    // credential upstream).
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .header("Authorization", "Bearer secret123")
+        .header("content-type", "application/json")
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert!(response.headers().get("deblob-schema-id").is_some());
+
+    {
+        let captured = captured.lock().unwrap();
+        assert_eq!(
+            captured.len(),
+            1,
+            "a correctly-authenticated request must be forwarded"
+        );
+        assert!(
+            captured[0].headers.get("authorization").is_none(),
+            "the ingest bearer token must never be forwarded to the upstream"
+        );
+        // A normal, non-auth header must still pass through untouched.
+        assert_eq!(
+            captured[0]
+                .headers
+                .get("content-type")
+                .and_then(|v| v.to_str().ok()),
+            Some("application/json")
+        );
+    }
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Rule: when `ingest_token` is `None` (the default), auth is not
+/// enforced at all — a request with no `Authorization` header is tagged
+/// and forwarded exactly as before this fix (unchanged behavior).
+#[tokio::test]
+async fn no_auth_when_token_none() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    assert!(cfg.ingest_token.is_none());
+    let matcher = matcher(None);
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(async move { HttpProxy::run(cfg, matcher, None, run_shutdown).await });
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert!(response.headers().get("deblob-schema-id").is_some());
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "with no ingest_token configured, a request with no Authorization \
+         header must still be tagged and forwarded"
     );
 
     shutdown.cancel();

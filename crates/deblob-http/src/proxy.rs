@@ -31,6 +31,7 @@ use std::time::Duration;
 
 use axum::body::Body;
 use axum::extract::{Request, State};
+use axum::http::header::AUTHORIZATION;
 use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -49,6 +50,7 @@ use tower_http::timeout::TimeoutLayer;
 use url::Url;
 use uuid::Uuid;
 
+use crate::auth::{check_ingest_bearer, IngestToken};
 use crate::headers::{
     ensure_idempotency_key, strip_reserved_and_hop_by_hop, with_quarantine_reason, with_tag,
     SCHEMA_ID_HEADER,
@@ -147,6 +149,15 @@ pub struct HttpProxyCfg {
     /// bounds how long a stalled attempt is allowed to add to the
     /// response.
     pub discovery_enqueue_timeout: Duration,
+    /// The ingest bearer-token requirement (spec §4/§8: `require_auth`
+    /// actually enforced, not just validated-present-at-startup). `Some`
+    /// means every `POST /ingest` request MUST carry a matching
+    /// `Authorization: Bearer <token>` header — checked in constant time,
+    /// rejected with 401 otherwise, BEFORE the body is classified or
+    /// forwarded (see `proxy::ingest_handler`). `None` is the previous,
+    /// unauthenticated behavior — unchanged: every request is accepted
+    /// regardless of any `Authorization` header it carries.
+    pub ingest_token: Option<IngestToken>,
 }
 
 /// Every way [`HttpProxy::run`] can fail before/while serving. Never
@@ -208,6 +219,8 @@ struct ProxyState {
     max_header_count: usize,
     /// See [`HttpProxyCfg::discovery_enqueue_timeout`].
     discovery_enqueue_timeout: Duration,
+    /// See [`HttpProxyCfg::ingest_token`].
+    ingest_token: Option<IngestToken>,
 }
 
 /// The HTTP push reverse proxy (spec §3.3).
@@ -264,6 +277,7 @@ impl HttpProxy {
             max_header_bytes: cfg.max_header_bytes,
             max_header_count: cfg.max_header_count,
             discovery_enqueue_timeout: cfg.discovery_enqueue_timeout,
+            ingest_token: cfg.ingest_token,
         };
         let router = Router::new()
             .route("/ingest", post(ingest_handler))
@@ -330,26 +344,33 @@ impl HttpProxy {
 ///    single body byte is read,
 /// 2. header count/byte-weight guard → 431,
 /// 3. `Content-Length` precheck against `max_body_bytes` → 413,
-/// 4. read the body via a streamed `axum::body::to_bytes` cap — bounds the
+/// 4. if `state.ingest_token` is `Some`, require a matching
+///    `Authorization: Bearer <token>` header (constant-time compared) →
+///    401 on missing/malformed/wrong, BEFORE the body is even read — the
+///    actual enforcement of `[http_proxy].require_auth` (previously
+///    validated present at startup but never checked per-request),
+/// 5. read the body via a streamed `axum::body::to_bytes` cap — bounds the
 ///    bytes actually read regardless of what any header claims → 413,
-/// 5. `HotMatcher::classify` it against the shared decision table,
-/// 6. `Malformed` → 422 + `deblob-quarantine-reason`, NEVER forwarded,
-/// 7. re-check `state.route` against `state.upstream_allowlist`
+/// 6. `HotMatcher::classify` it against the shared decision table,
+/// 7. `Malformed` → 422 + `deblob-quarantine-reason`, NEVER forwarded,
+/// 8. re-check `state.route` against `state.upstream_allowlist`
 ///    (defense-in-depth; `HttpProxy::run` already validated this at
 ///    construction) → 502 if somehow no longer a member,
-/// 8. strip every inbound reserved/hop-by-hop header, then write exactly
-///    one `deblob-schema-id` + `deblob-origin` pair, then ensure exactly
-///    one `Idempotency-Key` (a client-provided value survives verbatim —
-///    it is neither reserved nor hop-by-hop, so step 8's strip already
-///    left it in place; an absent one is generated, spec §4),
-/// 9. forward the UNMODIFIED body to `state.route` (never a
-///    client-controlled destination), with `state.client`'s configured
-///    forward timeout — a hung upstream → 504, not a hang — running
-///    CONCURRENTLY with `enqueue_discovery` (Task 3, spec §3.2: a
-///    `Provisional` classification's discovery-lane feed never serializes
-///    behind the forward, and a `Malformed`/non-`Provisional`
-///    classification never enqueues at all — see `enqueue_discovery`),
-/// 10. return the upstream's response, with `deblob-schema-id` added so
+/// 9. strip every inbound reserved/hop-by-hop header (plus `Authorization`
+///    itself, when auth is enforced — the client's ingest credential must
+///    never leak to the upstream), then write exactly one
+///    `deblob-schema-id` + `deblob-origin` pair, then ensure exactly one
+///    `Idempotency-Key` (a client-provided value survives verbatim — it is
+///    neither reserved nor hop-by-hop, so step 9's strip already left it
+///    in place; an absent one is generated, spec §4),
+/// 10. forward the UNMODIFIED body to `state.route` (never a
+///     client-controlled destination), with `state.client`'s configured
+///     forward timeout — a hung upstream → 504, not a hang — running
+///     CONCURRENTLY with `enqueue_discovery` (Task 3, spec §3.2: a
+///     `Provisional` classification's discovery-lane feed never serializes
+///     behind the forward, and a `Malformed`/non-`Provisional`
+///     classification never enqueues at all — see `enqueue_discovery`),
+/// 11. return the upstream's response, with `deblob-schema-id` added so
 ///     the producer sees the tag too.
 async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>) -> Response {
     let (parts, body) = request.into_parts();
@@ -367,6 +388,11 @@ async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>)
     }
     if let Err(response) = check_content_length(&request_headers, state.max_body_bytes) {
         return *response;
+    }
+    if let Some(token) = &state.ingest_token {
+        if let Err(response) = check_ingest_bearer(&request_headers, token) {
+            return *response;
+        }
     }
 
     let body = match axum::body::to_bytes(body, state.max_body_bytes).await {
@@ -399,6 +425,16 @@ async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>)
     }
 
     let mut forward_headers = strip_reserved_and_hop_by_hop(&request_headers);
+    if state.ingest_token.is_some() {
+        // The client's `Authorization` header just authenticated it to
+        // DEBLOB's ingest endpoint — it is not a credential for the
+        // upstream, and forwarding it verbatim would leak the ingest
+        // bearer token to whatever `state.route` points at. Only stripped
+        // when auth is actually enforced, so a deployment with
+        // `ingest_token: None` keeps forwarding every header exactly as
+        // before (unchanged behavior).
+        forward_headers.remove(AUTHORIZATION);
+    }
     let origin = format!("{}/{}", state.origin_prefix, Uuid::now_v7());
     with_tag(&mut forward_headers, &classification.schema_ref, &origin);
     ensure_idempotency_key(&mut forward_headers);

@@ -32,10 +32,12 @@
 //! through all four tasks — nothing here changes behavior for a
 //! deployment that never enables `[http_proxy]`.
 
+pub mod auth;
 pub mod headers;
 pub mod kafka_sink;
 pub mod limits;
 pub mod proxy;
 
+pub use auth::IngestToken;
 pub use kafka_sink::KafkaDiscoverySink;
 pub use proxy::{DiscoveryError, DiscoverySink, HttpProxy, HttpProxyCfg, HttpProxyError};

@@ -25,7 +25,7 @@ use std::time::Duration;
 
 use deblob_core::error::CoreError;
 use deblob_core::ports::{EvidenceStore, Registry};
-use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, KafkaDiscoverySink};
+use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, IngestToken, KafkaDiscoverySink};
 use deblob_kafka::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 use deblob_kafka::{Relay, RelayCfg};
 use deblob_redis::{HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry};
@@ -226,6 +226,20 @@ fn build_http_proxy_wiring(
         header_read_timeout: Duration::from_millis(http_proxy.header_read_timeout_ms),
         upstream_timeout: Duration::from_millis(http_proxy.upstream_timeout_ms),
         discovery_enqueue_timeout: Duration::from_millis(http_proxy.discovery_enqueue_timeout_ms),
+        // `require_auth` now actually ENFORCES the bearer check (spec
+        // §4/§8), not just validates the token present at startup: `Some`
+        // when `require_auth` is true — `validate_secrets` already
+        // guarantees `secrets.http_ingest_token.is_some()` in that case
+        // (it errors at startup otherwise), so the `expect` below is
+        // unreachable via `main.rs`'s normal startup path. `None` when
+        // `require_auth` is false — unchanged, unauthenticated behavior.
+        ingest_token: if http_proxy.require_auth {
+            Some(IngestToken::new(secrets.http_ingest_token.as_deref().expect(
+                "validate_secrets guarantees http_ingest_token is Some when require_auth is true",
+            )))
+        } else {
+            None
+        },
     };
 
     // Reuses the SAME discovery topic the Kafka relay/discovery-topic
@@ -681,6 +695,10 @@ mod tests {
             wiring.cfg.discovery_enqueue_timeout,
             Duration::from_millis(250)
         );
+        assert!(
+            wiring.cfg.ingest_token.is_none(),
+            "require_auth=false must construct no ingest_token — unauthenticated, unchanged behavior"
+        );
 
         // An off-allowlist route must produce a clear startup error,
         // before any listener is bound.
@@ -698,6 +716,42 @@ mod tests {
         assert!(
             matches!(result, Err(AppError::HttpProxyRouteNotAllowlisted)),
             "route outside the allowlist must error with HttpProxyRouteNotAllowlisted"
+        );
+    }
+
+    /// Security fix: `[http_proxy].require_auth = true` must thread an
+    /// actual `IngestToken` into `HttpProxyCfg` — `validate_secrets`
+    /// already guarantees `secrets.http_ingest_token.is_some()` whenever
+    /// `require_auth` is true (it errors at startup otherwise), so this
+    /// asserts the wiring actually turns that guarantee into enforcement,
+    /// rather than the config knob being validated-but-inert.
+    #[test]
+    fn require_auth_true_threads_ingest_token() {
+        let http_proxy = HttpProxyConfig {
+            enabled: true,
+            listen_addr: "127.0.0.1:9600".to_string(),
+            upstream_allowlist: vec!["https://upstream.internal:8443".to_string()],
+            route: "https://upstream.internal:8443/ingest".to_string(),
+            require_auth: true,
+            ..HttpProxyConfig::default()
+        };
+        let config = test_config(http_proxy.clone());
+        let secrets_with_token = Secrets {
+            api_token: "test-token".to_string(),
+            redis_url: "redis://localhost:6379".to_string(),
+            kafka_brokers: "localhost:9092".to_string(),
+            kafka_sasl: None,
+            slm_api_token: None,
+            http_ingest_token: Some("ingest-secret".to_string()),
+        };
+
+        let wiring = build_http_proxy_wiring(&http_proxy, &config, &secrets_with_token)
+            .expect("enabled + require_auth=true with a token present must not error")
+            .expect("enabled http_proxy must construct Some(wiring)");
+
+        assert!(
+            wiring.cfg.ingest_token.is_some(),
+            "require_auth=true must construct Some(ingest_token)"
         );
     }
 }
