@@ -16,7 +16,8 @@ use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{CandidateRecord, CandidateState, FamilyRef, Registry, SchemaRecord};
 use deblob_fingerprint::Limits;
-use deblob_http::{HttpProxy, HttpProxyCfg, HttpProxyError};
+use deblob_http::{DiscoveryError, DiscoverySink, HttpProxy, HttpProxyCfg, HttpProxyError};
+use deblob_match::discovery::DiscoveryMsg;
 use deblob_match::matcher::HotMatcher;
 use deblob_match::metrics::Metrics;
 use tokio_util::sync::CancellationToken;
@@ -823,4 +824,369 @@ async fn send_raw_request(addr: SocketAddr, raw_request: &str) -> String {
     let mut buf = Vec::new();
     let _ = tokio::time::timeout(Duration::from_secs(2), stream.read_to_end(&mut buf)).await;
     String::from_utf8_lossy(&buf).into_owned()
+}
+
+// ---------------------------------------------------------------------
+// Task 3: discovery-lane feed + idempotency-key contract + outage
+// tagging (spec §3.2, §4, §6).
+// ---------------------------------------------------------------------
+
+/// A [`DiscoverySink`] that records every enqueued [`DiscoveryMsg`] — no
+/// Kafka needed to exercise the ingest handler's discovery-feed logic
+/// (spec §8: "Unit tests ... integration tests with a test upstream").
+#[derive(Clone, Default)]
+struct FakeDiscoverySink {
+    received: Arc<Mutex<Vec<DiscoveryMsg>>>,
+}
+
+#[async_trait::async_trait]
+impl DiscoverySink for FakeDiscoverySink {
+    async fn enqueue(&self, msg: DiscoveryMsg) -> Result<(), DiscoveryError> {
+        self.received.lock().unwrap().push(msg);
+        Ok(())
+    }
+}
+
+/// A [`DiscoverySink`] that always fails — exercises the "enqueue
+/// failure must not fail the request" rule (Task 3).
+struct FailingDiscoverySink;
+
+#[async_trait::async_trait]
+impl DiscoverySink for FailingDiscoverySink {
+    async fn enqueue(&self, _msg: DiscoveryMsg) -> Result<(), DiscoveryError> {
+        Err(DiscoveryError::Unavailable(
+            "simulated discovery sink outage".to_string(),
+        ))
+    }
+}
+
+/// Rule: an unknown (`Provisional`) shape enqueues exactly ONE
+/// `DiscoveryMsg` whose `cand_id` matches the response tag and whose
+/// `payload` is the request body — AND the upstream is still called
+/// (Task 3, spec §3.2).
+#[tokio::test]
+async fn unknown_shape_enqueues_discovery() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    let matcher = matcher(None); // index miss => Provisional
+    let sink = Arc::new(FakeDiscoverySink::default());
+    let discovery: Arc<dyn DiscoverySink> = sink.clone();
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(
+            async move { HttpProxy::run(cfg, matcher, Some(discovery), run_shutdown).await },
+        );
+    wait_for_proxy(listen_addr).await;
+
+    let body = br#"{"never":"seen","before":1}"#.to_vec();
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(body.clone())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let tag = response
+        .headers()
+        .get("deblob-schema-id")
+        .expect("tag header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(tag.starts_with("cand_"), "unexpected tag: {tag}");
+
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "the unknown shape must still be forwarded upstream"
+    );
+
+    {
+        let received = sink.received.lock().unwrap();
+        assert_eq!(received.len(), 1, "exactly one DiscoveryMsg enqueued");
+        assert_eq!(received[0].cand_id, tag);
+        assert_eq!(received[0].payload.as_ref(), body.as_slice());
+    }
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Rule: a known shape (registry hit) is tagged `sch_...` and forwarded,
+/// but the `DiscoverySink` receives NOTHING — only unknowns feed
+/// discovery (Task 3).
+#[tokio::test]
+async fn known_shape_does_not_enqueue() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    let known_id = SchemaId::from_digest(&[5u8; 32]);
+    let matcher = matcher(Some(known_id));
+    let sink = Arc::new(FakeDiscoverySink::default());
+    let discovery: Arc<dyn DiscoverySink> = sink.clone();
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(
+            async move { HttpProxy::run(cfg, matcher, Some(discovery), run_shutdown).await },
+        );
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let tag = response
+        .headers()
+        .get("deblob-schema-id")
+        .expect("tag header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(tag.starts_with("sch_"), "unexpected tag: {tag}");
+    assert_eq!(captured.lock().unwrap().len(), 1);
+    assert!(
+        sink.received.lock().unwrap().is_empty(),
+        "a known shape must never feed the discovery lane"
+    );
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Rule: a registry outage (`Unresolved`) is tagged `unresolved` and
+/// still forwarded, but the `DiscoverySink` receives NOTHING —
+/// `Unresolved` is not a candidate, so it must never enqueue (Task 3,
+/// spec §6).
+#[tokio::test]
+async fn unresolved_does_not_enqueue() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    let matcher = matcher_with_registry_down();
+    let sink = Arc::new(FakeDiscoverySink::default());
+    let discovery: Arc<dyn DiscoverySink> = sink.clone();
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(
+            async move { HttpProxy::run(cfg, matcher, Some(discovery), run_shutdown).await },
+        );
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let tag = response
+        .headers()
+        .get("deblob-schema-id")
+        .expect("tag header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(tag, "unresolved");
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "a registry outage must still forward"
+    );
+    assert!(
+        sink.received.lock().unwrap().is_empty(),
+        "Unresolved must never enqueue a DiscoveryMsg"
+    );
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Rule: a `DiscoverySink` that errors on enqueue must NOT fail the
+/// request — it is still tagged `cand_` and forwarded, and the upstream
+/// still gets a 2xx response through the proxy (Task 3).
+#[tokio::test]
+async fn enqueue_failure_does_not_fail_request() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    let matcher = matcher(None); // index miss => Provisional
+    let discovery: Arc<dyn DiscoverySink> = Arc::new(FailingDiscoverySink);
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(
+            async move { HttpProxy::run(cfg, matcher, Some(discovery), run_shutdown).await },
+        );
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"unknown":"shape"}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+
+    assert_eq!(
+        response.status(),
+        reqwest::StatusCode::OK,
+        "an enqueue failure must not fail the request"
+    );
+    let tag = response
+        .headers()
+        .get("deblob-schema-id")
+        .expect("tag header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(tag.starts_with("cand_"), "unexpected tag: {tag}");
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "the request must still be forwarded despite the enqueue failure"
+    );
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Rule: a client-provided `Idempotency-Key` is forwarded to the
+/// upstream verbatim (Task 3, spec §4).
+#[tokio::test]
+async fn client_idempotency_key_forwarded() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    let matcher = matcher(None);
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(async move { HttpProxy::run(cfg, matcher, None, run_shutdown).await });
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .header("Idempotency-Key", "abc-123")
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    {
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let keys: Vec<_> = captured[0]
+            .headers
+            .get_all("idempotency-key")
+            .iter()
+            .collect();
+        assert_eq!(keys.len(), 1, "must not duplicate the header");
+        assert_eq!(keys[0].to_str().unwrap(), "abc-123");
+    }
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Rule: an absent `Idempotency-Key` is generated and forwarded — a
+/// non-empty, uuid-shaped value (Task 3, spec §4).
+#[tokio::test]
+async fn idempotency_key_generated_when_absent() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    let matcher = matcher(None);
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(async move { HttpProxy::run(cfg, matcher, None, run_shutdown).await });
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"a":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+
+    {
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        let keys: Vec<_> = captured[0]
+            .headers
+            .get_all("idempotency-key")
+            .iter()
+            .collect();
+        assert_eq!(keys.len(), 1, "exactly one generated key");
+        let value = keys[0].to_str().unwrap();
+        assert!(!value.is_empty());
+        assert!(
+            uuid::Uuid::parse_str(value).is_ok(),
+            "generated key must be uuid-shaped: {value}"
+        );
+    }
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Degraded mode (spec §3.2): with NO `DiscoverySink` configured, an
+/// unknown shape is still tagged `cand_` and forwarded — it just isn't
+/// enqueued anywhere. No panic, no special-casing visible to the caller
+/// (Task 3).
+#[tokio::test]
+async fn no_sink_degraded_mode() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    let matcher = matcher(None); // index miss => Provisional
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    // `discovery: None` — the degraded mode under test.
+    let proxy_handle =
+        tokio::spawn(async move { HttpProxy::run(cfg, matcher, None, run_shutdown).await });
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"degraded":true}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let tag = response
+        .headers()
+        .get("deblob-schema-id")
+        .expect("tag header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(tag.starts_with("cand_"), "unexpected tag: {tag}");
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "must still forward in degraded mode"
+    );
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
 }

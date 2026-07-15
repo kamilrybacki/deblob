@@ -9,12 +9,23 @@
 //! size limits enforced before the hot path ever sees a byte, malformed
 //! bodies quarantined with a 422 instead of forwarded, allowlist
 //! enforcement at both construction and request time, and bounded
-//! inbound/outbound timeouts. No discovery-lane enqueue yet (Task 3 — the
-//! `DiscoverySink` trait is defined here so Task 3 can back it, but
-//! nothing calls `enqueue` in this task), no `[http_proxy]`
-//! config/`serve()` wiring yet (Task 4).
+//! inbound/outbound timeouts.
+//!
+//! Task 3 (this module's current scope) adds the discovery-lane feed +
+//! idempotency-key contract on top of Task 2's hardening: a `Provisional`
+//! classification now enqueues a `DiscoveryMsg` to the configured
+//! `DiscoverySink` (see `enqueue_discovery`), run CONCURRENTLY with the
+//! upstream forward via `tokio::join!` so it never adds serialized
+//! latency and its own failure never fails the request; every request
+//! forwarded downstream now also carries exactly one `Idempotency-Key`
+//! (client-provided verbatim, or generated — `headers::
+//! ensure_idempotency_key`); and `Unresolved` (registry-down, from
+//! Task 2) is confirmed to never enqueue a discovery message, only
+//! `Provisional` does. No `[http_proxy]` config/`serve()` wiring yet
+//! (Task 4).
 
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -24,6 +35,8 @@ use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::Router;
+use bytes::Bytes;
+use deblob_core::envelope::SourceCursor;
 use deblob_core::id::SchemaRef;
 use deblob_fingerprint::Limits;
 use deblob_match::discovery::DiscoveryMsg;
@@ -37,14 +50,18 @@ use url::Url;
 use uuid::Uuid;
 
 use crate::headers::{
-    strip_reserved_and_hop_by_hop, with_quarantine_reason, with_tag, SCHEMA_ID_HEADER,
+    ensure_idempotency_key, strip_reserved_and_hop_by_hop, with_quarantine_reason, with_tag,
+    SCHEMA_ID_HEADER,
 };
 use crate::limits::{check_content_length, check_framing, check_header_limits, payload_too_large};
 
 /// Errors a [`DiscoverySink`] implementation can return when enqueueing a
-/// discovery message. Task 3 backs [`DiscoverySink`] with a Kafka
-/// producer (reusing the relay's discovery topic) and defines the real
-/// failure modes; this task only defines the trait shape.
+/// discovery message. Backed in production by
+/// [`crate::kafka_sink::KafkaDiscoverySink`] (reusing
+/// `deblob-kafka`'s standalone discovery producer, spec §3.2). Never
+/// carries a payload byte — only the sink's own bounded error text (spec
+/// §9) — the ingest handler logs this at `debug` without ever attaching
+/// the message that failed to enqueue.
 #[derive(Debug, thiserror::Error)]
 pub enum DiscoveryError {
     #[error("discovery sink unavailable: {0}")]
@@ -53,12 +70,13 @@ pub enum DiscoveryError {
 
 /// Feeds unknown-shape (`Provisional`) classifications to the durable
 /// discovery lane, so HTTP-ingested unknowns reach the cold lane exactly
-/// like Kafka-ingested ones (spec §3.2). Task 3 backs this with a Kafka
-/// producer and wires the handler to call [`DiscoverySink::enqueue`] on a
-/// `Provisional` classification; this task only defines the trait and
-/// threads an `Option<Arc<dyn DiscoverySink>>` through
-/// [`HttpProxy::run`]/the handler without calling it yet — a wiring seam,
-/// not yet a behavior.
+/// like Kafka-ingested ones (spec §3.2). `enqueue_discovery` calls
+/// [`DiscoverySink::enqueue`] on every `Provisional` classification,
+/// CONCURRENTLY with the upstream forward (never serialized behind it —
+/// see `enqueue_discovery`'s own docs). An `Option<Arc<dyn
+/// DiscoverySink>>` of `None` is the documented degraded mode (spec
+/// §3.2): the classification is still tagged `cand_` and forwarded, it
+/// simply isn't fed to the cold lane.
 #[async_trait::async_trait]
 pub trait DiscoverySink: Send + Sync {
     async fn enqueue(&self, msg: DiscoveryMsg) -> Result<(), DiscoveryError>;
@@ -151,8 +169,15 @@ fn is_allowlisted(route: &Url, allowlist: &[Url]) -> bool {
 #[derive(Clone)]
 struct ProxyState {
     matcher: Arc<HotMatcher>,
-    #[allow(dead_code)] // wired up by Task 3
     discovery: Option<Arc<dyn DiscoverySink>>,
+    /// Monotonically-increasing synthetic offset for the `SourceCursor`
+    /// attached to every `DiscoveryMsg` this listener enqueues (spec §3.2:
+    /// HTTP has no real Kafka offset, so `enqueue_discovery` mints
+    /// `cursor = SourceCursor { topic: "http", partition: 0, offset }`
+    /// from this counter — unique and ordered per listener, never reused,
+    /// even though it carries no replay-recovery meaning the way a real
+    /// Kafka offset does).
+    discovery_offset: Arc<AtomicI64>,
     route: Url,
     /// Re-checked per-request as defense-in-depth alongside the
     /// construction-time check in [`HttpProxy::run`] (spec §4).
@@ -212,6 +237,7 @@ impl HttpProxy {
         let state = ProxyState {
             matcher,
             discovery,
+            discovery_offset: Arc::new(AtomicI64::new(0)),
             route: cfg.route,
             upstream_allowlist: cfg.upstream_allowlist,
             origin_prefix: format!("http/{}", cfg.listen_addr),
@@ -294,10 +320,17 @@ impl HttpProxy {
 ///    (defense-in-depth; `HttpProxy::run` already validated this at
 ///    construction) → 502 if somehow no longer a member,
 /// 8. strip every inbound reserved/hop-by-hop header, then write exactly
-///    one `deblob-schema-id` + `deblob-origin` pair,
+///    one `deblob-schema-id` + `deblob-origin` pair, then ensure exactly
+///    one `Idempotency-Key` (a client-provided value survives verbatim —
+///    it is neither reserved nor hop-by-hop, so step 8's strip already
+///    left it in place; an absent one is generated, spec §4),
 /// 9. forward the UNMODIFIED body to `state.route` (never a
 ///    client-controlled destination), with `state.client`'s configured
-///    forward timeout — a hung upstream → 504, not a hang,
+///    forward timeout — a hung upstream → 504, not a hang — running
+///    CONCURRENTLY with `enqueue_discovery` (Task 3, spec §3.2: a
+///    `Provisional` classification's discovery-lane feed never serializes
+///    behind the forward, and a `Malformed`/non-`Provisional`
+///    classification never enqueues at all — see `enqueue_discovery`),
 /// 10. return the upstream's response, with `deblob-schema-id` added so
 ///     the producer sees the tag too.
 async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>) -> Response {
@@ -350,15 +383,26 @@ async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>)
     let mut forward_headers = strip_reserved_and_hop_by_hop(&request_headers);
     let origin = format!("{}/{}", state.origin_prefix, Uuid::now_v7());
     with_tag(&mut forward_headers, &classification.schema_ref, &origin);
+    ensure_idempotency_key(&mut forward_headers);
 
-    let upstream_response = match state
+    // Kick off the discovery-lane enqueue and the upstream forward
+    // TOGETHER (`tokio::join!`, not one `.await` after the other): the
+    // discovery enqueue never serializes behind — and therefore never
+    // adds latency on top of — the forward. `enqueue_discovery` itself is
+    // a no-op (returns immediately) for every classification except
+    // `Provisional`, and for `Provisional` with no `DiscoverySink`
+    // configured (the documented degraded mode, spec §3.2).
+    let discovery_future =
+        enqueue_discovery(&state, classification.schema_ref.clone(), body.clone());
+    let forward_future = state
         .client
         .post(state.route.clone())
         .headers(forward_headers)
         .body(body)
-        .send()
-        .await
-    {
+        .send();
+    let (_, forward_result) = tokio::join!(discovery_future, forward_future);
+
+    let upstream_response = match forward_result {
         Ok(response) => response,
         Err(error) => {
             if error.is_timeout() {
@@ -387,4 +431,60 @@ async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>)
     );
 
     (status, response_headers, upstream_body).into_response()
+}
+
+/// Feeds a `Provisional` classification to the durable discovery lane
+/// (spec §3.2), so an HTTP-ingested unknown shape reaches the cold lane
+/// exactly like a Kafka-ingested one — the same `DiscoveryMsg` envelope,
+/// carrying the discovery lane's own durable copy of the RAW body (this
+/// is the discovery topic's established contract, spec §3.2: the Kafka
+/// relay's own `Provisional` produce carries the same raw payload; the
+/// cold lane already owns redaction/PII handling downstream of this
+/// point — this is not, and must never be confused with, the separately
+/// redacted SLM prompt).
+///
+/// A no-op for every OTHER classification (`Known`, `Unresolved`,
+/// `Malformed`, `Tombstone`) — only an unknown shape is a discovery
+/// candidate; `Unresolved` in particular must NEVER enqueue (spec §6: a
+/// registry outage degrades to `unresolved`, it does not mint a
+/// candidate, so there is nothing here for the cold lane to see).
+///
+/// Also a no-op when `state.discovery` is `None` — the documented
+/// degraded mode (spec §3.2): "If Kafka isn't configured, HTTP unknowns
+/// are tagged `cand_` and forwarded but not fed to the cold lane."
+///
+/// Called via `tokio::join!` alongside the upstream forward (never
+/// `.await`ed serially before it), so a slow discovery sink adds no
+/// latency on top of the forward itself; and its own failure is caught
+/// and logged at `debug` — WITHOUT the payload, only the sink's own
+/// bounded error text — rather than propagated, because a discovery-lane
+/// outage must never fail (or even slow) the request: the message is
+/// tagged `cand_` and forwarded regardless, same "degrade, don't block"
+/// principle as the `Unresolved` outage path.
+async fn enqueue_discovery(state: &ProxyState, schema_ref: SchemaRef, body: Bytes) {
+    let SchemaRef::Provisional(cand_id) = schema_ref else {
+        return;
+    };
+    let Some(discovery) = &state.discovery else {
+        return;
+    };
+
+    let offset = state.discovery_offset.fetch_add(1, Ordering::Relaxed);
+    let msg = DiscoveryMsg {
+        cand_id: cand_id.as_str().to_string(),
+        payload: body,
+        source: state.origin_prefix.clone(),
+        cursor: SourceCursor {
+            topic: "http".to_string(),
+            partition: 0,
+            offset,
+        },
+    };
+
+    if let Err(error) = discovery.enqueue(msg).await {
+        tracing::debug!(
+            %error,
+            "discovery enqueue failed; the request is still tagged and forwarded"
+        );
+    }
 }

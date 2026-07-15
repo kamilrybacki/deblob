@@ -126,6 +126,55 @@ pub fn with_quarantine_reason(headers: &mut HeaderMap, reason: QuarantineReason)
     );
 }
 
+/// The client-facing idempotency-key header (spec §4 "Idempotency-key
+/// contract", Task 3). NOT a `deblob-*` reserved header — a client sets
+/// it directly, and [`strip_reserved_and_hop_by_hop`] deliberately leaves
+/// it alone (it is neither reserved nor hop-by-hop), so a client-provided
+/// value already survives into the forward headers before
+/// [`ensure_idempotency_key`] ever runs.
+pub const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
+
+/// Ensures `headers` carries exactly one `Idempotency-Key`: a
+/// client-provided value is left VERBATIM (this function only checks
+/// presence, it never reads or rewrites an existing value), and if the
+/// client sent none, a fresh UUIDv7 is generated and inserted so the
+/// header is always present on the forwarded request.
+///
+/// # Retry contract (spec §4)
+///
+/// Deblob is stateless per request: it never stores, checks, or dedupes
+/// on the idempotency key itself — the key exists so the FIXED UPSTREAM
+/// can dedupe. Concretely: if a request's forward to the upstream
+/// succeeds (the upstream performs its write) but the response back to
+/// the producer is then lost (client timeout, connection reset,
+/// mid-stream failure...), a naive producer retry looks, from Deblob's
+/// perspective, like a brand-new request. Two cases:
+///
+/// - **Client supplied its own `Idempotency-Key`** and reuses the SAME
+///   key on its retry: the retried request carries the identical key to
+///   the upstream, which can recognize the repeat and skip re-applying
+///   the write — no silent duplicate.
+/// - **Client sent no key** (Deblob generated one): Deblob has no memory
+///   of the prior request, so a retry after a lost response mints a
+///   DIFFERENT generated key — the upstream sees what looks like a new
+///   request and cannot dedupe it. Generate-if-absent therefore protects
+///   the upstream's own internal retries within a single Deblob
+///   request/response round trip (e.g. a load balancer or client library
+///   retrying the SAME forward before Deblob's response is built), not a
+///   producer-initiated retry after Deblob's response never arrived. A
+///   producer that needs retry-safety across a lost response MUST supply
+///   and reuse its own stable key.
+pub fn ensure_idempotency_key(headers: &mut HeaderMap) {
+    if headers.contains_key(IDEMPOTENCY_KEY_HEADER) {
+        return;
+    }
+    let generated = uuid::Uuid::now_v7().to_string();
+    headers.insert(
+        HeaderName::from_static(IDEMPOTENCY_KEY_HEADER),
+        HeaderValue::from_str(&generated).expect("a UUIDv7 string is always a valid header value"),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use deblob_core::id::{CandidateId, SchemaId};
@@ -244,6 +293,48 @@ mod tests {
         assert_eq!(
             first.get(ORIGIN_HEADER).unwrap(),
             second.get(ORIGIN_HEADER).unwrap()
+        );
+    }
+
+    #[test]
+    fn ensure_idempotency_key_generates_a_uuid_shaped_value_when_absent() {
+        let mut headers = HeaderMap::new();
+        ensure_idempotency_key(&mut headers);
+
+        let value = headers
+            .get(IDEMPOTENCY_KEY_HEADER)
+            .expect("a key was generated")
+            .to_str()
+            .unwrap();
+        assert!(
+            uuid::Uuid::parse_str(value).is_ok(),
+            "generated value must be uuid-shaped: {value}"
+        );
+    }
+
+    #[test]
+    fn ensure_idempotency_key_preserves_a_client_provided_value_verbatim() {
+        let mut headers = HeaderMap::new();
+        headers.insert(IDEMPOTENCY_KEY_HEADER, HeaderValue::from_static("abc"));
+
+        ensure_idempotency_key(&mut headers);
+
+        let values: Vec<_> = headers.get_all(IDEMPOTENCY_KEY_HEADER).iter().collect();
+        assert_eq!(values.len(), 1, "must not duplicate the header");
+        assert_eq!(values[0].to_str().unwrap(), "abc");
+    }
+
+    #[test]
+    fn ensure_idempotency_key_generates_a_different_value_each_call() {
+        let mut first = HeaderMap::new();
+        ensure_idempotency_key(&mut first);
+        let mut second = HeaderMap::new();
+        ensure_idempotency_key(&mut second);
+
+        assert_ne!(
+            first.get(IDEMPOTENCY_KEY_HEADER).unwrap(),
+            second.get(IDEMPOTENCY_KEY_HEADER).unwrap(),
+            "each generated key must be unique, never reused across requests"
         );
     }
 }

@@ -635,6 +635,7 @@ dependencies = [
  "bytes",
  "deblob-core",
  "deblob-fingerprint",
+ "deblob-kafka",
  "deblob-match",
  "http",
  "hyper",
