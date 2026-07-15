@@ -9,8 +9,12 @@
 //! digest, does NOT define canonical byte serialization (Task 3), and has
 //! NO storage, API, or signature concerns (later tasks). No I/O, no async.
 
+pub mod canon;
+pub mod digest;
 pub mod vocab;
 
+pub use canon::{canonical_semantic_bytes, CanonError};
+pub use digest::semantic_fingerprint;
 pub use vocab::{
     validate_metadata, CanonicalEventTypeIdRegistry, CanonicalFieldIdRegistry, Registries,
     VocabError, ISO4217_CURRENCIES, MEANING_VOCABULARIES, NAMESPACE_CODES, UCUM_UNITS,
