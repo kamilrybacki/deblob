@@ -719,6 +719,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "deblob-semantic"
+version = "0.1.0"
+dependencies = [
+ "deblob-core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "deblob-slm"
 version = "0.1.0"
 dependencies = [
