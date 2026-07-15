@@ -1,0 +1,129 @@
+{
+  "name": "new_family_with_close_distractor",
+  "category": "new_family",
+  "candidate": {
+    "observation_count": 33,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"webhook_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 33,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 33,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"event_type\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 33,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 33,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"signature\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 33,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 33,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"retries\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 33,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 33,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "Zero",
+          "SmallPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_new_family_with_close_distractor_a",
+      "schema_id": "sch_new_family_with_close_distractor_a",
+      "version": 1,
+      "distance": 0.3,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "new_candidate",
+      "novelty": "structural"
+    },
+    "gold_schema_id": null,
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

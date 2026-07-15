@@ -4,7 +4,7 @@ use crate::health::HealthGate;
 use crate::lua::PUBLISH_SCRIPT;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
-use deblob_core::ports::{Registry, SchemaRecord};
+use deblob_core::ports::{FamilyRef, Registry, SchemaRecord};
 use redis::{AsyncCommands, Client, Script};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -342,5 +342,28 @@ impl Registry for RedisRegistry {
             Some(next_cursor)
         };
         Ok((records, next))
+    }
+
+    /// deblob-p2ab Task 3 retrieval: delegates to the bucketed lookup in
+    /// `crate::index` (same module that owns every other structural-index
+    /// operation), which is the single source of truth for bucket-member
+    /// scanning.
+    async fn list_families_in_buckets(
+        &self,
+        bucket_keys: &[String],
+    ) -> Result<Vec<FamilyRef>, CoreError> {
+        self.list_families_in_buckets_bucketed(bucket_keys).await
+    }
+
+    /// deblob-p2ab Task 3 recall fix: delegates to the prefix-scanning
+    /// lookup in `crate::index` (same module that owns every other
+    /// structural-index operation).
+    async fn list_families_by_band_depth(
+        &self,
+        bands: &[u32],
+        depths: &[u32],
+    ) -> Result<Vec<FamilyRef>, CoreError> {
+        self.list_families_by_band_depth_bucketed(bands, depths)
+            .await
     }
 }

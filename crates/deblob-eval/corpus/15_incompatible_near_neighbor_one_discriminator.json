@@ -1,0 +1,103 @@
+{
+  "name": "incompatible_near_neighbor_one_discriminator",
+  "category": "incompatible_unsafe",
+  "candidate": {
+    "observation_count": 52,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"order_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 52,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 52,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"status\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 52,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 52,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"region\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 52,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 52,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_incompatible_near_neighbor_one_discriminator",
+      "schema_id": "sch_incompatible_near_neighbor_one_discriminator_lookalike",
+      "version": 1,
+      "distance": 0.07,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_incompatible_near_neighbor_one_discriminator_lookalike",
+      "relation": "incompatible_similarity"
+    },
+    "gold_schema_id": null,
+    "gold_rank": null,
+    "false_merge_trap": true,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

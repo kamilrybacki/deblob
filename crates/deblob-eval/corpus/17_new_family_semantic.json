@@ -1,0 +1,102 @@
+{
+  "name": "new_family_semantic",
+  "category": "new_family",
+  "candidate": {
+    "observation_count": 24,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 24,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 24,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"kind\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 24,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 24,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"payload_ref\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 24,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 24,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_new_family_semantic_a",
+      "schema_id": "sch_new_family_semantic_a",
+      "version": 1,
+      "distance": 0.38,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "new_candidate",
+      "novelty": "semantic"
+    },
+    "gold_schema_id": null,
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

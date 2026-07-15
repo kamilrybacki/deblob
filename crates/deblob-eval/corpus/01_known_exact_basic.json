@@ -1,0 +1,105 @@
+{
+  "name": "known_exact_basic",
+  "category": "known_exact",
+  "candidate": {
+    "observation_count": 80,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"order_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 80,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 80,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"amount\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 80,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 80,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "MediumPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"status\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 80,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 80,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_known_exact_basic",
+      "schema_id": "sch_known_exact_basic_gold",
+      "version": 3,
+      "distance": 0.0,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_known_exact_basic_gold",
+      "relation": "exact"
+    },
+    "gold_schema_id": "sch_known_exact_basic_gold",
+    "gold_rank": 1,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "test"
+}

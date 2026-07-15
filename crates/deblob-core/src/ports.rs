@@ -31,6 +31,19 @@ pub enum CandidateState {
     Rejected,
 }
 
+/// One schema found in a structural-index bucket, as returned by
+/// [`Registry::list_families_in_buckets`] (deblob-p2ab Task 3: deterministic
+/// structural-distance retrieval). Carries the same generalized-canonical
+/// JSON [`SchemaRecord::canonical`] holds, so the caller can score
+/// structural distance against it without a second per-schema round trip.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FamilyRef {
+    pub family_id: FamilyId,
+    pub schema_id: SchemaId,
+    pub version: FamilyVersion,
+    pub canonical: String,
+}
+
 #[async_trait]
 pub trait Registry: Send + Sync {
     async fn get_schema(&self, id: &SchemaId) -> Result<Option<SchemaRecord>, CoreError>;
@@ -77,6 +90,43 @@ pub trait Registry: Send + Sync {
         cursor: Option<String>,
         limit: usize,
     ) -> Result<(Vec<SchemaRecord>, Option<String>), CoreError>;
+
+    /// Every schema whose structural-index membership lives in any of
+    /// `bucket_keys` (deblob-p2ab Task 3 retrieval), de-duplicated by
+    /// `schema_id` across buckets. Each bucket lookup is a bounded per-bucket
+    /// scan — buckets are small by construction (spec §6) — never a scan
+    /// over `deblob:schema:*`. An empty `bucket_keys` slice is valid and
+    /// returns `Ok(vec![])`; this is the gold-ABSENT case (no nearby
+    /// families for a candidate), never an error.
+    async fn list_families_in_buckets(
+        &self,
+        bucket_keys: &[String],
+    ) -> Result<Vec<FamilyRef>, CoreError>;
+
+    /// Every schema whose structural-index bucket falls under ANY `(band,
+    /// depth)` pair in `bands` × `depths` — i.e. `deblob:index:{band}:{depth}:*`
+    /// — regardless of the bucket's `reqhash8` suffix (deblob-p2ab Task 3
+    /// recall fix). `reqhash8` is a hash of a schema's own top-level key
+    /// NAMES, so a family whose top-level fields were merely
+    /// renamed/case-changed (e.g. `widgetCount` -> `widget_count`) lands in
+    /// a DIFFERENT bucket at the SAME field-count band and depth — an
+    /// exact-key lookup via [`Registry::list_families_in_buckets`] can
+    /// never find it, but this widened, name-blind discovery can.
+    /// De-duplicated by `schema_id` across every discovered bucket.
+    ///
+    /// Still bounded, never a global scan: `bands`/`depths` are the
+    /// caller's small local neighborhood (a candidate's own field-count
+    /// band plus its immediate neighbors, and nearby depths), so this is
+    /// one bounded `SCAN MATCH` per `(band, depth)` pair to discover that
+    /// prefix's bucket keys, followed by one bounded per-bucket scan for
+    /// each discovered bucket — the cold retrieval path, run once per
+    /// candidate cluster, never per record. An empty `bands` or `depths`
+    /// slice is valid and returns `Ok(vec![])`, never an error.
+    async fn list_families_by_band_depth(
+        &self,
+        bands: &[u32],
+        depths: &[u32],
+    ) -> Result<Vec<FamilyRef>, CoreError>;
 }
 
 #[async_trait]

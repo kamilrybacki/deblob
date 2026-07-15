@@ -6,7 +6,7 @@
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{Registry, SchemaRecord};
 use deblob_fingerprint::{
-    canonical_bytes, fingerprint, parse_bounded, shape_of, summarize, Limits,
+    canonical_bytes, fieldband, fingerprint, parse_bounded, shape_of, summarize, Limits,
 };
 use deblob_redis::{bucket_key, RedisOpts, RedisRegistry};
 use redis::AsyncCommands;
@@ -188,5 +188,108 @@ async fn verify_reports_poisoned_index() {
     assert!(
         problems.iter().any(|p| p.contains("sch_doesnotexist")),
         "verify_index must report the poisoned member, got: {problems:?}"
+    );
+}
+
+/// deblob-p2ab Task 3 recall fix, exercised against a REAL Redis: two
+/// schemas with the SAME field-count band + depth but DIFFERENT top-level
+/// key names land in DIFFERENT exact `bucket_key`s (different `reqhash8`).
+/// `list_families_in_buckets` (exact-key lookup, the pre-fix retrieval
+/// path) can only ever find the one whose exact bucket it's given —
+/// `list_families_by_band_depth` (widened, name-blind `SCAN MATCH
+/// "deblob:index:{band}:{depth}:*"` discovery) must find BOTH.
+#[tokio::test]
+async fn list_families_by_band_depth_finds_renamed_bucket() {
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (record_a, bucket_a) =
+        record_and_bucket(br#"{"widgetCount":1,"itemName":"x"}"#, FamilyId::new_v7());
+    let (record_b, bucket_b) =
+        record_and_bucket(br#"{"widget_count":1,"item_name":"x"}"#, FamilyId::new_v7());
+    assert_ne!(
+        bucket_a, bucket_b,
+        "fixture must land in different reqhash8 buckets to exercise the fix"
+    );
+
+    let cand_a = CandidateId::from_digest(&[71u8; 32]);
+    let cand_b = CandidateId::from_digest(&[72u8; 32]);
+    reg.publish(
+        record_a.clone(),
+        &cand_a,
+        &bucket_a,
+        &[],
+        "kamil",
+        "publish",
+    )
+    .await
+    .unwrap();
+    reg.publish(
+        record_b.clone(),
+        &cand_b,
+        &bucket_b,
+        &[],
+        "kamil",
+        "publish",
+    )
+    .await
+    .unwrap();
+
+    // OLD path: an exact-key lookup restricted to bucket_a's own key only
+    // ever finds record_a -- the defect, pinned here as a direct contrast.
+    // `SchemaId` has no `Ord`/`Hash` impl, so membership is checked by its
+    // string form rather than via a `BTreeSet`/`HashSet`.
+    let exact = reg
+        .list_families_in_buckets(std::slice::from_ref(&bucket_a))
+        .await
+        .unwrap();
+    let exact_ids: Vec<String> = exact
+        .iter()
+        .map(|f| f.schema_id.as_str().to_string())
+        .collect();
+    assert!(exact_ids.contains(&record_a.schema_id.as_str().to_string()));
+    assert!(
+        !exact_ids.contains(&record_b.schema_id.as_str().to_string()),
+        "exact bucket_key lookup must miss the renamed-field schema"
+    );
+
+    // NEW path: (band, depth) parsed straight out of bucket_a's own key
+    // (both fixtures share the same band/depth by construction -- only
+    // reqhash8 differs) must find BOTH via prefix SCAN.
+    let parts: Vec<&str> = bucket_a.split(':').collect();
+    let band: u32 = parts[2].parse().unwrap();
+    let depth: u32 = parts[3].parse().unwrap();
+    assert_eq!(
+        band,
+        fieldband(2),
+        "sanity: both fixtures are 2-field objects"
+    );
+
+    let widened = reg
+        .list_families_by_band_depth(&[band], &[depth])
+        .await
+        .unwrap();
+    let widened_ids: Vec<String> = widened
+        .iter()
+        .map(|f| f.schema_id.as_str().to_string())
+        .collect();
+    assert!(
+        widened_ids.contains(&record_a.schema_id.as_str().to_string()),
+        "widened discovery must still find record_a"
+    );
+    assert!(
+        widened_ids.contains(&record_b.schema_id.as_str().to_string()),
+        "widened discovery must find record_b via (band, depth) prefix, ignoring reqhash8"
     );
 }

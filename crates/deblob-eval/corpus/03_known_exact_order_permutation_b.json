@@ -1,0 +1,115 @@
+{
+  "name": "known_exact_order_permutation_b",
+  "category": "known_exact",
+  "candidate": {
+    "observation_count": 60,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"user_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 60,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 60,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"email\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 60,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 60,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"tags\"",
+            "truncated": false,
+            "injection_flagged": false
+          },
+          {
+            "escaped": "\"[]\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 1,
+        "present": 40,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 40,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_perm_other",
+      "schema_id": "sch_order_permutation_other",
+      "version": 1,
+      "distance": 0.41,
+      "rank": 2
+    },
+    {
+      "family_id": "fam_perm_gold",
+      "schema_id": "sch_order_permutation_gold",
+      "version": 1,
+      "distance": 0.02,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_order_permutation_gold",
+      "relation": "exact"
+    },
+    "gold_schema_id": "sch_order_permutation_gold",
+    "gold_rank": 1,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

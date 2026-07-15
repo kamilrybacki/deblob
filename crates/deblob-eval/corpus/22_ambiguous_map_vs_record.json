@@ -1,0 +1,134 @@
+{
+  "name": "ambiguous_map_vs_record",
+  "category": "ambiguous_adversarial",
+  "candidate": {
+    "observation_count": 18,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"key_1\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 18,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 18,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "SmallPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"key_2\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 17,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 17,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "SmallPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"key_3\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 16,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 16,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "SmallPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"key_4\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 5,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 5,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "SmallPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_ambiguous_map_vs_record_a",
+      "schema_id": "sch_ambiguous_map_vs_record_a",
+      "version": 1,
+      "distance": 0.3,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "abstain",
+      "cause": "ambiguous"
+    },
+    "gold_schema_id": null,
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

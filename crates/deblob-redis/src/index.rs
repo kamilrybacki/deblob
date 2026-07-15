@@ -15,8 +15,11 @@
 //! canonical bytes. [`RedisRegistry::verify_index`] cross-checks the two
 //! directions (bucket → schema, schema → bucket) and reports drift.
 
+use std::collections::BTreeSet;
+
 use deblob_core::error::CoreError;
 use deblob_core::id::SchemaId;
+use deblob_core::ports::{FamilyRef, Registry};
 use redis::AsyncCommands;
 
 use crate::registry::{redis_err, RedisRegistry};
@@ -153,6 +156,114 @@ impl RedisRegistry {
             }
             cursor = next_cursor;
         }
+    }
+
+    /// Every schema found across `bucket_keys` (deblob-p2ab Task 3
+    /// retrieval), de-duplicated by `schema_id`: a bounded `SSCAN` per
+    /// bucket (buckets are small by construction), then one `get_schema`
+    /// per distinct member found — reusing the same version-authoritative
+    /// hash read `Registry::get_schema` already does rather than
+    /// duplicating its `HMGET`/`record_from_hash` logic here. An empty
+    /// `bucket_keys` slice, or buckets that resolve to no members, both
+    /// return `Ok(vec![])` — never an error.
+    pub(crate) async fn list_families_in_buckets_bucketed(
+        &self,
+        bucket_keys: &[String],
+    ) -> Result<Vec<FamilyRef>, CoreError> {
+        let mut conn = self.conn();
+        let mut seen: BTreeSet<String> = BTreeSet::new();
+        let mut out = Vec::new();
+
+        for bucket_key in bucket_keys {
+            let mut cursor = "0".to_string();
+            loop {
+                let (next_cursor, members): (String, Vec<String>) = redis::cmd("SSCAN")
+                    .arg(bucket_key)
+                    .arg(&cursor)
+                    .arg("COUNT")
+                    .arg(200)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(redis_err)?;
+
+                for member in &members {
+                    let Some((_, sch)) = split_member(member) else {
+                        continue;
+                    };
+                    if !seen.insert(sch.to_string()) {
+                        continue;
+                    }
+                    let schema_id = SchemaId::parse(sch).map_err(|e| {
+                        CoreError::RegistryUnavailable(format!(
+                            "corrupt index member {member:?} in bucket {bucket_key}: {e:?}"
+                        ))
+                    })?;
+                    if let Some(record) = self.get_schema(&schema_id).await? {
+                        out.push(FamilyRef {
+                            family_id: record.family_id,
+                            schema_id: record.schema_id,
+                            version: record.version,
+                            canonical: record.canonical,
+                        });
+                    }
+                }
+
+                if next_cursor == "0" {
+                    break;
+                }
+                cursor = next_cursor;
+            }
+        }
+
+        Ok(out)
+    }
+
+    /// Every schema found across the `(band, depth)` cross product of
+    /// `bands` × `depths` (deblob-p2ab Task 3 recall fix: widened bucket
+    /// DISCOVERY, ignoring the `reqhash8` component of the bucket key
+    /// entirely — see [`Registry::list_families_by_band_depth`]'s docs for
+    /// why). For each `(band, depth)` pair, a bounded `SCAN MATCH
+    /// "deblob:index:{band}:{depth}:*"` enumerates that prefix's bucket
+    /// keys — never a scan over `deblob:index:*` as a whole, let alone
+    /// `deblob:schema:*` — and the union of discovered bucket keys is then
+    /// read exactly like [`Self::list_families_in_buckets_bucketed`]
+    /// already does (which this delegates to once bucket-key discovery is
+    /// done, so bucket-membership reading + de-dup logic lives in exactly
+    /// one place).
+    pub(crate) async fn list_families_by_band_depth_bucketed(
+        &self,
+        bands: &[u32],
+        depths: &[u32],
+    ) -> Result<Vec<FamilyRef>, CoreError> {
+        let mut conn = self.conn();
+        let mut bucket_keys: BTreeSet<String> = BTreeSet::new();
+
+        for &band in bands {
+            for &depth in depths {
+                let pattern = deblob_fingerprint::band_depth_prefix(band, depth);
+                let mut cursor = "0".to_string();
+                loop {
+                    let (next_cursor, keys): (String, Vec<String>) = redis::cmd("SCAN")
+                        .arg(&cursor)
+                        .arg("MATCH")
+                        .arg(&pattern)
+                        .arg("COUNT")
+                        .arg(200)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(redis_err)?;
+                    bucket_keys.extend(keys);
+
+                    if next_cursor == "0" {
+                        break;
+                    }
+                    cursor = next_cursor;
+                }
+            }
+        }
+
+        let keys: Vec<String> = bucket_keys.into_iter().collect();
+        self.list_families_in_buckets_bucketed(&keys).await
     }
 
     /// Rebuild the entire structural index from scratch, purely from the

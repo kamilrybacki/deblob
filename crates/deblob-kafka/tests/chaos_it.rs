@@ -109,6 +109,21 @@ impl Registry for MissRegistry {
     ) -> Result<(Vec<SchemaRecord>, Option<String>), CoreError> {
         Ok((vec![], None))
     }
+
+    async fn list_families_in_buckets(
+        &self,
+        _bucket_keys: &[String],
+    ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+        Ok(vec![])
+    }
+
+    async fn list_families_by_band_depth(
+        &self,
+        _bands: &[u32],
+        _depths: &[u32],
+    ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+        Ok(vec![])
+    }
 }
 
 fn matcher() -> Arc<HotMatcher> {

@@ -1,0 +1,136 @@
+{
+  "name": "drift_gold_rank2",
+  "category": "compatible_drift",
+  "candidate": {
+    "observation_count": 45,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"invoice_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 45,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 45,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"total_cents\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 45,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 45,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "LargePositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"currency\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 45,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 45,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"memo\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 12,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 12,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": true,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_drift_gold_rank2_distractor",
+      "schema_id": "sch_drift_gold_rank2_distractor",
+      "version": 1,
+      "distance": 0.1,
+      "rank": 1
+    },
+    {
+      "family_id": "fam_drift_gold_rank2_gold",
+      "schema_id": "sch_drift_gold_rank2_gold",
+      "version": 4,
+      "distance": 0.14,
+      "rank": 2
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_drift_gold_rank2_gold",
+      "relation": "compatible_drift"
+    },
+    "gold_schema_id": "sch_drift_gold_rank2_gold",
+    "gold_rank": 2,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "test"
+}

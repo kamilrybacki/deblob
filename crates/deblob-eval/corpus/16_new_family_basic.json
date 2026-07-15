@@ -1,0 +1,109 @@
+{
+  "name": "new_family_basic",
+  "category": "new_family",
+  "candidate": {
+    "observation_count": 20,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"shipment_tracking_code\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 20,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 20,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"carrier_code\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 20,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 20,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"eta_bucket\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 20,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 20,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_new_family_basic_a",
+      "schema_id": "sch_new_family_basic_a",
+      "version": 1,
+      "distance": 0.71,
+      "rank": 1
+    },
+    {
+      "family_id": "fam_new_family_basic_b",
+      "schema_id": "sch_new_family_basic_b",
+      "version": 1,
+      "distance": 0.82,
+      "rank": 2
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "new_candidate",
+      "novelty": "structural"
+    },
+    "gold_schema_id": null,
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "test"
+}

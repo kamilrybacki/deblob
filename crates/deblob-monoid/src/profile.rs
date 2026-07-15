@@ -25,6 +25,77 @@ pub struct TypeCounts {
     pub object: u64,
 }
 
+/// Coarse, OR-merged, deliberately lossy sign/magnitude buckets a NUMBER
+/// was ever observed to fall into at a field position — never the number
+/// itself. Each flag records only "was ANY number seen in this bucket",
+/// so two profiles built from different exact values in the same bucket
+/// (e.g. `4111111111111111` and `4222222222222222`, both `large_positive`)
+/// are indistinguishable here, by design (spec §9: never a raw observed
+/// value). Populated by [`FieldNode::from_node`] (the only constructor
+/// with access to a number's source text); [`FieldNode::from_shape`]
+/// leaves this at its `Default` (all-`false`) identity value, matching
+/// how it already treats `int_only`/`neg_zero_seen`. OR-merged across
+/// observations by [`FieldNode::merge`] — associative, commutative,
+/// identity-preserving, same as every other flag on `FieldNode`.
+///
+/// Deliberately NOT part of [`Profile::generalized_fingerprint`]'s
+/// preimage — magnitude bucketing is a statistic for the P2 SLM prompt
+/// builder (`deblob-slm::prompt`), not part of structural schema
+/// identity; including it there would make two schemas with identical
+/// field-set/type-union shape but different observed number magnitudes
+/// hash to different fingerprints, which is not the identity this crate
+/// establishes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub struct NumericBuckets {
+    /// A number exactly `0` was observed.
+    pub zero: bool,
+    /// A number in `(0, 10]` was observed.
+    pub small_positive: bool,
+    /// A number in `(10, 100]` was observed.
+    pub medium_positive: bool,
+    /// A number `> 100` was observed.
+    pub large_positive: bool,
+    /// A number `< 0` was observed.
+    pub negative: bool,
+}
+
+impl NumericBuckets {
+    pub(crate) fn merge(a: &NumericBuckets, b: &NumericBuckets) -> NumericBuckets {
+        NumericBuckets {
+            zero: a.zero || b.zero,
+            small_positive: a.small_positive || b.small_positive,
+            medium_positive: a.medium_positive || b.medium_positive,
+            large_positive: a.large_positive || b.large_positive,
+            negative: a.negative || b.negative,
+        }
+    }
+}
+
+/// Classifies a JSON number's exact source `text` into its coarse
+/// sign/magnitude bucket. Parses the text as `f64` purely to compare
+/// against the bucket boundaries — the parsed value is never retained or
+/// exposed; only the resulting bucket flag is. Unparseable text (never
+/// produced by a well-formed JSON number, but defensive all the same)
+/// classifies as the all-`false` identity — never a panic, never a guess.
+fn classify_numeric_bucket(text: &str) -> NumericBuckets {
+    let mut buckets = NumericBuckets::default();
+    let Ok(value) = text.parse::<f64>() else {
+        return buckets;
+    };
+    if value < 0.0 {
+        buckets.negative = true;
+    } else if value == 0.0 {
+        buckets.zero = true;
+    } else if value <= 10.0 {
+        buckets.small_positive = true;
+    } else if value <= 100.0 {
+        buckets.medium_positive = true;
+    } else {
+        buckets.large_positive = true;
+    }
+    buckets
+}
+
 /// Accumulated statistics for one field position (or the document root),
 /// mergeable across observations. Never mutated in place — every producer
 /// in this crate returns a new value.
@@ -55,6 +126,11 @@ pub struct FieldNode {
     pub int_only: bool,
     /// Whether a negative-zero number text was ever observed here.
     pub neg_zero_seen: bool,
+    /// Coarse, non-reversible sign/magnitude buckets observed at this
+    /// field. See [`NumericBuckets`]. `#[serde(default)]` so profiles
+    /// serialized before this field existed still deserialize.
+    #[serde(default)]
+    pub numeric_buckets: NumericBuckets,
 }
 
 impl FieldNode {
@@ -71,6 +147,7 @@ impl FieldNode {
             array_partial_seen: false,
             int_only: true,
             neg_zero_seen: false,
+            numeric_buckets: NumericBuckets::default(),
         }
     }
 
@@ -87,6 +164,7 @@ impl FieldNode {
                 out.types.number = 1;
                 out.int_only = is_int_text(text);
                 out.neg_zero_seen = is_neg_zero(text);
+                out.numeric_buckets = classify_numeric_bucket(text);
             }
             Node::String(_) => out.types.string = 1,
             Node::Array(items, truncated) => {

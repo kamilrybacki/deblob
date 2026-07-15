@@ -1,0 +1,112 @@
+{
+  "name": "drift_multiple_historical_versions",
+  "category": "compatible_drift",
+  "candidate": {
+    "observation_count": 55,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"account_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 55,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 55,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"balance_cents\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 55,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 55,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "LargePositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"tier\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 55,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 55,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_drift_multiple_historical_versions",
+      "schema_id": "sch_drift_multiple_historical_versions_v2",
+      "version": 2,
+      "distance": 0.06,
+      "rank": 1
+    },
+    {
+      "family_id": "fam_drift_multiple_historical_versions",
+      "schema_id": "sch_drift_multiple_historical_versions_v1",
+      "version": 1,
+      "distance": 0.12,
+      "rank": 2
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_drift_multiple_historical_versions_v2",
+      "relation": "compatible_drift"
+    },
+    "gold_schema_id": "sch_drift_multiple_historical_versions_v2",
+    "gold_rank": 1,
+    "false_merge_trap": false,
+    "false_split_trap": true
+  },
+  "partition": "train"
+}
