@@ -614,7 +614,29 @@ pub fn compute_metrics(run: &EvalRun, corpus: &[EvalCase]) -> Metrics {
                     abstain_should += 1;
                 }
 
-                if record.expected.false_merge_trap && actual.is_accepted_match() && !is_exact {
+                // False merge: accepted-matched a WRONG family.
+                // Extract actual schema_id if it's a MatchSchema.
+                let actual_schema_id = match actual {
+                    InferenceDecision::MatchSchema { schema_id, .. } => Some(schema_id),
+                    _ => None,
+                };
+                // Determine the EXPECTED/allowed schema_id (if any).
+                let expected_schema_id = match expected_decision {
+                    InferenceDecision::MatchSchema { schema_id, .. } => Some(schema_id),
+                    _ => None,
+                };
+                // It's a FALSE MERGE iff:
+                // - actual.is_accepted_match() is true (else not a merge at all)
+                // - AND (expected has no allowed schema OR actual_schema_id != expected_schema_id)
+                // I.e., the model accepted-matched a wrong/disallowed family.
+                // NOTE: if actual and expected both have the SAME schema_id but different relations,
+                // that is NOT a false merge (same family) — it's a wrong-valid issue captured
+                // separately via is_exact == false (relation mismatch), and belongs in the
+                // relation confusion matrix, not the false-merge count.
+                if record.expected.false_merge_trap
+                    && actual.is_accepted_match()
+                    && (expected_schema_id.is_none() || actual_schema_id != expected_schema_id)
+                {
                     false_merge_count += 1;
                 }
                 if record.expected.false_split_trap && !actual.is_accepted_match() {
@@ -1179,6 +1201,91 @@ mod tests {
             "only the ACCEPTED wrong-family match counts as a false merge"
         );
         assert_eq!(metrics.false_merge_rate, Some(0.5));
+    }
+
+    #[tokio::test]
+    async fn false_merge_excludes_relation_only_mismatch() {
+        let correct_family = schema_id(1);
+        let expected_decision = InferenceDecision::MatchSchema {
+            schema_id: correct_family.clone(),
+            relation: Relation::CompatibleDrift,
+        };
+
+        let trap_case = eval_case(
+            "merge_trap_relation_mismatch",
+            Category::CompatibleDrift,
+            vec![fc(1, 1, 0.05)],
+            expected(
+                expected_decision,
+                Some(correct_family.clone()),
+                Some(1),
+                true,
+                false,
+            ),
+        );
+        let corpus = vec![trap_case];
+
+        // The fake returns the CORRECT family but with the WRONG relation
+        // (Exact instead of CompatibleDrift). This is a relation-only mismatch,
+        // not a wrong-family issue.
+        let fake = FakeInferencer::simple(vec![InferenceDecision::MatchSchema {
+            schema_id: correct_family,
+            relation: Relation::Exact,
+        }]);
+
+        let run = run_eval(&fake, &corpus).await;
+        let metrics = compute_metrics(&run, &corpus);
+
+        // A same-family relation mismatch should NOT count as a false merge.
+        assert_eq!(
+            metrics.false_merge_count, 0,
+            "relation-only mismatch with correct family is not a false merge"
+        );
+        // But it IS a wrong-valid issue (wrong answer schema-valid structure).
+        assert_eq!(
+            metrics.wrong_valid_count, 1,
+            "relation-only mismatch is counted as wrong-valid"
+        );
+    }
+
+    #[tokio::test]
+    async fn false_merge_counts_wrong_family() {
+        let correct_family = schema_id(1);
+        let wrong_family = schema_id(2);
+        let expected_decision = InferenceDecision::MatchSchema {
+            schema_id: correct_family.clone(),
+            relation: Relation::Exact,
+        };
+
+        let trap_case = eval_case(
+            "merge_trap_wrong_family",
+            Category::KnownExact,
+            vec![fc(1, 1, 0.0), fc(2, 2, 0.5)],
+            expected(
+                expected_decision,
+                Some(correct_family),
+                Some(1),
+                true,
+                false,
+            ),
+        );
+        let corpus = vec![trap_case];
+
+        // The fake accepts a match to the WRONG family.
+        let fake = FakeInferencer::simple(vec![InferenceDecision::MatchSchema {
+            schema_id: wrong_family,
+            relation: Relation::Exact,
+        }]);
+
+        let run = run_eval(&fake, &corpus).await;
+        let metrics = compute_metrics(&run, &corpus);
+
+        // A wrong-family accepted match IS a false merge.
+        assert_eq!(
+            metrics.false_merge_count, 1,
+            "wrong-family accepted match counts as a false merge"
+        );
+        assert_eq!(metrics.false_merge_rate, Some(1.0));
     }
 
     // -- 3. false-split rate --------------------------------------------------
