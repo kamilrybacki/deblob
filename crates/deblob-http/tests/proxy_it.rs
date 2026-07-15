@@ -39,6 +39,7 @@ fn generous_cfg(listen_addr: SocketAddr, upstream_allowlist: Vec<Url>, route: Ur
         request_timeout: Duration::from_secs(10),
         header_read_timeout: Duration::from_secs(10),
         upstream_timeout: Duration::from_secs(10),
+        discovery_enqueue_timeout: Duration::from_secs(10),
     }
 }
 
@@ -860,6 +861,22 @@ impl DiscoverySink for FailingDiscoverySink {
     }
 }
 
+/// A [`DiscoverySink`] whose `enqueue` sleeps far longer than any
+/// reasonable `discovery_enqueue_timeout` — models a slow/unreachable
+/// Kafka broker. Task 4 Part 2: the request-scoped enqueue timeout must
+/// keep the hot path from waiting on it.
+struct SlowDiscoverySink {
+    delay: Duration,
+}
+
+#[async_trait::async_trait]
+impl DiscoverySink for SlowDiscoverySink {
+    async fn enqueue(&self, _msg: DiscoveryMsg) -> Result<(), DiscoveryError> {
+        tokio::time::sleep(self.delay).await;
+        Ok(())
+    }
+}
+
 /// Rule: an unknown (`Provisional`) shape enqueues exactly ONE
 /// `DiscoveryMsg` whose `cand_id` matches the response tag and whose
 /// `payload` is the request body — AND the upstream is still called
@@ -1185,6 +1202,67 @@ async fn no_sink_degraded_mode() {
         captured.lock().unwrap().len(),
         1,
         "must still forward in degraded mode"
+    );
+
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Task 4 Part 2 (spec §4 "enqueue must not block the hot path"): a slow /
+/// unreachable discovery sink must NOT hold up the response. With a short
+/// `discovery_enqueue_timeout`, an unknown-shape request returns promptly
+/// (bounded by the timeout, NOT the sink's much longer delay), still tagged
+/// `cand_` and still forwarded upstream.
+#[tokio::test]
+async fn slow_discovery_enqueue_times_out_without_blocking_forward() {
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let mut cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    cfg.discovery_enqueue_timeout = Duration::from_millis(200);
+    let matcher = matcher(None); // index miss => Provisional
+    // Sink sleeps 5s — 25x the enqueue timeout. If the hot path awaited it,
+    // the response would take ~5s; the timeout must cap it near 200ms.
+    let discovery: Arc<dyn DiscoverySink> = Arc::new(SlowDiscoverySink {
+        delay: Duration::from_secs(5),
+    });
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(
+            async move { HttpProxy::run(cfg, matcher, Some(discovery), run_shutdown).await },
+        );
+    wait_for_proxy(listen_addr).await;
+
+    let client = reqwest::Client::new();
+    let start = std::time::Instant::now();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .body(br#"{"slow":"sink","shape":1}"#.to_vec())
+        .send()
+        .await
+        .expect("request to proxy succeeds");
+    let elapsed = start.elapsed();
+
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    let tag = response
+        .headers()
+        .get("deblob-schema-id")
+        .expect("tag header present")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(tag.starts_with("cand_"), "unexpected tag: {tag}");
+    // Still forwarded despite the enqueue timing out.
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "must forward even when the discovery enqueue times out"
+    );
+    // The response must NOT have waited the full 5s sink delay — bounded by
+    // the 200ms enqueue timeout plus a generous CI margin.
+    assert!(
+        elapsed < Duration::from_secs(3),
+        "hot path waited on the slow sink: {elapsed:?}"
     );
 
     shutdown.cancel();

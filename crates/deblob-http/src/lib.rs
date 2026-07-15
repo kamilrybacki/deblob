@@ -22,10 +22,15 @@
 //! is accepted-or-generated and forwarded downstream
 //! (`headers::ensure_idempotency_key`); and `Unresolved` (registry-down)
 //! is confirmed to still tag+forward without ever enqueuing a discovery
-//! message. The `[http_proxy]` config section + `serve()` wiring is
-//! Task 4. This crate stays additive-only through all four tasks —
-//! nothing here changes behavior for a deployment that never enables
-//! `[http_proxy]`.
+//! message. The `[http_proxy]` config section + `serve()` wiring lives in
+//! the `deblob` binary crate (Task 4); this crate additionally gained a
+//! `discovery_enqueue_timeout` on [`HttpProxyCfg`] (Task 4 Part 2) that
+//! bounds `proxy::enqueue_discovery`'s call to the configured
+//! [`DiscoverySink`], so a slow/unreachable discovery sink can no longer
+//! add its own latency on top of every Provisional response — see
+//! `proxy::enqueue_discovery`'s docs. This crate stays additive-only
+//! through all four tasks — nothing here changes behavior for a
+//! deployment that never enables `[http_proxy]`.
 
 pub mod headers;
 pub mod kafka_sink;

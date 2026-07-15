@@ -132,6 +132,21 @@ pub struct HttpProxyCfg {
     /// §4/§6): a slow/hung upstream returns `504 Gateway Timeout` instead
     /// of hanging the request.
     pub upstream_timeout: Duration,
+    /// Bounded timeout on the discovery-lane `enqueue` call ONLY (Task 4
+    /// Part 2, spec §4 "enqueue must not block the hot path"): decouples
+    /// the forwarded response's latency from a slow/unreachable discovery
+    /// sink. Without this, a Kafka broker outage could add up to
+    /// [`deblob_kafka::discovery_producer::DiscoveryProducer`]'s own
+    /// `message.timeout.ms` (10s) to EVERY Provisional request's latency,
+    /// since `enqueue_discovery` runs concurrently with — but is still
+    /// `.await`ed alongside — the upstream forward via `tokio::join!`. On
+    /// timeout the enqueue attempt is abandoned (logged at `debug`, no
+    /// payload) and the request proceeds exactly as it does on an
+    /// `enqueue` `Err`: tagged `cand_` and forwarded regardless — the
+    /// discovery-lane feed is already documented as non-fatal, this just
+    /// bounds how long a stalled attempt is allowed to add to the
+    /// response.
+    pub discovery_enqueue_timeout: Duration,
 }
 
 /// Every way [`HttpProxy::run`] can fail before/while serving. Never
@@ -191,6 +206,8 @@ struct ProxyState {
     max_body_bytes: usize,
     max_header_bytes: usize,
     max_header_count: usize,
+    /// See [`HttpProxyCfg::discovery_enqueue_timeout`].
+    discovery_enqueue_timeout: Duration,
 }
 
 /// The HTTP push reverse proxy (spec §3.3).
@@ -246,6 +263,7 @@ impl HttpProxy {
             max_body_bytes: cfg.max_body_bytes,
             max_header_bytes: cfg.max_header_bytes,
             max_header_count: cfg.max_header_count,
+            discovery_enqueue_timeout: cfg.discovery_enqueue_timeout,
         };
         let router = Router::new()
             .route("/ingest", post(ingest_handler))
@@ -455,10 +473,16 @@ async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>)
 ///
 /// Called via `tokio::join!` alongside the upstream forward (never
 /// `.await`ed serially before it), so a slow discovery sink adds no
-/// latency on top of the forward itself; and its own failure is caught
-/// and logged at `debug` — WITHOUT the payload, only the sink's own
-/// bounded error text — rather than propagated, because a discovery-lane
-/// outage must never fail (or even slow) the request: the message is
+/// latency on top of the forward itself; the `enqueue` call is ALSO
+/// individually bounded by `state.discovery_enqueue_timeout` (Task 4 Part
+/// 2) — without that bound, `tokio::join!` still waits for BOTH futures
+/// to finish, so a slow/unreachable Kafka broker (e.g. stuck inside
+/// `DiscoveryProducer`'s own 10s `message.timeout.ms`) would add up to
+/// that long on top of every Provisional response even though the two
+/// futures run concurrently. Both an `Err` and a timeout are caught and
+/// logged at `debug` — WITHOUT the payload, only a bounded reason —
+/// rather than propagated, because a discovery-lane outage or slowdown
+/// must never fail (or meaningfully slow) the request: the message is
 /// tagged `cand_` and forwarded regardless, same "degrade, don't block"
 /// principle as the `Unresolved` outage path.
 async fn enqueue_discovery(state: &ProxyState, schema_ref: SchemaRef, body: Bytes) {
@@ -481,10 +505,19 @@ async fn enqueue_discovery(state: &ProxyState, schema_ref: SchemaRef, body: Byte
         },
     };
 
-    if let Err(error) = discovery.enqueue(msg).await {
-        tracing::debug!(
-            %error,
-            "discovery enqueue failed; the request is still tagged and forwarded"
-        );
+    match tokio::time::timeout(state.discovery_enqueue_timeout, discovery.enqueue(msg)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            tracing::debug!(
+                %error,
+                "discovery enqueue failed; the request is still tagged and forwarded"
+            );
+        }
+        Err(_elapsed) => {
+            tracing::debug!(
+                timeout_ms = state.discovery_enqueue_timeout.as_millis() as u64,
+                "discovery enqueue timed out; the request is still tagged and forwarded"
+            );
+        }
     }
 }
