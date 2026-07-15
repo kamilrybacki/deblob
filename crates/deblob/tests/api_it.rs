@@ -11,9 +11,12 @@ use axum::http::{Request, StatusCode};
 use deblob::api::{self, ApiState, SecretToken};
 use deblob::metrics::Metrics;
 use deblob::promote::{FamilyChoice, PromoteRequest, Promoter};
+use deblob::semantic_store::SemanticStore;
 use deblob_core::error::CoreError;
-use deblob_core::id::{CandidateId, FamilyVersion, SchemaId};
+use deblob_core::id::{CandidateId, FamilyVersion, SchemaId, SemanticId};
 use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore, Registry, SchemaRecord};
+use deblob_core::revision::{AppendOutcome, Etag, ReasonCode, Revision, RevisionStatus, SemError};
+use deblob_core::semantic::SemanticMetadata;
 use deblob_redis::health::HealthGate;
 use http_body_util::BodyExt;
 use serde_json::Value;
@@ -241,6 +244,139 @@ impl Promoter for FakePromoter {
     }
 }
 
+/// In-memory `SemanticStore` fake (Task 6). Reimplements
+/// `SEM_APPEND_SCRIPT`'s semantics (`deblob-redis/src/lua.rs`) faithfully
+/// enough for the management-API tests below: idempotency-by-bytes checked
+/// FIRST (bypassing reason/etag), then a missing `reason` -> `MissingReason`,
+/// then a CAS check against the per-schema etag -> `EtagConflict`, otherwise
+/// append + advance the pointer + relink the reverse index.
+#[derive(Default)]
+struct FakeSemanticState {
+    revisions: HashMap<SchemaId, Vec<Revision>>,
+    etags: HashMap<SchemaId, u64>,
+    index: HashMap<SemanticId, std::collections::HashSet<SchemaId>>,
+}
+
+#[derive(Default)]
+struct FakeSemanticStore {
+    state: StdMutex<FakeSemanticState>,
+}
+
+#[async_trait::async_trait]
+impl SemanticStore for FakeSemanticStore {
+    async fn append_revision(
+        &self,
+        sch_id: &SchemaId,
+        metadata: &SemanticMetadata,
+        canonical_bytes: &[u8],
+        sem_id: &SemanticId,
+        actor: &str,
+        reason_code: ReasonCode,
+        reason: &str,
+        recorded_at: i64,
+        effective_from: i64,
+        expected_etag: Option<Etag>,
+    ) -> Result<AppendOutcome, SemError> {
+        let mut state = self.state.lock().unwrap();
+
+        if let Some(active) = state
+            .revisions
+            .get(sch_id)
+            .and_then(|history| history.last())
+        {
+            if active.canonical_semantic_bytes == canonical_bytes {
+                return Ok(AppendOutcome::AlreadyActive(active.clone()));
+            }
+        }
+
+        if reason.is_empty() {
+            return Err(SemError::MissingReason);
+        }
+
+        let current_etag = *state.etags.get(sch_id).unwrap_or(&0);
+        let expected = expected_etag.map(|e| e.0).unwrap_or(0);
+        if expected != current_etag {
+            return Err(SemError::EtagConflict {
+                expected: expected_etag,
+                current: Etag(current_etag),
+            });
+        }
+
+        let previous = state
+            .revisions
+            .get(sch_id)
+            .and_then(|history| history.last());
+        let previous_revision_id = previous.map(|r| r.revision_id.clone());
+        let old_sem_id = previous.map(|r| r.sem_id.clone());
+
+        let revision = Revision {
+            revision_id: deblob_core::id::RevisionId::new_v7(),
+            sch_id: sch_id.clone(),
+            sem_id: sem_id.clone(),
+            metadata: metadata.clone(),
+            canonical_semantic_bytes: canonical_bytes.to_vec(),
+            previous_revision_id,
+            actor: actor.to_string(),
+            reason_code,
+            reason: reason.to_string(),
+            recorded_at,
+            effective_from,
+            status: RevisionStatus::Active,
+        };
+
+        state
+            .revisions
+            .entry(sch_id.clone())
+            .or_default()
+            .push(revision.clone());
+        state.etags.insert(sch_id.clone(), current_etag + 1);
+
+        if let Some(old) = &old_sem_id {
+            if old != sem_id {
+                if let Some(set) = state.index.get_mut(old) {
+                    set.remove(sch_id);
+                }
+            }
+        }
+        state
+            .index
+            .entry(sem_id.clone())
+            .or_default()
+            .insert(sch_id.clone());
+
+        Ok(AppendOutcome::Appended(revision))
+    }
+
+    async fn active_semantic(
+        &self,
+        sch_id: &SchemaId,
+    ) -> Result<Option<(SemanticMetadata, SemanticId, Etag)>, SemError> {
+        let state = self.state.lock().unwrap();
+        Ok(state
+            .revisions
+            .get(sch_id)
+            .and_then(|history| history.last())
+            .map(|r| {
+                let etag = *state.etags.get(sch_id).unwrap_or(&0);
+                (r.metadata.clone(), r.sem_id.clone(), Etag(etag))
+            }))
+    }
+
+    async fn revisions(&self, sch_id: &SchemaId) -> Result<Vec<Revision>, SemError> {
+        let state = self.state.lock().unwrap();
+        Ok(state.revisions.get(sch_id).cloned().unwrap_or_default())
+    }
+
+    async fn schemas_by_semantic(&self, sem_id: &SemanticId) -> Result<Vec<SchemaId>, SemError> {
+        let state = self.state.lock().unwrap();
+        Ok(state
+            .index
+            .get(sem_id)
+            .map(|set| set.iter().cloned().collect())
+            .unwrap_or_default())
+    }
+}
+
 // ---------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------
@@ -264,6 +400,7 @@ fn make_state(
     evidence: FakeEvidence,
     promoter: FakePromoter,
     health: HealthGate,
+    semantic: Arc<dyn SemanticStore>,
 ) -> ApiState {
     ApiState {
         registry: Arc::new(registry),
@@ -272,6 +409,8 @@ fn make_state(
         token: SecretToken::new(TOKEN),
         promoter: Arc::new(promoter),
         metrics: Metrics::new(),
+        semantic,
+        semantic_registries: Arc::new(deblob_semantic::Registries::default()),
     }
 }
 
@@ -281,7 +420,59 @@ fn empty_state() -> ApiState {
         FakeEvidence::default(),
         FakePromoter::conflict("unused"),
         HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
     )
+}
+
+/// A schema with a real `deblob-canon-v1` shape (one top-level numeric
+/// field, `"temperature"`) — needed for the semantic-annotation tests,
+/// unlike `sample_schema`'s `"{}"` (which has no field paths at all, so
+/// `validate_paths` would reject every field-level annotation).
+fn semantic_schema(seed: u8) -> SchemaRecord {
+    SchemaRecord {
+        schema_id: SchemaId::from_digest(&[seed; 32]),
+        family_id: deblob_core::id::FamilyId::new_v7(),
+        version: FamilyVersion(1),
+        canonical: r#"{"t":"obj","f":{"temperature":{"t":"num"}}}"#.to_string(),
+        canonicalizer: "deblob-canon-v1".to_string(),
+        provenance: serde_json::json!({}),
+        semantic: None,
+        semantic_fingerprint: None,
+        privacy_class: None,
+    }
+}
+
+/// A `PutSemanticRequest` JSON body annotating `"temperature"` with a UCUM
+/// unit `code` — swap `code` between calls to produce genuinely different
+/// canonical bytes / `sem_` identities, mirroring
+/// `deblob-redis/tests/semantic_it.rs`'s own `metadata_with_unit` fixture.
+fn semantic_body(code: &str, reason_code: Option<&str>, reason: Option<&str>) -> Value {
+    let mut body = serde_json::json!({
+        "metadata": {
+            "event_type": null,
+            "fields": [
+                {
+                    "path": [{"key": "temperature"}],
+                    "semantics": {
+                        "canonical_field_id": null,
+                        "identifier_namespace": null,
+                        "unit": {"system": "ucum", "code": code},
+                        "numeric_scale": null,
+                        "temporal": null,
+                        "enum_semantics": null
+                    }
+                }
+            ]
+        }
+    });
+    let obj = body.as_object_mut().unwrap();
+    if let Some(rc) = reason_code {
+        obj.insert("reason_code".to_string(), Value::String(rc.to_string()));
+    }
+    if let Some(r) = reason {
+        obj.insert("reason".to_string(), Value::String(r.to_string()));
+    }
+    body
 }
 
 async fn body_json(resp: axum::response::Response) -> Value {
@@ -304,6 +495,27 @@ fn post_json(uri: &str, bearer: Option<&str>, json: &Value) -> Request<Body> {
         .header("content-type", "application/json");
     if let Some(token) = bearer {
         builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    builder
+        .body(Body::from(serde_json::to_vec(json).unwrap()))
+        .unwrap()
+}
+
+fn put_json(
+    uri: &str,
+    bearer: Option<&str>,
+    if_match: Option<&str>,
+    json: &Value,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method("PUT")
+        .uri(uri)
+        .header("content-type", "application/json");
+    if let Some(token) = bearer {
+        builder = builder.header("authorization", format!("Bearer {token}"));
+    }
+    if let Some(etag) = if_match {
+        builder = builder.header("if-match", etag);
     }
     builder
         .body(Body::from(serde_json::to_vec(json).unwrap()))
@@ -347,6 +559,7 @@ async fn lists_schemas_with_cursor() {
         FakeEvidence::default(),
         FakePromoter::conflict("unused"),
         HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
     );
     let app = api::router(state);
 
@@ -381,6 +594,7 @@ async fn promote_returns_201_location() {
         FakeEvidence::default(),
         FakePromoter::ok(schema.clone()),
         HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
     );
     let app = api::router(state);
 
@@ -423,6 +637,7 @@ async fn promote_conflict_409() {
         FakeEvidence::default(),
         FakePromoter::conflict("already promoted"),
         HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
     );
     let app = api::router(state);
 
@@ -457,6 +672,7 @@ async fn promote_policy_rejected_422() {
         FakeEvidence::default(),
         FakePromoter::policy_rejected("candidate has 1 sample(s), below the minimum of 10"),
         HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
     );
     let app = api::router(state);
 
@@ -491,6 +707,7 @@ async fn readyz_503_when_degraded() {
         FakeEvidence::default(),
         FakePromoter::conflict("unused"),
         degraded_gate,
+        Arc::new(FakeSemanticStore::default()),
     ));
     let resp = degraded_app.oneshot(get("/readyz", None)).await.unwrap();
     assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
@@ -534,4 +751,491 @@ async fn metrics_endpoint_exposes_text() {
         body.contains("deblob_messages_total"),
         "expected deblob_messages_total in exposition text:\n{body}"
     );
+}
+
+// ---------------------------------------------------------------------
+// Semantic governance API (P2-D Task 6)
+// ---------------------------------------------------------------------
+
+fn semantic_uri(sch_id: &SchemaId) -> String {
+    format!("/api/v1/schemas/{}/semantic", sch_id.as_str())
+}
+
+#[tokio::test]
+async fn put_first_annotation_returns_201_with_sem_and_etag() {
+    let schema = semantic_schema(20);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+
+    let body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    let resp = app
+        .oneshot(put_json(&semantic_uri(&sch_id), Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let etag = resp
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(etag, "\"1\"");
+
+    let json = body_json(resp).await;
+    let sem = json["data"]["semantic_fingerprint"].as_str().unwrap();
+    assert!(sem.starts_with("sem_"), "expected sem_ prefix, got {sem}");
+    assert_eq!(
+        json["data"]["metadata"]["fields"][0]["semantics"]["unit"]["code"],
+        "Cel"
+    );
+}
+
+#[tokio::test]
+async fn put_identical_bytes_replay_is_200_no_new_revision() {
+    let schema = semantic_schema(21);
+    let sch_id = schema.schema_id.clone();
+    let semantic_store = Arc::new(FakeSemanticStore::default());
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        semantic_store.clone(),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+    let body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+
+    let first = app
+        .clone()
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    let second = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::OK);
+    let etag = second
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(etag, "\"1\"", "idempotent replay must not advance the etag");
+
+    let history = semantic_store.revisions(&sch_id).await.unwrap();
+    assert_eq!(
+        history.len(),
+        1,
+        "idempotent replay must not create a new revision"
+    );
+}
+
+#[tokio::test]
+async fn put_different_bytes_without_reason_is_400() {
+    let schema = semantic_schema(22);
+    let sch_id = schema.schema_id.clone();
+    let semantic_store = Arc::new(FakeSemanticStore::default());
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        semantic_store.clone(),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let first = app
+        .clone()
+        .oneshot(put_json(
+            &uri,
+            Some(TOKEN),
+            None,
+            &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    // Different unit code, no reason/reason_code at all.
+    let changed = semantic_body("K", None, None);
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), Some("\"1\""), &changed))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "bad_request");
+
+    // Nothing must have been written.
+    assert_eq!(semantic_store.revisions(&sch_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn put_different_bytes_with_stale_or_missing_etag_is_409() {
+    let schema = semantic_schema(23);
+    let sch_id = schema.schema_id.clone();
+    let semantic_store = Arc::new(FakeSemanticStore::default());
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        semantic_store.clone(),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let first = app
+        .clone()
+        .oneshot(put_json(
+            &uri,
+            Some(TOKEN),
+            None,
+            &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    let changed = semantic_body("K", Some("correction"), Some("fix the unit"));
+
+    // Stale etag.
+    let resp = app
+        .clone()
+        .oneshot(put_json(&uri, Some(TOKEN), Some("\"999\""), &changed))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CONFLICT);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "conflict");
+
+    // Missing If-Match on an already-annotated schema.
+    let resp2 = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &changed))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), StatusCode::CONFLICT);
+
+    assert_eq!(semantic_store.revisions(&sch_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn put_different_bytes_with_reason_and_correct_etag_is_201_with_new_sem_and_history() {
+    let schema = semantic_schema(24);
+    let sch_id = schema.schema_id.clone();
+    let semantic_store = Arc::new(FakeSemanticStore::default());
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        semantic_store.clone(),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let first = app
+        .clone()
+        .oneshot(put_json(
+            &uri,
+            Some(TOKEN),
+            None,
+            &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+    let first_json = body_json(first).await;
+    let first_sem = first_json["data"]["semantic_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let changed = semantic_body("K", Some("correction"), Some("fix the unit"));
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), Some("\"1\""), &changed))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let etag = resp
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(etag, "\"2\"");
+    let json = body_json(resp).await;
+    let second_sem = json["data"]["semantic_fingerprint"].as_str().unwrap();
+    assert_ne!(second_sem, first_sem);
+
+    let history = semantic_store.revisions(&sch_id).await.unwrap();
+    assert_eq!(history.len(), 2, "both revisions must be retained");
+}
+
+#[tokio::test]
+async fn put_unknown_unit_code_is_422_naming_the_token() {
+    let schema = semantic_schema(25);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+
+    let body = semantic_body(
+        "not-a-real-unit",
+        Some("correction"),
+        Some("initial annotation"),
+    );
+    let resp = app
+        .oneshot(put_json(&semantic_uri(&sch_id), Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"]["code"], "unprocessable_entity");
+    let message = json["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("not-a-real-unit"),
+        "422 must name the offending token, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn put_absent_path_is_422_naming_the_path() {
+    let schema = semantic_schema(26);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+
+    let mut body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    body["metadata"]["fields"][0]["path"][0]["key"] = Value::String("nonexistent".to_string());
+
+    let resp = app
+        .oneshot(put_json(&semantic_uri(&sch_id), Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let json = body_json(resp).await;
+    assert_eq!(json["error"]["code"], "unprocessable_entity");
+    let message = json["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("nonexistent"),
+        "422 must name the offending path, got: {message}"
+    );
+}
+
+#[tokio::test]
+async fn get_semantic_returns_404_when_never_annotated() {
+    let schema = semantic_schema(27);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+
+    let resp = app
+        .oneshot(get(&semantic_uri(&sch_id), Some(TOKEN)))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn get_semantic_returns_active_and_etag() {
+    let schema = semantic_schema(28);
+    let sch_id = schema.schema_id.clone();
+    let semantic_store = Arc::new(FakeSemanticStore::default());
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        semantic_store,
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let put_resp = app
+        .clone()
+        .oneshot(put_json(
+            &uri,
+            Some(TOKEN),
+            None,
+            &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::CREATED);
+
+    let resp = app.oneshot(get(&uri, Some(TOKEN))).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let etag = resp
+        .headers()
+        .get("etag")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(etag, "\"1\"");
+    let json = body_json(resp).await;
+    assert_eq!(
+        json["data"]["metadata"]["fields"][0]["semantics"]["unit"]["code"],
+        "Cel"
+    );
+}
+
+#[tokio::test]
+async fn get_semantic_revisions_lists_history() {
+    let schema = semantic_schema(29);
+    let sch_id = schema.schema_id.clone();
+    let semantic_store = Arc::new(FakeSemanticStore::default());
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        semantic_store,
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let first = app
+        .clone()
+        .oneshot(put_json(
+            &uri,
+            Some(TOKEN),
+            None,
+            &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::CREATED);
+
+    let second = app
+        .clone()
+        .oneshot(put_json(
+            &uri,
+            Some(TOKEN),
+            Some("\"1\""),
+            &semantic_body("K", Some("correction"), Some("fix the unit")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(second.status(), StatusCode::CREATED);
+
+    let revisions_uri = format!("/api/v1/schemas/{}/semantic/revisions", sch_id.as_str());
+    let resp = app.oneshot(get(&revisions_uri, Some(TOKEN))).await.unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    assert_eq!(json["data"].as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn get_schemas_by_semantic_lists_the_schema() {
+    let schema = semantic_schema(30);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let put_resp = app
+        .clone()
+        .oneshot(put_json(
+            &uri,
+            Some(TOKEN),
+            None,
+            &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(put_resp.status(), StatusCode::CREATED);
+    let put_json_body = body_json(put_resp).await;
+    let sem_id = put_json_body["data"]["semantic_fingerprint"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let resp = app
+        .oneshot(get(&format!("/api/v1/semantic/{sem_id}"), Some(TOKEN)))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let json = body_json(resp).await;
+    let schemas = json["data"].as_array().unwrap();
+    assert_eq!(schemas.len(), 1);
+    assert_eq!(schemas[0], sch_id.as_str());
+}
+
+#[tokio::test]
+async fn semantic_endpoints_require_bearer() {
+    let schema = semantic_schema(31);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+
+    let resp = app
+        .clone()
+        .oneshot(get(&semantic_uri(&sch_id), None))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp2 = app
+        .oneshot(put_json(
+            &semantic_uri(&sch_id),
+            None,
+            None,
+            &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
 }

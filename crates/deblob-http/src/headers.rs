@@ -41,7 +41,15 @@ const HOP_BY_HOP: &[&str] = &[
     "proxy-authorization",
 ];
 
-/// True if `name` starts with `deblob-`, case-insensitive.
+/// True if `name` starts with `deblob-`, case-insensitive. This is a
+/// PREFIX match, not an allowlist of specific known names — it therefore
+/// already covers every reserved sub-namespace by construction, including
+/// P2-D Task 6's `deblob-semantic-*` (a producer-supplied semantic-axis
+/// hint must never reach storage or influence the `sem_` governance API via
+/// the ingest path): no separate constant or check was needed to "extend"
+/// the strip to that namespace. See
+/// `strips_reserved_and_hop_by_hop_drops_deblob_semantic_hint_headers`
+/// below for the proof.
 pub fn is_reserved(name: &str) -> bool {
     name.len() >= RESERVED_PREFIX.len()
         && name.as_bytes()[..RESERVED_PREFIX.len()].eq_ignore_ascii_case(RESERVED_PREFIX.as_bytes())
@@ -239,6 +247,25 @@ mod tests {
     fn strip_reserved_and_hop_by_hop_of_empty_map_is_empty() {
         let stripped = strip_reserved_and_hop_by_hop(&HeaderMap::new());
         assert!(stripped.is_empty());
+    }
+
+    /// P2-D Task 6: a producer-supplied `deblob-semantic-*` hint must be
+    /// stripped before an HTTP-ingested request is forwarded — it must
+    /// never reach storage or be able to spoof an axis of the semantic
+    /// governance API, mirroring `deblob-kafka::headers`'s own proof.
+    #[test]
+    fn strips_reserved_and_hop_by_hop_drops_deblob_semantic_hint_headers() {
+        let mut inbound = HeaderMap::new();
+        inbound.insert("deblob-semantic-unit", HeaderValue::from_static("Cel"));
+        inbound.insert(
+            "Deblob-Semantic-Canonical-Field-Id",
+            HeaderValue::from_static("temperature.ambient"),
+        );
+        inbound.insert("content-type", HeaderValue::from_static("application/json"));
+
+        let stripped = strip_reserved_and_hop_by_hop(&inbound);
+
+        assert_eq!(keys_of(&stripped), vec!["content-type".to_string()]);
     }
 
     #[test]

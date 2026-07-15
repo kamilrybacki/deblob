@@ -29,6 +29,7 @@ use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, IngestToken, KafkaDisc
 use deblob_kafka::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 use deblob_kafka::{Relay, RelayCfg};
 use deblob_redis::{HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry};
+use deblob_semantic::Registries;
 use deblob_slm::{HttpInferencer, SemanticInferencer, SlmHttpConfig};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -41,6 +42,7 @@ use crate::matcher::HotMatcher;
 use crate::metrics::Metrics;
 use crate::policy::{Promoter as ConcretePromoter, PromotionPolicy};
 use crate::promote::Promoter as PromoterTrait;
+use crate::semantic_store::SemanticStore;
 use crate::shadow::{
     run_shadow_sweep, ModelMeta, RedisShadowLog, ShadowClassifier, ShadowConfig, ShadowLog,
 };
@@ -304,11 +306,20 @@ pub async fn serve(
     // --- Redis: registry (permanent schema vault) + evidence (candidate
     // lifecycle), both persistence-gated at connect time (spec §6). ---
     let health = HealthGate::new();
-    let registry = RedisRegistry::connect(&secrets.redis_url, redis_opts)
-        .await
-        .map_err(AppError::Redis)?
-        .with_health_gate(health.clone());
-    let registry: Arc<dyn Registry> = Arc::new(registry);
+    // Wrapped in `Arc<RedisRegistry>` first (rather than eagerly upcast to
+    // `Arc<dyn Registry>`) so the SAME concrete instance — one connection,
+    // one health gate — backs BOTH the structural `Registry` trait object
+    // and the semantic-governance `SemanticStore` trait object (Task 6)
+    // below via two independent unsized coercions, instead of connecting
+    // twice.
+    let redis_registry = Arc::new(
+        RedisRegistry::connect(&secrets.redis_url, redis_opts)
+            .await
+            .map_err(AppError::Redis)?
+            .with_health_gate(health.clone()),
+    );
+    let registry: Arc<dyn Registry> = redis_registry.clone();
+    let semantic: Arc<dyn SemanticStore> = redis_registry.clone();
 
     let evidence =
         RedisEvidence::connect(&secrets.redis_url, RedisEvidenceOpts::default(), redis_opts)
@@ -360,6 +371,12 @@ pub async fn serve(
         token: SecretToken::new(&secrets.api_token),
         promoter,
         metrics: metrics.clone(),
+        semantic,
+        // No registration endpoint exists yet for `canonical_field_id`/
+        // `canonical_event_type_id` (Task 2's `Registries` is deliberately
+        // injectable governance state, out of this task's scope) — always
+        // empty until a future task adds one.
+        semantic_registries: Arc::new(Registries::default()),
     };
     let management_addr: SocketAddr =
         app_config

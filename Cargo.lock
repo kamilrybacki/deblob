@@ -568,6 +568,7 @@ dependencies = [
  "deblob-match",
  "deblob-monoid",
  "deblob-redis",
+ "deblob-semantic",
  "deblob-slm",
  "governor",
  "http-body-util",

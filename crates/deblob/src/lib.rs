@@ -23,6 +23,7 @@ pub mod discovery_consumer;
 pub mod policy;
 pub mod promote;
 pub mod retrieval;
+pub mod semantic_store;
 pub mod serve;
 pub mod shadow;
 
