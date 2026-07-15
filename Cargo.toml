@@ -5,6 +5,7 @@ members = [
     "crates/deblob-core",
     "crates/deblob-eval",
     "crates/deblob-fingerprint",
+    "crates/deblob-http",
     "crates/deblob-kafka",
     "crates/deblob-match",
     "crates/deblob-monoid",
