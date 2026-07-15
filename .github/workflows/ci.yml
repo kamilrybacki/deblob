@@ -11,5 +11,12 @@ jobs:
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: bash scripts/lint-no-payload-logs.sh
       - run: cargo test --workspace
+      # Explicit, isolated run of the eval harness (corpus loader + metrics
+      # + the wiremock end-to-end self-test, deblob-p2ab Task 8). Already
+      # covered by `cargo test --workspace` above; kept as its own step so
+      # a harness regression is visible at a glance in CI logs without
+      # scrolling the full workspace test output. No real model is ever
+      # contacted here — see crates/deblob-eval/tests/eval_it.rs.
+      - run: cargo test -p deblob-eval
       - uses: taiki-e/install-action@cargo-audit
       - run: cargo audit
