@@ -14,8 +14,10 @@
 //!
 //! `serve` returns once `shutdown` is cancelled AND every spawned task has
 //! drained (relay first, per spec §3.2, then the discovery consumer, then
-//! the management API) — the exact sequencing Task 18's `main.rs` run()
-//! used to inline before this split.
+//! the shadow sweep if `[slm].enabled`, then the management API, then the
+//! HTTP push reverse proxy if `[http_proxy].enabled` — P2-C Task 4, no
+//! ordering dependency on the others, so it drains last) — the exact
+//! sequencing Task 18's `main.rs` run() used to inline before this split.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -23,14 +25,17 @@ use std::time::Duration;
 
 use deblob_core::error::CoreError;
 use deblob_core::ports::{EvidenceStore, Registry};
+use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, KafkaDiscoverySink};
+use deblob_kafka::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 use deblob_kafka::{Relay, RelayCfg};
 use deblob_redis::{HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry};
 use deblob_slm::{HttpInferencer, SemanticInferencer, SlmHttpConfig};
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use crate::api::{self, ApiState, SecretToken};
 use crate::coldlane::ColdLane;
-use crate::config::{Config, Secrets, SlmConfig};
+use crate::config::{Config, HttpProxyConfig, Secrets, SlmConfig};
 use crate::discovery_consumer::{self, DiscoveryConsumerCfg};
 use crate::matcher::HotMatcher;
 use crate::metrics::Metrics;
@@ -71,6 +76,35 @@ pub enum AppError {
     /// with that invariant violated (e.g. a test).
     #[error("[slm].enabled is true but no DEBLOB_SLM_API_TOKEN was supplied")]
     MissingSlmToken,
+    /// `[http_proxy].listen_addr` (P2-C Task 4) failed to parse as a socket
+    /// address. Caught before any listener is bound — a malformed listen
+    /// address is a config bug, not a runtime condition to degrade
+    /// through.
+    #[error("invalid `http_proxy.listen_addr` {addr:?}: {source}")]
+    InvalidHttpProxyListenAddr {
+        addr: String,
+        source: std::net::AddrParseError,
+    },
+    /// A `[http_proxy].upstream_allowlist` entry or `[http_proxy].route`
+    /// value failed to parse as a URL.
+    #[error("invalid `http_proxy` URL {url:?}: {source}")]
+    InvalidHttpProxyUrl {
+        url: String,
+        #[source]
+        source: url::ParseError,
+    },
+    /// `[http_proxy].route` is not a member of `[http_proxy]
+    /// .upstream_allowlist` (spec §4: SSRF prevention). Caught before any
+    /// listener is bound, mirroring
+    /// [`deblob_http::HttpProxyError::RouteNotAllowlisted`] which
+    /// `HttpProxy::run` itself would otherwise raise at construction —
+    /// surfaced here first for a clearer startup error.
+    #[error("[http_proxy].route is not a member of [http_proxy].upstream_allowlist")]
+    HttpProxyRouteNotAllowlisted,
+    /// The standalone discovery-topic producer backing
+    /// [`deblob_http::KafkaDiscoverySink`] failed to build (P2-C Task 4).
+    #[error("failed to build the HTTP proxy's discovery producer: {0}")]
+    HttpProxyDiscoveryProducer(#[source] DiscoveryProducerError),
 }
 
 /// Everything [`serve`] needs to construct the SLM shadow lane, computed
@@ -130,6 +164,104 @@ fn build_shadow_lane_wiring(
         },
         sweep_interval: Duration::from_millis(slm.sweep_interval_ms),
     }))
+}
+
+/// Everything [`serve`] needs to spawn the HTTP push reverse proxy,
+/// computed PURELY from `[http_proxy]` config + `[kafka]` config +
+/// secrets — no listener bound, no I/O beyond the (non-network,
+/// non-blocking — see [`DiscoveryProducer::new`]'s own docs) construction
+/// of the standalone discovery producer. Kept separate from [`serve`]
+/// itself so the enabled/disabled WIRING DECISION is unit-testable
+/// without Docker/Kafka — see the `http_proxy_wiring_*` tests below,
+/// mirroring [`ShadowLaneWiring`]/[`build_shadow_lane_wiring`]'s own
+/// pattern.
+struct HttpProxyWiring {
+    cfg: HttpProxyCfg,
+    sink: KafkaDiscoverySink,
+}
+
+/// `Ok(None)` iff `[http_proxy].enabled` is `false` — in that case
+/// [`serve`] constructs NO `HttpProxyCfg`, NO `KafkaDiscoverySink`, and
+/// spawns NO proxy listener, so behavior is unchanged from before Task 4.
+/// `Ok(Some(_))` iff enabled and every URL/address in `[http_proxy]`
+/// parses and `route` is a member of `upstream_allowlist`.
+fn build_http_proxy_wiring(
+    http_proxy: &HttpProxyConfig,
+    app_config: &Config,
+    secrets: &Secrets,
+) -> Result<Option<HttpProxyWiring>, AppError> {
+    if !http_proxy.enabled {
+        return Ok(None);
+    }
+
+    let listen_addr: SocketAddr =
+        http_proxy
+            .listen_addr
+            .parse()
+            .map_err(|source| AppError::InvalidHttpProxyListenAddr {
+                addr: http_proxy.listen_addr.clone(),
+                source,
+            })?;
+
+    let upstream_allowlist = http_proxy
+        .upstream_allowlist
+        .iter()
+        .map(|raw| parse_http_proxy_url(raw))
+        .collect::<Result<Vec<Url>, AppError>>()?;
+    let route = parse_http_proxy_url(&http_proxy.route)?;
+
+    if !is_http_proxy_route_allowlisted(&route, &upstream_allowlist) {
+        return Err(AppError::HttpProxyRouteNotAllowlisted);
+    }
+
+    let cfg = HttpProxyCfg {
+        listen_addr,
+        upstream_allowlist,
+        route,
+        limits: app_config.limits.to_limits(),
+        max_body_bytes: http_proxy.max_body_bytes,
+        max_header_bytes: http_proxy.max_header_bytes,
+        max_header_count: http_proxy.max_header_count,
+        request_timeout: Duration::from_millis(http_proxy.request_timeout_ms),
+        header_read_timeout: Duration::from_millis(http_proxy.header_read_timeout_ms),
+        upstream_timeout: Duration::from_millis(http_proxy.upstream_timeout_ms),
+        discovery_enqueue_timeout: Duration::from_millis(http_proxy.discovery_enqueue_timeout_ms),
+    };
+
+    // Reuses the SAME discovery topic the Kafka relay/discovery-topic
+    // consumer already read from (`app_config.kafka.discovery_topic`), so
+    // HTTP-ingested unknowns land on the same durable discovery lane as
+    // Kafka-ingested ones (spec §3.2).
+    let producer = DiscoveryProducer::new(DiscoveryProducerCfg {
+        brokers: secrets.kafka_brokers.clone(),
+        discovery_topic: app_config.kafka.discovery_topic.clone(),
+        sasl: secrets.kafka_sasl.clone(),
+    })
+    .map_err(AppError::HttpProxyDiscoveryProducer)?;
+    let sink = KafkaDiscoverySink::new(producer);
+
+    Ok(Some(HttpProxyWiring { cfg, sink }))
+}
+
+fn parse_http_proxy_url(raw: &str) -> Result<Url, AppError> {
+    Url::parse(raw).map_err(|source| AppError::InvalidHttpProxyUrl {
+        url: raw.to_string(),
+        source,
+    })
+}
+
+/// Mirrors [`deblob_http::proxy`]'s own (private) `is_allowlisted`: true if
+/// `route`'s scheme+host+port matches at least one entry of `allowlist`
+/// (spec §4: "compare scheme+host+port"). Duplicated here (rather than
+/// exported from `deblob-http`) so `serve()` can raise a clear startup
+/// error BEFORE `HttpProxy::run` would otherwise catch the same condition
+/// at construction.
+fn is_http_proxy_route_allowlisted(route: &Url, allowlist: &[Url]) -> bool {
+    allowlist.iter().any(|allowed| {
+        allowed.scheme() == route.scheme()
+            && allowed.host_str() == route.host_str()
+            && allowed.port_or_known_default() == route.port_or_known_default()
+    })
 }
 
 /// Wires up and runs the full deblob runtime — Redis registry/evidence,
@@ -300,9 +432,36 @@ pub async fn serve(
         }
     };
 
+    // --- HTTP push reverse proxy (P2-C Task 4): OFF unless
+    // `[http_proxy].enabled` is true. When disabled (the default), no
+    // `HttpProxyCfg`, no `KafkaDiscoverySink`, and no proxy listener are
+    // constructed at all — this block is then a no-op and
+    // `http_proxy_handle` stays `None`, matching the shadow lane's own
+    // pattern above. Runs off the relay/hot path — a separate spawned
+    // task with its own listener, never sharing the Kafka relay's or
+    // management API's ports. ---
+    let http_proxy_handle =
+        match build_http_proxy_wiring(&app_config.http_proxy, &app_config, &secrets)? {
+            None => None,
+            Some(wiring) => {
+                let sink: Arc<dyn DiscoverySink> = Arc::new(wiring.sink);
+                let http_proxy_matcher = matcher.clone();
+                let http_proxy_shutdown = shutdown.clone();
+                Some(tokio::spawn(async move {
+                    HttpProxy::run(
+                        wiring.cfg,
+                        http_proxy_matcher,
+                        Some(sink),
+                        http_proxy_shutdown,
+                    )
+                    .await
+                }))
+            }
+        };
+
     shutdown.cancelled().await;
     tracing::info!(
-        "shutdown signal received; draining relay, discovery consumer, shadow sweep (if enabled), and management API"
+        "shutdown signal received; draining relay, discovery consumer, shadow sweep (if enabled), http proxy (if enabled), and management API"
     );
 
     // Relay first: spec §3.2 wants any open Kafka transaction aborted/
@@ -330,6 +489,21 @@ pub async fn serve(
         Ok(Err(e)) => tracing::error!(error = %e, "management api exited with error"),
         Err(e) => tracing::error!(error = %e, "management api task panicked"),
     }
+    // HTTP proxy drained last: it runs off the relay/hot path (its own
+    // listener, no shared state with the Kafka relay/management API
+    // beyond `matcher`/`shutdown`), so there's no ordering requirement
+    // pulling it earlier the way the relay's open-transaction concern
+    // does — draining it after the management API is simplest and
+    // matches the shadow sweep's own "no ordering dependency" placement.
+    if let Some(http_proxy_handle) = http_proxy_handle {
+        match http_proxy_handle.await {
+            Ok(Ok(())) => tracing::info!("http proxy drained cleanly"),
+            Ok(Err(e)) => {
+                tracing::error!(error = %e, "http proxy exited with error during shutdown")
+            }
+            Err(e) => tracing::error!(error = %e, "http proxy task panicked"),
+        }
+    }
 
     // The probe loop has no graceful-shutdown protocol of its own (it's a
     // pure `tokio::time::interval` loop) — aborting it here is safe
@@ -351,6 +525,7 @@ mod tests {
             kafka_brokers: "localhost:9092".to_string(),
             kafka_sasl: None,
             slm_api_token: slm_api_token.map(str::to_string),
+            http_ingest_token: None,
         }
     }
 
@@ -423,5 +598,106 @@ mod tests {
         let err = build_shadow_lane_wiring(&slm, &secrets(None))
             .expect_err("enabled slm with no token must error, never panic or proceed");
         assert!(matches!(err, AppError::MissingSlmToken));
+    }
+
+    /// A minimal `Config` (just the required `[kafka]` section) with
+    /// `http_proxy` overridden — `build_http_proxy_wiring` reads
+    /// `app_config.kafka.discovery_topic`/`app_config.limits` alongside
+    /// `[http_proxy]` itself.
+    fn test_config(http_proxy: HttpProxyConfig) -> Config {
+        let mut config = Config::parse_toml(
+            r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+            "#,
+        )
+        .expect("minimal config must parse");
+        config.http_proxy = http_proxy;
+        config
+    }
+
+    /// `[http_proxy].enabled=false` (the documented default) must wire up
+    /// NO proxy at all — mirrors `shadow_lane_disabled_by_default_wires_
+    /// nothing`.
+    #[test]
+    fn disabled_by_default_spawns_no_proxy() {
+        let http_proxy = HttpProxyConfig::default();
+        assert!(!http_proxy.enabled);
+        let config = test_config(http_proxy.clone());
+
+        let wiring = build_http_proxy_wiring(&http_proxy, &config, &secrets(None))
+            .expect("disabled http_proxy must never error");
+        assert!(
+            wiring.is_none(),
+            "disabled [http_proxy] must construct no HttpProxyCfg/KafkaDiscoverySink/listener"
+        );
+    }
+
+    /// `[http_proxy].enabled=true` with a valid allowlist/route constructs
+    /// the full wiring, correctly threading every `[http_proxy]` field
+    /// (including the `_ms` timeout fields converted to `Duration`)
+    /// through to `HttpProxyCfg`. An off-allowlist route must instead
+    /// produce a clear startup error (spec §4: SSRF prevention).
+    #[test]
+    fn enabled_constructs_proxy_wiring() {
+        let http_proxy = HttpProxyConfig {
+            enabled: true,
+            listen_addr: "127.0.0.1:9600".to_string(),
+            upstream_allowlist: vec!["https://upstream.internal:8443".to_string()],
+            route: "https://upstream.internal:8443/ingest".to_string(),
+            max_body_bytes: 2_000_000,
+            max_header_bytes: 30_000,
+            max_header_count: 150,
+            request_timeout_ms: 4000,
+            header_read_timeout_ms: 4500,
+            upstream_timeout_ms: 5000,
+            discovery_enqueue_timeout_ms: 250,
+            require_auth: false,
+        };
+        let config = test_config(http_proxy.clone());
+
+        let wiring = build_http_proxy_wiring(&http_proxy, &config, &secrets(None))
+            .expect("enabled + allowlisted route must not error")
+            .expect("enabled http_proxy must construct Some(wiring)");
+
+        assert_eq!(wiring.cfg.listen_addr.to_string(), "127.0.0.1:9600");
+        assert_eq!(
+            wiring.cfg.route.as_str(),
+            "https://upstream.internal:8443/ingest"
+        );
+        assert_eq!(wiring.cfg.upstream_allowlist.len(), 1);
+        assert_eq!(wiring.cfg.max_body_bytes, 2_000_000);
+        assert_eq!(wiring.cfg.max_header_bytes, 30_000);
+        assert_eq!(wiring.cfg.max_header_count, 150);
+        assert_eq!(wiring.cfg.request_timeout, Duration::from_millis(4000));
+        assert_eq!(wiring.cfg.header_read_timeout, Duration::from_millis(4500));
+        assert_eq!(wiring.cfg.upstream_timeout, Duration::from_millis(5000));
+        assert_eq!(
+            wiring.cfg.discovery_enqueue_timeout,
+            Duration::from_millis(250)
+        );
+
+        // An off-allowlist route must produce a clear startup error,
+        // before any listener is bound.
+        let off_allowlist = HttpProxyConfig {
+            route: "https://not-allowed.internal:9999/ingest".to_string(),
+            ..http_proxy
+        };
+        let config2 = test_config(off_allowlist.clone());
+        // `HttpProxyWiring` (the `Ok` payload) intentionally has no
+        // `Debug` impl — it embeds `KafkaDiscoverySink`, which wraps a
+        // non-`Debug` `rdkafka` producer — so this asserts via `matches!`
+        // rather than `expect_err` (which would require `Debug` on the
+        // whole `Result`).
+        let result = build_http_proxy_wiring(&off_allowlist, &config2, &secrets(None));
+        assert!(
+            matches!(result, Err(AppError::HttpProxyRouteNotAllowlisted)),
+            "route outside the allowlist must error with HttpProxyRouteNotAllowlisted"
+        );
     }
 }

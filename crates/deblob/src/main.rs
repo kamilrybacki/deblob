@@ -76,7 +76,11 @@ enum RunError {
 async fn run(cli: Cli) -> Result<(), RunError> {
     let raw_config = Config::load(&cli.config)?;
     let app_config = config::apply_env_overlay(raw_config, &config::process_env);
-    let secrets = config::validate_secrets(&config::process_env, app_config.slm.enabled)?;
+    let secrets = config::validate_secrets(
+        &config::process_env,
+        app_config.slm.enabled,
+        app_config.http_proxy.require_auth,
+    )?;
     let redis_opts = config::redis_opts(cli.unsafe_volatile);
 
     tracing::info!(

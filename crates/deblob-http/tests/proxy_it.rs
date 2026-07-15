@@ -1220,8 +1220,8 @@ async fn slow_discovery_enqueue_times_out_without_blocking_forward() {
     let mut cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
     cfg.discovery_enqueue_timeout = Duration::from_millis(200);
     let matcher = matcher(None); // index miss => Provisional
-    // Sink sleeps 5s — 25x the enqueue timeout. If the hot path awaited it,
-    // the response would take ~5s; the timeout must cap it near 200ms.
+                                 // Sink sleeps 5s — 25x the enqueue timeout. If the hot path awaited it,
+                                 // the response would take ~5s; the timeout must cap it near 200ms.
     let discovery: Arc<dyn DiscoverySink> = Arc::new(SlowDiscoverySink {
         delay: Duration::from_secs(5),
     });

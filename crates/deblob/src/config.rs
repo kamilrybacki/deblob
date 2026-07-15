@@ -39,6 +39,12 @@ pub struct Config {
     /// OFF unless an operator explicitly opts in.
     #[serde(default)]
     pub slm: SlmConfig,
+    /// `[http_proxy]` — HTTP push reverse-proxy wiring (P2-C Task 4).
+    /// Absent from a TOML file entirely, or present with `enabled` unset,
+    /// both fall back to [`HttpProxyConfig::default`] (`enabled: false`) —
+    /// same "off unless explicitly opted in" contract as `[slm]`.
+    #[serde(default)]
+    pub http_proxy: HttpProxyConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -222,6 +228,112 @@ impl Default for SlmConfig {
     }
 }
 
+/// `[http_proxy]` — HTTP push reverse-proxy configuration (P2-C Task 4):
+/// the `HttpProxy` ingest listener (`deblob-http::proxy::HttpProxy::run`)
+/// was built + hardened in Tasks 1-3, but nothing in the running binary
+/// drove it until this task's wiring (`crate::serve::serve`). `enabled`
+/// DEFAULTS TO `false` — unless a TOML file explicitly sets
+/// `enabled = true`, `serve()` constructs no `HttpProxyCfg`, no
+/// `KafkaDiscoverySink`, and spawns no proxy listener, so every
+/// pre-Task-4 behavior and test is unaffected.
+///
+/// The HTTP ingest auth token is deliberately NOT a field here — it is
+/// env-only (`DEBLOB_HTTP_INGEST_TOKEN`, see
+/// [`Secrets::http_ingest_token`] / [`validate_secrets`]), same
+/// secrets-never-in-TOML rule as `DEBLOB_API_TOKEN`/`DEBLOB_SLM_API_TOKEN`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HttpProxyConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// The ingest listener address — SEPARATE from the management API
+    /// port (spec §8) and from the Kafka relay's own listen concerns.
+    #[serde(default = "default_http_listen_addr")]
+    pub listen_addr: String,
+    /// The fixed upstream allowlist (SSRF prevention, spec §4). `route`
+    /// MUST be a member of this list — `serve()`'s wiring validates that
+    /// before spawning the listener, and `HttpProxy::run` re-validates it
+    /// at construction as defense-in-depth.
+    #[serde(default)]
+    pub upstream_allowlist: Vec<String>,
+    /// The single upstream every request is forwarded to (Task 1). A
+    /// later task may promote this to a real path -> upstream route map.
+    #[serde(default)]
+    pub route: String,
+    #[serde(default = "default_http_max_body_bytes")]
+    pub max_body_bytes: usize,
+    #[serde(default = "default_http_max_header_bytes")]
+    pub max_header_bytes: usize,
+    #[serde(default = "default_http_max_header_count")]
+    pub max_header_count: usize,
+    #[serde(default = "default_http_request_timeout_ms")]
+    pub request_timeout_ms: u64,
+    #[serde(default = "default_http_header_read_timeout_ms")]
+    pub header_read_timeout_ms: u64,
+    #[serde(default = "default_http_upstream_timeout_ms")]
+    pub upstream_timeout_ms: u64,
+    /// See `HttpProxyCfg::discovery_enqueue_timeout` (Task 4 Part 2) in
+    /// `deblob-http`.
+    #[serde(default = "default_http_discovery_enqueue_timeout_ms")]
+    pub discovery_enqueue_timeout_ms: u64,
+    /// Whether `DEBLOB_HTTP_INGEST_TOKEN` is REQUIRED at startup — `false`
+    /// (the default) never requires it, matching "the HTTP proxy is off
+    /// unless explicitly configured" (see [`validate_secrets`]).
+    #[serde(default)]
+    pub require_auth: bool,
+}
+
+fn default_http_listen_addr() -> String {
+    "127.0.0.1:9600".to_string()
+}
+
+fn default_http_max_body_bytes() -> usize {
+    1_048_576
+}
+
+fn default_http_max_header_bytes() -> usize {
+    65_536
+}
+
+fn default_http_max_header_count() -> usize {
+    200
+}
+
+fn default_http_request_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_http_header_read_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_http_upstream_timeout_ms() -> u64 {
+    10_000
+}
+
+fn default_http_discovery_enqueue_timeout_ms() -> u64 {
+    500
+}
+
+impl Default for HttpProxyConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            listen_addr: default_http_listen_addr(),
+            upstream_allowlist: Vec::new(),
+            route: String::new(),
+            max_body_bytes: default_http_max_body_bytes(),
+            max_header_bytes: default_http_max_header_bytes(),
+            max_header_count: default_http_max_header_count(),
+            request_timeout_ms: default_http_request_timeout_ms(),
+            header_read_timeout_ms: default_http_header_read_timeout_ms(),
+            upstream_timeout_ms: default_http_upstream_timeout_ms(),
+            discovery_enqueue_timeout_ms: default_http_discovery_enqueue_timeout_ms(),
+            require_auth: false,
+        }
+    }
+}
+
 /// Errors loading/parsing the TOML file or validating startup secrets.
 /// Never carries a secret VALUE — [`ConfigError::MissingEnvVar`] names only
 /// the variable, and [`std::fmt::Display`]/[`std::fmt::Debug`] on every
@@ -282,6 +394,11 @@ pub const ENV_KAFKA_SECURITY_PROTOCOL: &str = "DEBLOB_KAFKA_SECURITY_PROTOCOL";
 /// The SLM shadow lane's API token — env-only, required IFF `[slm].enabled`
 /// is `true` (see [`validate_secrets`]); never read at all when disabled.
 pub const ENV_SLM_API_TOKEN: &str = "DEBLOB_SLM_API_TOKEN";
+/// The HTTP push reverse-proxy's ingest auth token — env-only, required
+/// IFF `[http_proxy].require_auth` is `true` (see [`validate_secrets`]);
+/// never required when unset/`false`, same "off unless explicitly
+/// configured" contract as [`ENV_SLM_API_TOKEN`].
+pub const ENV_HTTP_INGEST_TOKEN: &str = "DEBLOB_HTTP_INGEST_TOKEN";
 
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 const DEFAULT_SECURITY_PROTOCOL: &str = "SASL_SSL";
@@ -302,6 +419,12 @@ pub struct Secrets {
     /// the SLM lane is enabled, only whether calling `serve()` treats its
     /// absence as fatal.
     pub slm_api_token: Option<String>,
+    /// `DEBLOB_HTTP_INGEST_TOKEN` (P2-C Task 4). `Some` iff the variable
+    /// was present in the environment; [`validate_secrets`] additionally
+    /// REQUIRES it (errors if absent) when `[http_proxy].require_auth` is
+    /// `true`, but otherwise leaves it optional — same shape as
+    /// `slm_api_token` above.
+    pub http_ingest_token: Option<String>,
 }
 
 /// Hand-written (not derived): every field here is a secret value, so the
@@ -320,6 +443,10 @@ impl fmt::Debug for Secrets {
             .field(
                 "slm_api_token",
                 &self.slm_api_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "http_ingest_token",
+                &self.http_ingest_token.as_ref().map(|_| "<redacted>"),
             )
             .finish()
     }
@@ -346,9 +473,15 @@ impl fmt::Debug for Secrets {
 /// (the default) never fails on it — the token is read if present
 /// (harmless either way) but its absence is not an error, matching "the
 /// shadow lane is off unless explicitly configured" (see [`SlmConfig`]).
+///
+/// `http_ingest_required` (the caller's already-parsed
+/// `[http_proxy].require_auth`, P2-C Task 4) gates whether
+/// `DEBLOB_HTTP_INGEST_TOKEN` is REQUIRED, identically to how
+/// `slm_enabled` gates `DEBLOB_SLM_API_TOKEN` above.
 pub fn validate_secrets(
     env: &impl Fn(&str) -> Option<String>,
     slm_enabled: bool,
+    http_ingest_required: bool,
 ) -> Result<Secrets, ConfigError> {
     let api_token = env(ENV_API_TOKEN).ok_or(ConfigError::MissingEnvVar(ENV_API_TOKEN))?;
     let redis_url = env(ENV_REDIS_URL).ok_or(ConfigError::MissingEnvVar(ENV_REDIS_URL))?;
@@ -378,12 +511,18 @@ pub fn validate_secrets(
         return Err(ConfigError::MissingEnvVar(ENV_SLM_API_TOKEN));
     }
 
+    let http_ingest_token = env(ENV_HTTP_INGEST_TOKEN);
+    if http_ingest_required && http_ingest_token.is_none() {
+        return Err(ConfigError::MissingEnvVar(ENV_HTTP_INGEST_TOKEN));
+    }
+
     Ok(Secrets {
         api_token,
         redis_url,
         kafka_brokers,
         kafka_sasl,
         slm_api_token,
+        http_ingest_token,
     })
 }
 
@@ -590,7 +729,8 @@ mod tests {
             (ENV_REDIS_URL, "redis://localhost:6379"),
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
-        let secrets = validate_secrets(&secrets_env, false).expect("all required secrets present");
+        let secrets =
+            validate_secrets(&secrets_env, false, false).expect("all required secrets present");
         assert_eq!(secrets.api_token, "test-token");
         assert_eq!(secrets.redis_url, "redis://localhost:6379");
         assert_eq!(secrets.kafka_brokers, "localhost:9092");
@@ -606,7 +746,8 @@ mod tests {
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
 
-        let err = validate_secrets(&env, false).expect_err("missing DEBLOB_API_TOKEN must fail");
+        let err =
+            validate_secrets(&env, false, false).expect_err("missing DEBLOB_API_TOKEN must fail");
         let message = err.to_string();
         assert!(
             message.contains(ENV_API_TOKEN),
@@ -621,7 +762,8 @@ mod tests {
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
 
-        let err = validate_secrets(&env, false).expect_err("missing DEBLOB_REDIS_URL must fail");
+        let err =
+            validate_secrets(&env, false, false).expect_err("missing DEBLOB_REDIS_URL must fail");
         assert!(err.to_string().contains(ENV_REDIS_URL));
     }
 
@@ -632,8 +774,8 @@ mod tests {
             (ENV_REDIS_URL, "redis://localhost:6379"),
         ]));
 
-        let err =
-            validate_secrets(&env, false).expect_err("missing DEBLOB_KAFKA_BROKERS must fail");
+        let err = validate_secrets(&env, false, false)
+            .expect_err("missing DEBLOB_KAFKA_BROKERS must fail");
         assert!(err.to_string().contains(ENV_KAFKA_BROKERS));
     }
 
@@ -646,8 +788,8 @@ mod tests {
             (ENV_KAFKA_SASL_USERNAME, "deblob"),
         ]));
 
-        let err =
-            validate_secrets(&env, false).expect_err("SASL username without password must fail");
+        let err = validate_secrets(&env, false, false)
+            .expect_err("SASL username without password must fail");
         assert!(err.to_string().contains(ENV_KAFKA_SASL_PASSWORD));
     }
 
@@ -661,7 +803,8 @@ mod tests {
             (ENV_KAFKA_SASL_PASSWORD, "s3cr3t"),
         ]));
 
-        let secrets = validate_secrets(&env, false).expect("full SASL credentials must validate");
+        let secrets =
+            validate_secrets(&env, false, false).expect("full SASL credentials must validate");
         let sasl = secrets.kafka_sasl.expect("sasl must be Some");
         assert_eq!(sasl.username, "deblob");
         assert_eq!(sasl.password, "s3cr3t");
@@ -679,7 +822,7 @@ mod tests {
             (ENV_KAFKA_SASL_PASSWORD, "s3cr3t"),
             (ENV_SLM_API_TOKEN, "slm-super-secret"),
         ]));
-        let secrets = validate_secrets(&env, true).unwrap();
+        let secrets = validate_secrets(&env, true, false).unwrap();
         let rendered = format!("{secrets:?}");
         assert!(!rendered.contains("super-secret-token"));
         assert!(!rendered.contains("pass@localhost"));
@@ -697,7 +840,7 @@ mod tests {
             (ENV_REDIS_URL, "redis://localhost:6379"),
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
-        let err = validate_secrets(&env_missing, true)
+        let err = validate_secrets(&env_missing, true, false)
             .expect_err("slm.enabled=true with no DEBLOB_SLM_API_TOKEN must fail");
         assert!(
             err.to_string().contains(ENV_SLM_API_TOKEN),
@@ -711,7 +854,7 @@ mod tests {
             (ENV_KAFKA_BROKERS, "localhost:9092"),
             (ENV_SLM_API_TOKEN, "slm-token-value"),
         ]));
-        let secrets = validate_secrets(&env_present, true)
+        let secrets = validate_secrets(&env_present, true, false)
             .expect("slm.enabled=true with DEBLOB_SLM_API_TOKEN present must succeed");
         assert_eq!(secrets.slm_api_token.as_deref(), Some("slm-token-value"));
 
@@ -721,9 +864,142 @@ mod tests {
             (ENV_REDIS_URL, "redis://localhost:6379"),
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
-        let secrets = validate_secrets(&env_disabled, false)
+        let secrets = validate_secrets(&env_disabled, false, false)
             .expect("slm.enabled=false must not require DEBLOB_SLM_API_TOKEN");
         assert!(secrets.slm_api_token.is_none());
+    }
+
+    #[test]
+    fn config_parses_http_proxy_section() {
+        // A TOML with `[http_proxy]` parses into `Config` with the right
+        // fields.
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [http_proxy]
+            enabled = true
+            listen_addr = "127.0.0.1:9600"
+            upstream_allowlist = ["https://upstream.internal:8443"]
+            route = "https://upstream.internal:8443/ingest"
+            max_body_bytes = 2097152
+            max_header_bytes = 32768
+            max_header_count = 100
+            request_timeout_ms = 5000
+            header_read_timeout_ms = 6000
+            upstream_timeout_ms = 7000
+            discovery_enqueue_timeout_ms = 250
+            require_auth = true
+        "#;
+        let config = Config::parse_toml(toml).expect("[http_proxy] section must parse");
+        assert!(config.http_proxy.enabled);
+        assert_eq!(config.http_proxy.listen_addr, "127.0.0.1:9600");
+        assert_eq!(
+            config.http_proxy.upstream_allowlist,
+            vec!["https://upstream.internal:8443".to_string()]
+        );
+        assert_eq!(
+            config.http_proxy.route,
+            "https://upstream.internal:8443/ingest"
+        );
+        assert_eq!(config.http_proxy.max_body_bytes, 2_097_152);
+        assert_eq!(config.http_proxy.max_header_bytes, 32_768);
+        assert_eq!(config.http_proxy.max_header_count, 100);
+        assert_eq!(config.http_proxy.request_timeout_ms, 5000);
+        assert_eq!(config.http_proxy.header_read_timeout_ms, 6000);
+        assert_eq!(config.http_proxy.upstream_timeout_ms, 7000);
+        assert_eq!(config.http_proxy.discovery_enqueue_timeout_ms, 250);
+        assert!(config.http_proxy.require_auth);
+
+        // A TOML WITHOUT `[http_proxy]` at all still parses — defaults to
+        // disabled, same "off unless explicitly configured" contract as
+        // `[slm]`.
+        let minimal = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+        "#;
+        let config = Config::parse_toml(minimal).expect("config without [http_proxy] must parse");
+        assert!(!config.http_proxy.enabled);
+        assert_eq!(config.http_proxy.listen_addr, "127.0.0.1:9600");
+        assert!(config.http_proxy.upstream_allowlist.is_empty());
+        assert_eq!(config.http_proxy.route, "");
+        assert_eq!(config.http_proxy.max_body_bytes, 1_048_576);
+        assert_eq!(config.http_proxy.max_header_bytes, 65_536);
+        assert_eq!(config.http_proxy.max_header_count, 200);
+        assert_eq!(config.http_proxy.request_timeout_ms, 10_000);
+        assert_eq!(config.http_proxy.header_read_timeout_ms, 10_000);
+        assert_eq!(config.http_proxy.upstream_timeout_ms, 10_000);
+        assert_eq!(config.http_proxy.discovery_enqueue_timeout_ms, 500);
+        assert!(!config.http_proxy.require_auth);
+
+        // `deny_unknown_fields` rejects a typo'd/unexpected key.
+        let typo = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [http_proxy]
+            enabled = true
+            api_token = "should-never-be-in-toml"
+        "#;
+        let err = Config::parse_toml(typo).expect_err("a typo'd/secret field must be rejected");
+        assert!(matches!(err, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn http_ingest_token_required_only_when_require_auth() {
+        // require_auth=true, no DEBLOB_HTTP_INGEST_TOKEN → clear error
+        // naming the variable.
+        let env_missing = lookup(fake_env(&[
+            (ENV_API_TOKEN, "test-token"),
+            (ENV_REDIS_URL, "redis://localhost:6379"),
+            (ENV_KAFKA_BROKERS, "localhost:9092"),
+        ]));
+        let err = validate_secrets(&env_missing, false, true)
+            .expect_err("require_auth=true with no DEBLOB_HTTP_INGEST_TOKEN must fail");
+        assert!(
+            err.to_string().contains(ENV_HTTP_INGEST_TOKEN),
+            "error must name the missing variable: {err}"
+        );
+
+        // require_auth=true, DEBLOB_HTTP_INGEST_TOKEN present → ok.
+        let env_present = lookup(fake_env(&[
+            (ENV_API_TOKEN, "test-token"),
+            (ENV_REDIS_URL, "redis://localhost:6379"),
+            (ENV_KAFKA_BROKERS, "localhost:9092"),
+            (ENV_HTTP_INGEST_TOKEN, "http-token-value"),
+        ]));
+        let secrets = validate_secrets(&env_present, false, true)
+            .expect("require_auth=true with DEBLOB_HTTP_INGEST_TOKEN present must succeed");
+        assert_eq!(
+            secrets.http_ingest_token.as_deref(),
+            Some("http-token-value")
+        );
+
+        // require_auth=false, no DEBLOB_HTTP_INGEST_TOKEN → ok, not
+        // required.
+        let env_disabled = lookup(fake_env(&[
+            (ENV_API_TOKEN, "test-token"),
+            (ENV_REDIS_URL, "redis://localhost:6379"),
+            (ENV_KAFKA_BROKERS, "localhost:9092"),
+        ]));
+        let secrets = validate_secrets(&env_disabled, false, false)
+            .expect("require_auth=false must not require DEBLOB_HTTP_INGEST_TOKEN");
+        assert!(secrets.http_ingest_token.is_none());
     }
 
     #[test]

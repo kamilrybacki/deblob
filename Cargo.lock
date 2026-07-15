@@ -563,6 +563,7 @@ dependencies = [
  "data-encoding",
  "deblob-core",
  "deblob-fingerprint",
+ "deblob-http",
  "deblob-kafka",
  "deblob-match",
  "deblob-monoid",
@@ -585,6 +586,7 @@ dependencies = [
  "tower",
  "tracing",
  "unicode-normalization",
+ "url",
  "uuid",
 ]
 

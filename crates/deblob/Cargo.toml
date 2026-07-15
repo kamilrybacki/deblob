@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 deblob-core = { path = "../deblob-core" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
+deblob-http = { path = "../deblob-http" }
 deblob-kafka = { path = "../deblob-kafka" }
 deblob-match = { path = "../deblob-match" }
 deblob-monoid = { path = "../deblob-monoid" }
@@ -35,6 +36,7 @@ thiserror.workspace = true
 clap = { version = "4", features = ["derive"] }
 toml = "0.8"
 redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+url = "2"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
