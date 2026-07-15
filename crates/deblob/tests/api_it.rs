@@ -255,6 +255,7 @@ fn sample_schema(seed: u8) -> SchemaRecord {
         provenance: serde_json::json!({}),
         semantic: None,
         semantic_fingerprint: None,
+        privacy_class: None,
     }
 }
 

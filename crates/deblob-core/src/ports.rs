@@ -1,6 +1,10 @@
 //! Port traits for registry, evidence store, and schema matching. Spec §6.
 
-use crate::{error::CoreError, id::*, semantic::SemanticMetadata};
+use crate::{
+    error::CoreError,
+    id::*,
+    semantic::{PrivacyClass, SemanticMetadata},
+};
 use async_trait::async_trait;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -21,6 +25,14 @@ pub struct SchemaRecord {
     /// by this task). `#[serde(default)]` for the same back-compat reason.
     #[serde(default)]
     pub semantic_fingerprint: Option<SemanticId>,
+    /// Data-sensitivity classification. Governance metadata (Hermes review
+    /// §1/§3): deliberately SEPARATE from `semantic`/`semantic_fingerprint`
+    /// — it never enters the `sem_` digest preimage, since privacy
+    /// classification can change (jurisdiction/tenant/policy-version)
+    /// without the field's meaning changing. `#[serde(default)]` for the
+    /// same back-compat reason as the other two.
+    #[serde(default)]
+    pub privacy_class: Option<PrivacyClass>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -201,10 +213,11 @@ pub trait SchemaMatcher: Send + Sync {
 mod tests {
     use super::*;
 
-    /// Pre-P2-D serialized `SchemaRecord` JSON (no `semantic`/
-    /// `semantic_fingerprint` fields) must still deserialize, yielding
-    /// `None` for both — the new fields are `#[serde(default)]` precisely
-    /// so old records in storage keep loading after this ships.
+    /// Pre-P2-D serialized `SchemaRecord` JSON (lacking `semantic`,
+    /// `semantic_fingerprint`, AND `privacy_class` entirely) must still
+    /// deserialize, yielding `None` for all three — every one of them is
+    /// `#[serde(default)]` precisely so old records in storage keep loading
+    /// after this ships.
     #[test]
     fn schema_record_deserializes_pre_p2d_json_with_none_semantics() {
         let schema_id = SchemaId::from_digest(&[7u8; 32]);
@@ -221,5 +234,6 @@ mod tests {
         let record: SchemaRecord = serde_json::from_value(json).unwrap();
         assert_eq!(record.semantic, None);
         assert_eq!(record.semantic_fingerprint, None);
+        assert_eq!(record.privacy_class, None);
     }
 }

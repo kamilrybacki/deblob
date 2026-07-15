@@ -25,6 +25,7 @@ fn sample_record() -> SchemaRecord {
         provenance: serde_json::json!({"source": "health_it"}),
         semantic: None,
         semantic_fingerprint: None,
+        privacy_class: None,
     }
 }
 

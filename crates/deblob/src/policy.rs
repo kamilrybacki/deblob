@@ -143,6 +143,7 @@ impl PromoterTrait for Promoter {
             provenance,
             semantic: None,
             semantic_fingerprint: None,
+            privacy_class: None,
         };
 
         let bucket = bucket_key(&generalized_shape_summary(&profile));

@@ -21,6 +21,7 @@ fn sample_record() -> SchemaRecord {
         provenance: serde_json::json!({"source": "test"}),
         semantic: None,
         semantic_fingerprint: None,
+        privacy_class: None,
     }
 }
 
@@ -36,6 +37,7 @@ fn record_with(digest: [u8; 32], family_id: FamilyId) -> SchemaRecord {
         provenance: serde_json::json!({"source": "test"}),
         semantic: None,
         semantic_fingerprint: None,
+        privacy_class: None,
     }
 }
 

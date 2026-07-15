@@ -33,6 +33,7 @@ fn record_and_bucket(json: &[u8], family_id: FamilyId) -> (SchemaRecord, String)
         provenance: serde_json::json!({"source": "index_it"}),
         semantic: None,
         semantic_fingerprint: None,
+        privacy_class: None,
     };
     (record, bucket)
 }
