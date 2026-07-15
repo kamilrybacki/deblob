@@ -15,7 +15,7 @@ use std::fs;
 use std::path::Path;
 
 use deblob_core::id::SchemaId;
-use deblob_slm::{CandidateProfileView, FamilyCandidate, InferenceDecision, Relation};
+use deblob_slm::{CandidateProfileView, FamilyCandidate, InferenceDecision};
 use serde::{Deserialize, Serialize};
 
 /// Hermes' 5-bucket corpus composition (spec: 25% known/exact, 20%
@@ -60,10 +60,10 @@ pub struct Expected {
     /// `None`: the mandatory gold-absent case records the id that SHOULD
     /// have been retrieved but wasn't, so recall@k can still count the
     /// miss.
-    pub gold_family_id: Option<SchemaId>,
+    pub gold_schema_id: Option<SchemaId>,
     /// The rank (1-based, matching [`FamilyCandidate::rank`]) at which
-    /// `gold_family_id` appears in [`EvalCase::retrieved`], if it appears
-    /// at all. `None` iff `gold_family_id` is `None`, or the gold family
+    /// `gold_schema_id` appears in [`EvalCase::retrieved`], if it appears
+    /// at all. `None` iff `gold_schema_id` is `None`, or the gold family
     /// was NOT retrieved (the mandatory gold-absent case).
     pub gold_rank: Option<u32>,
     /// `true` if this case specifically targets a false-MERGE failure mode
@@ -128,15 +128,16 @@ impl EvalCase {
     /// - A `MatchSchema` decision's `schema_id` must be present in
     ///   `retrieved` (the real contract enforces this via the id
     ///   allow-list; a corpus case claiming otherwise is malformed).
-    /// - `IncompatibleSimilarity` is never an accepted match — a case
-    ///   using it must NOT also claim a `gold_family_id` (there is no
-    ///   correct family to merge into).
-    /// - Otherwise, if both a `MatchSchema` decision and `gold_family_id`
+    /// - If `gold_schema_id` is set, the decision must be an accepted
+    ///   match (per [`InferenceDecision::is_accepted_match`]): `Exact` or
+    ///   `CompatibleDrift`. `IncompatibleSimilarity` is never an accepted
+    ///   match — there is no correct family to merge into.
+    /// - Otherwise, if both a `MatchSchema` decision and `gold_schema_id`
     ///   are present, they must name the same schema.
     /// - `gold_rank`, if present, must match the rank at which
-    ///   `gold_family_id` actually appears in `retrieved` — and
-    ///   `gold_rank` must be absent whenever `gold_family_id` is absent
-    ///   from `retrieved` (including when `gold_family_id` itself is
+    ///   `gold_schema_id` actually appears in `retrieved` — and
+    ///   `gold_rank` must be absent whenever `gold_schema_id` is absent
+    ///   from `retrieved` (including when `gold_schema_id` itself is
     ///   `None`).
     pub fn validate(&self) -> Result<(), String> {
         let retrieved_rank_of = |id: &SchemaId| {
@@ -148,7 +149,7 @@ impl EvalCase {
 
         if let InferenceDecision::MatchSchema {
             schema_id,
-            relation,
+            relation: _,
         } = &self.expected.decision
         {
             if retrieved_rank_of(schema_id).is_none() {
@@ -157,18 +158,18 @@ impl EvalCase {
                     schema_id.as_str()
                 ));
             }
-            if *relation == Relation::IncompatibleSimilarity {
-                if self.expected.gold_family_id.is_some() {
+            if !self.expected.decision.is_accepted_match() {
+                if self.expected.gold_schema_id.is_some() {
                     return Err(
-                        "IncompatibleSimilarity is never an accepted match; gold_family_id \
+                        "IncompatibleSimilarity is never an accepted match; gold_schema_id \
                          must be None"
                             .to_string(),
                     );
                 }
-            } else if let Some(gold_id) = &self.expected.gold_family_id {
+            } else if let Some(gold_id) = &self.expected.gold_schema_id {
                 if gold_id != schema_id {
                     return Err(format!(
-                        "gold_family_id ({}) disagrees with the expected MatchSchema \
+                        "gold_schema_id ({}) disagrees with the expected MatchSchema \
                          schema_id ({})",
                         gold_id.as_str(),
                         schema_id.as_str()
@@ -177,19 +178,19 @@ impl EvalCase {
             }
         }
 
-        match (&self.expected.gold_family_id, self.expected.gold_rank) {
+        match (&self.expected.gold_schema_id, self.expected.gold_rank) {
             (Some(gold_id), claimed_rank) => {
                 let actual_rank = retrieved_rank_of(gold_id);
                 if claimed_rank != actual_rank {
                     return Err(format!(
                         "gold_rank ({claimed_rank:?}) disagrees with the rank at which \
-                         gold_family_id actually appears in `retrieved` ({actual_rank:?})"
+                         gold_schema_id actually appears in `retrieved` ({actual_rank:?})"
                     ));
                 }
             }
             (None, Some(claimed_rank)) => {
                 return Err(format!(
-                    "gold_rank ({claimed_rank}) is set but gold_family_id is None"
+                    "gold_rank ({claimed_rank}) is set but gold_schema_id is None"
                 ));
             }
             (None, None) => {}
@@ -334,7 +335,7 @@ mod tests {
 
         let has_gold_absent = cases.iter().any(|c| {
             c.expected.gold_rank.is_none()
-                && c.expected.gold_family_id.is_some()
+                && c.expected.gold_schema_id.is_some()
                 && matches!(
                     c.expected.decision,
                     InferenceDecision::Abstain {
@@ -371,7 +372,7 @@ mod tests {
         }
 
         // Family/source separation: no schema id referenced (via the
-        // retrieved top-k or gold_family_id) by a Train-partition case may
+        // retrieved top-k or gold_schema_id) by a Train-partition case may
         // also be referenced by a Test-partition case — Hermes: never
         // randomly split neighboring versions of one schema across
         // train/test.
@@ -385,7 +386,7 @@ mod tests {
             for r in &c.retrieved {
                 target.insert(r.schema_id.as_str().to_string());
             }
-            if let Some(gold) = &c.expected.gold_family_id {
+            if let Some(gold) = &c.expected.gold_schema_id {
                 target.insert(gold.as_str().to_string());
             }
         }

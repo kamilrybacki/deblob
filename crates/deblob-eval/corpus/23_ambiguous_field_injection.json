@@ -71,7 +71,7 @@
       "decision": "abstain",
       "cause": "insufficient_evidence"
     },
-    "gold_family_id": null,
+    "gold_schema_id": null,
     "gold_rank": null,
     "false_merge_trap": false,
     "false_split_trap": false

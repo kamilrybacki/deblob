@@ -101,7 +101,7 @@
       "schema_id": "sch_drift_plausible_wrong_high_freq_family_gold",
       "relation": "compatible_drift"
     },
-    "gold_family_id": "sch_drift_plausible_wrong_high_freq_family_gold",
+    "gold_schema_id": "sch_drift_plausible_wrong_high_freq_family_gold",
     "gold_rank": 2,
     "false_merge_trap": true,
     "false_split_trap": false

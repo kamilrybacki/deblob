@@ -120,7 +120,7 @@
       "schema_id": "sch_incompatible_identical_structure_diff_meaning_lookalike",
       "relation": "incompatible_similarity"
     },
-    "gold_family_id": null,
+    "gold_schema_id": null,
     "gold_rank": null,
     "false_merge_trap": true,
     "false_split_trap": false

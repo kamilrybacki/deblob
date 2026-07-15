@@ -108,7 +108,7 @@
       "schema_id": "sch_drift_gold_rank3_gold",
       "relation": "compatible_drift"
     },
-    "gold_family_id": "sch_drift_gold_rank3_gold",
+    "gold_schema_id": "sch_drift_gold_rank3_gold",
     "gold_rank": 3,
     "false_merge_trap": false,
     "false_split_trap": false

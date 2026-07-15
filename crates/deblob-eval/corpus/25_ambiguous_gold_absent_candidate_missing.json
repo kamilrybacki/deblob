@@ -100,7 +100,7 @@
       "decision": "abstain",
       "cause": "candidate_missing"
     },
-    "gold_family_id": "sch_ambiguous_gold_absent_candidate_missing_true_family_not_retrieved",
+    "gold_schema_id": "sch_ambiguous_gold_absent_candidate_missing_true_family_not_retrieved",
     "gold_rank": null,
     "false_merge_trap": false,
     "false_split_trap": false

@@ -94,7 +94,7 @@
       "schema_id": "sch_drift_renamed_fields_snake_camel_gold",
       "relation": "compatible_drift"
     },
-    "gold_family_id": "sch_drift_renamed_fields_snake_camel_gold",
+    "gold_schema_id": "sch_drift_renamed_fields_snake_camel_gold",
     "gold_rank": 1,
     "false_merge_trap": false,
     "false_split_trap": true

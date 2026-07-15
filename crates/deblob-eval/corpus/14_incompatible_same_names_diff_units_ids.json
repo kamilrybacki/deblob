@@ -96,7 +96,7 @@
       "schema_id": "sch_incompatible_same_names_diff_units_ids_lookalike",
       "relation": "incompatible_similarity"
     },
-    "gold_family_id": null,
+    "gold_schema_id": null,
     "gold_rank": null,
     "false_merge_trap": true,
     "false_split_trap": false

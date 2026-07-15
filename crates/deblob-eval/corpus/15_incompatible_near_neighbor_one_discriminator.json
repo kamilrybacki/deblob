@@ -94,7 +94,7 @@
       "schema_id": "sch_incompatible_near_neighbor_one_discriminator_lookalike",
       "relation": "incompatible_similarity"
     },
-    "gold_family_id": null,
+    "gold_schema_id": null,
     "gold_rank": null,
     "false_merge_trap": true,
     "false_split_trap": false
