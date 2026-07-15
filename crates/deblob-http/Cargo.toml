@@ -11,6 +11,7 @@ deblob-fingerprint = { path = "../deblob-fingerprint" }
 deblob-match = { path = "../deblob-match" }
 axum = "0.8"
 tower = "0.5"
+tower-http = { version = "0.6", features = ["timeout"] }
 hyper = "1"
 reqwest = { version = "0.12", features = ["json", "stream"] }
 tokio = { workspace = true, features = ["net"] }

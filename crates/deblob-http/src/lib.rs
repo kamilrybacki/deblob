@@ -19,6 +19,7 @@
 //! behavior for a deployment that never enables `[http_proxy]`.
 
 pub mod headers;
+pub mod limits;
 pub mod proxy;
 
 pub use proxy::{DiscoveryError, DiscoverySink, HttpProxy, HttpProxyCfg, HttpProxyError};

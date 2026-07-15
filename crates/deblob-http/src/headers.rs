@@ -11,6 +11,7 @@
 //! Header values carry IDs or an origin string ONLY — never a schema body
 //! or payload fragment (spec §3.2).
 
+use deblob_core::error::QuarantineReason;
 use deblob_core::id::SchemaRef;
 use http::header::{HeaderMap, HeaderName, HeaderValue};
 
@@ -95,6 +96,36 @@ pub fn with_tag(headers: &mut HeaderMap, schema_ref: &SchemaRef, origin: &str) {
     );
 }
 
+/// The short, bounded quarantine-reason label — reused verbatim as the
+/// `deblob-quarantine-reason` header value (spec §6). NEVER the full
+/// parse-error message or any payload fragment. Mirrors
+/// `deblob-kafka::headers::quarantine_reason_value` exactly, since both
+/// transports quarantine against the same `QuarantineReason` enum (spec
+/// §3.2 reuse).
+pub fn quarantine_reason_value(reason: QuarantineReason) -> &'static str {
+    match reason {
+        QuarantineReason::DuplicateKey => "duplicate_key",
+        QuarantineReason::NonFiniteNumber => "non_finite_number",
+        QuarantineReason::DepthExceeded => "depth_exceeded",
+        QuarantineReason::SizeExceeded => "size_exceeded",
+        QuarantineReason::FieldCountExceeded => "field_count_exceeded",
+        QuarantineReason::KeyLengthExceeded => "key_length_exceeded",
+        QuarantineReason::ParseError => "parse_error",
+        QuarantineReason::Utf8Error => "utf8_error",
+    }
+}
+
+/// Writes exactly one `deblob-quarantine-reason` header (the bounded
+/// reason code from [`quarantine_reason_value`]) onto `headers`, in
+/// place. Uses `insert`, matching [`with_tag`]'s overwrite-not-duplicate
+/// contract.
+pub fn with_quarantine_reason(headers: &mut HeaderMap, reason: QuarantineReason) {
+    headers.insert(
+        HeaderName::from_static(QUARANTINE_REASON_HEADER),
+        HeaderValue::from_static(quarantine_reason_value(reason)),
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use deblob_core::id::{CandidateId, SchemaId};
@@ -175,6 +206,27 @@ mod tests {
         let values: Vec<_> = headers.get_all(SCHEMA_ID_HEADER).iter().collect();
         assert_eq!(values.len(), 1);
         assert_eq!(values[0].to_str().unwrap(), schema_ref.header_value());
+    }
+
+    #[test]
+    fn with_quarantine_reason_writes_bounded_code_only() {
+        let mut headers = HeaderMap::new();
+        with_quarantine_reason(&mut headers, QuarantineReason::DuplicateKey);
+
+        let values: Vec<_> = headers.get_all(QUARANTINE_REASON_HEADER).iter().collect();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].to_str().unwrap(), "duplicate_key");
+    }
+
+    #[test]
+    fn with_quarantine_reason_overwrites_rather_than_duplicates() {
+        let mut headers = HeaderMap::new();
+        with_quarantine_reason(&mut headers, QuarantineReason::ParseError);
+        with_quarantine_reason(&mut headers, QuarantineReason::SizeExceeded);
+
+        let values: Vec<_> = headers.get_all(QUARANTINE_REASON_HEADER).iter().collect();
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].to_str().unwrap(), "size_exceeded");
     }
 
     #[test]
