@@ -17,4 +17,5 @@ sha2.workspace = true
 data-encoding.workspace = true
 
 [dev-dependencies]
+deblob-semantic = { path = "../deblob-semantic" }
 testcontainers-modules = { version = "0.11", features = ["redis"] }

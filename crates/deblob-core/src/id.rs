@@ -71,6 +71,36 @@ impl FamilyId {
 )]
 pub struct FamilyVersion(pub u32);
 
+/// A semantic-assertion revision id (P2-D Task 5, Hermes review §4). Like
+/// [`FamilyId`], this is a fresh time-ordered UUIDv7 minted per revision —
+/// NOT content-addressed, since two revisions can legitimately carry
+/// identical `canonical_semantic_bytes` at different points in a schema's
+/// history (e.g. a correction that reverts to a prior value) and must still
+/// be distinct, individually-addressable records. UUIDv7's leading 48 bits
+/// are a millisecond timestamp, so lexicographically sorting `RevisionId`
+/// strings sorts them chronologically — `RedisRegistry::revisions` relies on
+/// this instead of maintaining a separate ordered index.
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
+#[serde(transparent)]
+pub struct RevisionId(String);
+impl RevisionId {
+    pub fn new_v7() -> Self {
+        Self(format!("rev_{}", uuid::Uuid::now_v7()))
+    }
+    pub fn parse(s: &str) -> Result<Self, IdError> {
+        let body = s
+            .strip_prefix("rev_")
+            .ok_or(IdError::WrongPrefix { expected: "rev_" })?;
+        uuid::Uuid::parse_str(body).map_err(|_| IdError::InvalidBody)?;
+        Ok(Self(s.to_string()))
+    }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SchemaRef {
     Known(SchemaId),
@@ -138,6 +168,25 @@ mod tests {
         assert!(SemanticId::parse("sem_!!!").is_err());
         assert!(SchemaId::parse("sem_abc").is_err());
         assert!(CandidateId::parse("sem_abc").is_err());
+    }
+
+    #[test]
+    fn revision_id_new_v7_roundtrips_and_sorts_chronologically() {
+        let a = RevisionId::new_v7();
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        let b = RevisionId::new_v7();
+        assert!(a.as_str().starts_with("rev_"));
+        assert_eq!(RevisionId::parse(a.as_str()).unwrap(), a);
+        assert!(
+            a.as_str() < b.as_str(),
+            "UUIDv7 string ordering must be chronological: {a:?} then {b:?}"
+        );
+    }
+
+    #[test]
+    fn revision_id_parse_rejects_wrong_prefix_and_garbage() {
+        assert!(RevisionId::parse("sch_abc").is_err());
+        assert!(RevisionId::parse("rev_not-a-uuid").is_err());
     }
 
     #[test]

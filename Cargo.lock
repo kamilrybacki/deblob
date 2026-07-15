@@ -710,6 +710,7 @@ dependencies = [
  "data-encoding",
  "deblob-core",
  "deblob-fingerprint",
+ "deblob-semantic",
  "redis",
  "serde",
  "serde_json",

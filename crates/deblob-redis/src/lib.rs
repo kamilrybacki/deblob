@@ -11,11 +11,13 @@ pub mod health;
 pub mod index;
 pub mod lua;
 pub mod registry;
+pub mod semantic;
 
 pub use evidence::{RedisEvidence, RedisEvidenceOpts};
 pub use health::{HealthGate, HealthState, PersistenceHealth};
 pub use index::{bucket_key, bucket_member};
 pub use registry::{RedisOpts, RedisRegistry};
+pub use semantic::SEM_INDEX_KEY_PATTERN;
 
 /// Shared [`redis::aio::ConnectionManagerConfig`] for every long-lived Redis
 /// connection this crate hands out — `RedisRegistry`, `RedisEvidence`, and

@@ -438,8 +438,10 @@ impl RedisRegistry {
 }
 
 /// Deletes every key matching `pattern`, via bounded `SCAN` + `DEL` batches
-/// (never `KEYS`, which blocks the whole server on a large vault).
-async fn delete_matching(
+/// (never `KEYS`, which blocks the whole server on a large vault). Reused by
+/// `crate::semantic::rebuild_semantic_index` (Task 5) for the same
+/// drop-then-rebuild strategy this module's own `rebuild_index` uses.
+pub(crate) async fn delete_matching(
     mut conn: redis::aio::ConnectionManager,
     pattern: &str,
 ) -> Result<(), CoreError> {
