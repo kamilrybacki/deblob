@@ -4,6 +4,7 @@
 - **Status:** Draft
 - **Parent spec:** `docs/superpowers/specs/2026-07-14-deblob-design.md` (P1 §5 defines the three-identity model; the semantic fingerprint is identity #3, deferred there)
 - **Scope:** Sub-project **D** — the third identity dimension: a deterministic digest over *controlled metadata only* that distinguishes byte-identical structures with different meaning. Independent of the SLM lane (A/B) and the HTTP proxy (C).
+- **AUTHORITATIVE AMENDMENT:** `docs/superpowers/plans/deblob-p2d-hermes-review.md` (Hermes review `deblob-p2d-01`) OVERRIDES this spec where they differ. Key folded changes: `privacy_class` removed from the intrinsic `sem_` (it is separate governance metadata); `unit` is namespaced `{system, code}` (UCUM/ISO4217); added `canonical_event_type_id`, `numeric.scale`, minimal `temporal`; paths are typed segments with a byte-level canonical protocol (not JSON); un-annotated is a true `Option`/`None` (no sentinel); storage is append-only revisions + an active pointer (ETag/If-Match), not a mutable block on the immutable `sch_` record; plus a same-`sem_`/different-`sch_` diagnostic. Sections below reflect the ORIGINAL design; read the review doc for the binding values.
 
 ## 1. Summary
 
