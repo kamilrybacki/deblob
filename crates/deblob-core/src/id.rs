@@ -45,6 +45,7 @@ macro_rules! digest_id {
 }
 digest_id!(SchemaId, "sch_");
 digest_id!(CandidateId, "cand_");
+digest_id!(SemanticId, "sem_");
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -118,6 +119,25 @@ mod tests {
         assert!(SchemaId::parse("cand_abc").is_err());
         assert!(SchemaId::parse("sch_!!!").is_err());
         assert!(CandidateId::parse("sch_abc").is_err());
+    }
+
+    #[test]
+    fn semantic_id_from_digest_roundtrips() {
+        let d = [0xABu8; 32];
+        let id = SemanticId::from_digest(&d);
+        assert!(id.as_str().starts_with("sem_"));
+        assert_eq!(SemanticId::parse(id.as_str()).unwrap(), id);
+    }
+
+    #[test]
+    fn parse_rejects_semantic_prefix_domain_separation() {
+        // sem_ must never parse as sch_/cand_, and vice versa (domain
+        // separation between the three identity dimensions, spec P2-D).
+        assert!(SemanticId::parse("sch_abc").is_err());
+        assert!(SemanticId::parse("cand_abc").is_err());
+        assert!(SemanticId::parse("sem_!!!").is_err());
+        assert!(SchemaId::parse("sem_abc").is_err());
+        assert!(CandidateId::parse("sem_abc").is_err());
     }
 
     #[test]

@@ -31,6 +31,8 @@ fn record_and_bucket(json: &[u8], family_id: FamilyId) -> (SchemaRecord, String)
         canonical,
         canonicalizer: "deblob-canon-v1".to_string(),
         provenance: serde_json::json!({"source": "index_it"}),
+        semantic: None,
+        semantic_fingerprint: None,
     };
     (record, bucket)
 }

@@ -253,6 +253,8 @@ fn sample_schema(seed: u8) -> SchemaRecord {
         canonical: "{}".to_string(),
         canonicalizer: "deblob-canon-v1".to_string(),
         provenance: serde_json::json!({}),
+        semantic: None,
+        semantic_fingerprint: None,
     }
 }
 

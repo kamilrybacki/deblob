@@ -141,6 +141,8 @@ impl PromoterTrait for Promoter {
             canonical: profile.generalized_canonical_json(),
             canonicalizer: GENERALIZER.to_string(),
             provenance,
+            semantic: None,
+            semantic_fingerprint: None,
         };
 
         let bucket = bucket_key(&generalized_shape_summary(&profile));

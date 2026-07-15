@@ -19,6 +19,8 @@ fn sample_record() -> SchemaRecord {
         canonical: r#"{"t":"obj","f":{"id":{"t":"str"}}}"#.to_string(),
         canonicalizer: "deblob-canon-v1".to_string(),
         provenance: serde_json::json!({"source": "test"}),
+        semantic: None,
+        semantic_fingerprint: None,
     }
 }
 
@@ -32,6 +34,8 @@ fn record_with(digest: [u8; 32], family_id: FamilyId) -> SchemaRecord {
         canonical: r#"{"t":"obj","f":{"id":{"t":"str"}}}"#.to_string(),
         canonicalizer: "deblob-canon-v1".to_string(),
         provenance: serde_json::json!({"source": "test"}),
+        semantic: None,
+        semantic_fingerprint: None,
     }
 }
 
