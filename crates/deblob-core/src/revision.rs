@@ -129,10 +129,19 @@ pub struct Revision {
 #[serde(tag = "outcome", rename_all = "snake_case")]
 pub enum AppendOutcome {
     /// A new immutable revision was written and the active pointer moved.
-    Appended(Revision),
+    /// `etag` is the AUTHORITATIVE post-write etag `SEM_APPEND_SCRIPT`
+    /// itself computed and returned inside the same atomic transition —
+    /// never a value separately re-read afterward, so a caller building an
+    /// HTTP response never needs a second round trip, and can never observe
+    /// an `ETag` header that describes a DIFFERENT revision than the one in
+    /// `revision` (see `deblob-redis::semantic::append_revision`'s docs).
+    Appended { revision: Revision, etag: Etag },
     /// `canonical_bytes` matched the currently active revision exactly;
-    /// nothing was written. Carries that (pre-existing) active revision.
-    AlreadyActive(Revision),
+    /// nothing was written. Carries that (pre-existing) active revision and
+    /// its CURRENT etag — likewise read by `SEM_APPEND_SCRIPT` atomically,
+    /// inside the very idempotency-check branch that decided this was a
+    /// replay, never via a separate re-read.
+    AlreadyActive { revision: Revision, etag: Etag },
 }
 
 impl AppendOutcome {
@@ -141,18 +150,32 @@ impl AppendOutcome {
     /// regardless of which case produced it.
     pub fn into_revision(self) -> Revision {
         match self {
-            AppendOutcome::Appended(r) | AppendOutcome::AlreadyActive(r) => r,
+            AppendOutcome::Appended { revision, .. }
+            | AppendOutcome::AlreadyActive { revision, .. } => revision,
         }
     }
 
     pub fn revision(&self) -> &Revision {
         match self {
-            AppendOutcome::Appended(r) | AppendOutcome::AlreadyActive(r) => r,
+            AppendOutcome::Appended { revision, .. }
+            | AppendOutcome::AlreadyActive { revision, .. } => revision,
+        }
+    }
+
+    /// The authoritative current etag, straight from `SEM_APPEND_SCRIPT`'s
+    /// own atomic reply — the whole reason this type carries it at all: a
+    /// caller never needs a separate `active_semantic` read to learn the
+    /// etag that goes with `revision()`.
+    pub fn etag(&self) -> Etag {
+        match self {
+            AppendOutcome::Appended { etag, .. } | AppendOutcome::AlreadyActive { etag, .. } => {
+                *etag
+            }
         }
     }
 
     pub fn was_appended(&self) -> bool {
-        matches!(self, AppendOutcome::Appended(_))
+        matches!(self, AppendOutcome::Appended { .. })
     }
 }
 
@@ -243,12 +266,20 @@ mod tests {
             status: RevisionStatus::Active,
         };
 
-        let appended = AppendOutcome::Appended(rev.clone());
+        let appended = AppendOutcome::Appended {
+            revision: rev.clone(),
+            etag: Etag(1),
+        };
         assert!(appended.was_appended());
+        assert_eq!(appended.etag(), Etag(1));
         assert_eq!(appended.into_revision(), rev.clone());
 
-        let already = AppendOutcome::AlreadyActive(rev.clone());
+        let already = AppendOutcome::AlreadyActive {
+            revision: rev.clone(),
+            etag: Etag(1),
+        };
         assert!(!already.was_appended());
+        assert_eq!(already.etag(), Etag(1));
         assert_eq!(already.into_revision(), rev);
     }
 }

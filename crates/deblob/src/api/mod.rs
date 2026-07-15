@@ -142,12 +142,12 @@ impl ApiError {
     /// Maps `deblob_core::revision::SemError` (Task 5's append-only
     /// semantic-revision store) onto the HTTP contract in the brief's §4:
     /// `MissingReason` → `400` (a REAL change attempted with no/empty
-    /// `reason` — the caller's own `reason_code` presence is additionally
-    /// enforced by `api::semantic::put_semantic` itself, before this ever
-    /// gets called, since the store only checks the free-text `reason`);
-    /// `EtagConflict` → `409` (stale/missing `If-Match` on a real change);
-    /// `StoreUnavailable`/`Corrupt` → `503`, a downstream-availability/
-    /// data-integrity problem, never a caller mistake.
+    /// `reason` — decided atomically by `SEM_APPEND_SCRIPT` itself, inside
+    /// `api::semantic::put_semantic`'s single `append_revision` call, never
+    /// by a separate Rust-side pre-check); `EtagConflict` → `409`
+    /// (stale/missing `If-Match` on a real change); `StoreUnavailable`/
+    /// `Corrupt` → `503`, a downstream-availability/data-integrity problem,
+    /// never a caller mistake.
     pub fn from_sem(err: deblob_core::revision::SemError) -> Self {
         use deblob_core::revision::SemError;
         match &err {

@@ -25,10 +25,12 @@ use super::candidates::actor_from_headers;
 use super::{ApiError, ApiState, DataEnvelope, ListResponse};
 
 /// Request body for `PUT /api/v1/schemas/{sch_id}/semantic`. `reason_code`/
-/// `reason` are optional at the wire level — required ONLY when the
-/// supplied `metadata` is a genuine change from the active revision (an
+/// `reason` are optional at the wire level — `reason` is required ONLY when
+/// the supplied `metadata` is a genuine change from the active revision (an
 /// idempotent byte-identical replay needs neither, per the brief and
-/// `deblob_redis::semantic`'s own `SEM_APPEND_SCRIPT` semantics).
+/// `deblob_redis::semantic`'s own `SEM_APPEND_SCRIPT` semantics, which
+/// decides this atomically — see `put_semantic`'s docs). `reason_code`
+/// defaults to [`ReasonCode::Correction`] when absent.
 #[derive(Debug, Deserialize)]
 pub struct PutSemanticRequest {
     pub metadata: SemanticMetadata,
@@ -158,21 +160,36 @@ pub async fn get_schemas_by_semantic(
 /// §4). Flow: schema must exist → validate `metadata`'s controlled
 /// vocabulary tokens (Task 2) → validate its field paths against the
 /// schema's own structural canonical form (Task 4) → compute the canonical
-/// bytes + `sem_` (Task 3) → append via the revision store (Task 5), with
-/// `If-Match` threaded through as the compare-and-swap token.
+/// bytes + `sem_` (Task 3) → append via the ONE atomic `SEM_APPEND_SCRIPT`
+/// transition (Task 5), with `If-Match` threaded through as the
+/// compare-and-swap token.
+///
+/// Deliberately does NOT pre-read the active revision to decide whether
+/// this PUT is a genuine change (racy: a concurrent writer landing between
+/// that read and the append below could flip the answer, turning a real
+/// `409 EtagConflict` into a wrong `400 MissingReason`), and does NOT
+/// re-read the active pointer afterward to learn the etag for the response
+/// header (racy against a THIRD concurrent writer: the header could then
+/// describe a different revision than the response body). Both concerns are
+/// eliminated the same way: `append_revision`'s `AppendOutcome` already
+/// carries the AUTHORITATIVE etag straight from `SEM_APPEND_SCRIPT`'s own
+/// atomic reply, alongside the revision that is now (or still) active, and
+/// the script itself — not this handler — decides idempotent-replay vs.
+/// missing-reason vs. etag-conflict vs. genuine-append, all inside the same
+/// atomic transition.
 ///
 /// Status mapping: byte-identical to the active revision → `200`,
 /// idempotent, no new revision (neither `reason` nor `reason_code` are even
-/// required in this case — mirrors `SEM_APPEND_SCRIPT`'s own idempotency
+/// inspected on this path — mirrors `SEM_APPEND_SCRIPT`'s own idempotency
 /// check, which bypasses both); a genuine change with a missing/empty
-/// `reason` or absent `reason_code` → `400`; a genuine change whose
-/// `If-Match` doesn't match the current active revision → `409`; a genuine
-/// change with `reason`/`reason_code` and a correct `If-Match` → `201` with
-/// the new `sem_` + `ETag`. Unknown vocabulary token / path not present on
-/// the schema → `422`, naming ONLY the offending registered token/path
-/// (`VocabError`/`PathError`'s `Display` never carries free-form user
-/// prose) — never `reason`, which is free text and must never be echoed
-/// back in an error.
+/// `reason` → `400` (`SemError::MissingReason`); a genuine change whose
+/// `If-Match` doesn't match the current active revision → `409`
+/// (`SemError::EtagConflict`); a genuine change with a non-empty `reason`
+/// and a correct `If-Match` → `201` with the new `sem_` + `ETag`. Unknown
+/// vocabulary token / path not present on the schema → `422`, naming ONLY
+/// the offending registered token/path (`VocabError`/`PathError`'s
+/// `Display` never carries free-form user prose) — never `reason`, which is
+/// free text and must never be echoed back in an error.
 pub async fn put_semantic(
     State(state): State<ApiState>,
     Path(sch_id): Path<String>,
@@ -208,39 +225,13 @@ pub async fn put_semantic(
 
     let expected_etag = parse_if_match(&headers)?;
     let actor = actor_from_headers(&headers);
-
-    // Determine whether this PUT is a byte-identical replay of the CURRENT
-    // active assertion — the store's own idempotency check makes this
-    // decision by comparing canonical bytes, but `reason_code`'s presence
-    // (unlike free-text `reason`) is never enforced by the store itself, so
-    // the API layer must know up front whether to require it (brief §4:
-    // "different bytes without reason/reason_code -> 400").
-    let existing = state
-        .semantic
-        .active_semantic(&id)
-        .await
-        .map_err(ApiError::from_sem)?;
-    let is_idempotent_replay = existing
-        .as_ref()
-        .is_some_and(|(_, active_sem, _)| *active_sem == fingerprint.0);
-
-    if !is_idempotent_replay {
-        let reason_present = req
-            .reason
-            .as_deref()
-            .map(|r| !r.trim().is_empty())
-            .unwrap_or(false);
-        if req.reason_code.is_none() || !reason_present {
-            return Err(ApiError::bad_request(
-                "a reason_code and non-empty reason are required to change an existing semantic assertion",
-            ));
-        }
-    }
-
     let now_ms = now_epoch_ms();
     let reason_code = req.reason_code.unwrap_or(ReasonCode::Correction);
     let reason = req.reason.unwrap_or_default();
 
+    // The ONE round trip: `SEM_APPEND_SCRIPT` atomically decides the
+    // outcome and returns the authoritative etag alongside it (see the
+    // doc comment above) — no pre-check read, no post-write re-read.
     let outcome = state
         .semantic
         .append_revision(
@@ -259,23 +250,8 @@ pub async fn put_semantic(
         .map_err(ApiError::from_sem)?;
 
     let was_appended = outcome.was_appended();
+    let etag = outcome.etag();
     let revision = outcome.into_revision();
-
-    // `AppendOutcome` doesn't carry the etag (see `SemanticStore`'s docs) —
-    // re-read the (now-authoritative) active pointer for the response
-    // header.
-    let (_, _, etag) = state
-        .semantic
-        .active_semantic(&id)
-        .await
-        .map_err(ApiError::from_sem)?
-        .ok_or_else(|| {
-            ApiError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal",
-                "semantic assertion vanished immediately after a successful write",
-            )
-        })?;
 
     let body = DataEnvelope {
         data: SemanticView {

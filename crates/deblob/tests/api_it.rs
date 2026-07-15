@@ -285,7 +285,11 @@ impl SemanticStore for FakeSemanticStore {
             .and_then(|history| history.last())
         {
             if active.canonical_semantic_bytes == canonical_bytes {
-                return Ok(AppendOutcome::AlreadyActive(active.clone()));
+                let etag = *state.etags.get(sch_id).unwrap_or(&0);
+                return Ok(AppendOutcome::AlreadyActive {
+                    revision: active.clone(),
+                    etag: Etag(etag),
+                });
             }
         }
 
@@ -329,7 +333,8 @@ impl SemanticStore for FakeSemanticStore {
             .entry(sch_id.clone())
             .or_default()
             .push(revision.clone());
-        state.etags.insert(sch_id.clone(), current_etag + 1);
+        let new_etag = current_etag + 1;
+        state.etags.insert(sch_id.clone(), new_etag);
 
         if let Some(old) = &old_sem_id {
             if old != sem_id {
@@ -344,7 +349,10 @@ impl SemanticStore for FakeSemanticStore {
             .or_default()
             .insert(sch_id.clone());
 
-        Ok(AppendOutcome::Appended(revision))
+        Ok(AppendOutcome::Appended {
+            revision,
+            etag: Etag(new_etag),
+        })
     }
 
     async fn active_semantic(
@@ -765,12 +773,13 @@ fn semantic_uri(sch_id: &SchemaId) -> String {
 async fn put_first_annotation_returns_201_with_sem_and_etag() {
     let schema = semantic_schema(20);
     let sch_id = schema.schema_id.clone();
+    let semantic_store = Arc::new(FakeSemanticStore::default());
     let state = make_state(
         FakeRegistry::new(vec![schema]),
         FakeEvidence::default(),
         FakePromoter::conflict("unused"),
         HealthGate::new(),
-        Arc::new(FakeSemanticStore::default()),
+        semantic_store.clone(),
     );
     let app = api::router(state);
 
@@ -796,6 +805,22 @@ async fn put_first_annotation_returns_201_with_sem_and_etag() {
     assert_eq!(
         json["data"]["metadata"]["fields"][0]["semantics"]["unit"]["code"],
         "Cel"
+    );
+
+    // The response `ETag` header and the response body's `sem_` must
+    // describe the SAME revision, because both are threaded through from
+    // the ONE atomic `append_revision` call (`AppendOutcome::etag()`) —
+    // never from a separate re-read of the store's active pointer.
+    let (_, active_sem, active_etag) = semantic_store
+        .active_semantic(&sch_id)
+        .await
+        .unwrap()
+        .expect("must be annotated after the PUT");
+    assert_eq!(active_etag, Etag(1));
+    assert_eq!(
+        active_sem.as_str(),
+        sem,
+        "ETag header's revision and the response body's sem_ must be the SAME atomic result"
     );
 }
 

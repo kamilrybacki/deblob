@@ -279,11 +279,22 @@ impl RedisRegistry {
         let result: redis::RedisResult<(String, String, String, String)> =
             invocation.invoke_async(&mut conn).await;
 
-        let (revision_id_str, _sem_id_str, _etag_str, outcome) =
+        let (revision_id_str, _sem_id_str, etag_str, outcome) =
             result.map_err(|e| map_sem_script_error(e, expected_etag))?;
 
         let revision_id = RevisionId::parse(&revision_id_str)
             .map_err(|e| SemError::Corrupt(format!("script returned bad revision_id: {e:?}")))?;
+        // The script's 3rd reply element is the AUTHORITATIVE current etag
+        // — computed and returned inside the same atomic transition that
+        // decided `outcome`, for BOTH branches (`already_active`'s reply
+        // carries the pre-existing pointer's etag; `appended`'s reply
+        // carries the just-advanced one). Threading it through here is what
+        // lets `api::semantic::put_semantic` build its `ETag` header
+        // straight from this call's result, with no extra Redis round trip
+        // that could race a concurrent writer.
+        let etag: u64 = etag_str.parse().map_err(|e| {
+            SemError::Corrupt(format!("script returned bad etag {etag_str:?}: {e}"))
+        })?;
         let revision = self
             .read_revision(sch_id, &revision_id)
             .await?
@@ -295,8 +306,14 @@ impl RedisRegistry {
             })?;
 
         Ok(match outcome.as_str() {
-            "already_active" => AppendOutcome::AlreadyActive(revision),
-            _ => AppendOutcome::Appended(revision),
+            "already_active" => AppendOutcome::AlreadyActive {
+                revision,
+                etag: Etag(etag),
+            },
+            _ => AppendOutcome::Appended {
+                revision,
+                etag: Etag(etag),
+            },
         })
     }
 

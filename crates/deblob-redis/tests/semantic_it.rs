@@ -139,6 +139,7 @@ async fn first_annotation_is_readable_via_active_semantic_and_reverse_index() {
         .await
         .unwrap();
     assert!(outcome.was_appended());
+    let outcome_etag = outcome.etag();
     let revision = outcome.into_revision();
     assert_eq!(revision.sem_id, sem_id);
     assert_eq!(revision.metadata, metadata);
@@ -152,6 +153,10 @@ async fn first_annotation_is_readable_via_active_semantic_and_reverse_index() {
     assert_eq!(active_meta, metadata);
     assert_eq!(active_sem, sem_id);
     assert_eq!(etag, Etag(1));
+    assert_eq!(
+        outcome_etag, etag,
+        "the atomic append's own etag must match a subsequent active_semantic read"
+    );
 
     let found = reg.schemas_by_semantic(&sem_id).await.unwrap();
     assert_eq!(found, vec![sch_id.clone()]);
@@ -216,6 +221,7 @@ async fn identical_bytes_replay_is_idempotent_no_op() {
         .unwrap();
 
     assert!(!second.was_appended(), "identical bytes must be a no-op");
+    let second_outcome_etag = second.etag();
     let second_rev = second.into_revision();
     assert_eq!(second_rev.revision_id, first.revision_id);
     assert_eq!(
@@ -232,6 +238,10 @@ async fn identical_bytes_replay_is_idempotent_no_op() {
 
     let (_, _, etag) = reg.active_semantic(&sch_id).await.unwrap().unwrap();
     assert_eq!(etag, Etag(1), "idempotent replay must not advance the etag");
+    assert_eq!(
+        second_outcome_etag, etag,
+        "AlreadyActive's own etag must match a subsequent active_semantic read"
+    );
 }
 
 #[tokio::test]
@@ -436,6 +446,7 @@ async fn real_change_appends_advances_pointer_and_relinks_reverse_index() {
         .await
         .unwrap();
     assert!(outcome.was_appended());
+    let outcome_etag = outcome.etag();
     let second = outcome.into_revision();
     assert_eq!(second.previous_revision_id, Some(first.revision_id.clone()));
     assert_ne!(second.revision_id, first.revision_id);
@@ -445,6 +456,10 @@ async fn real_change_appends_advances_pointer_and_relinks_reverse_index() {
     assert_eq!(active_meta, changed);
     assert_eq!(active_sem, changed_sem);
     assert_eq!(etag, Etag(2));
+    assert_eq!(
+        outcome_etag, etag,
+        "the atomic append's own etag must match a subsequent active_semantic read"
+    );
 
     // Prior revision still readable, unmodified, via full history.
     let history = reg.revisions(&sch_id).await.unwrap();
