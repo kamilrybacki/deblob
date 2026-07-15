@@ -638,6 +638,7 @@ dependencies = [
  "deblob-match",
  "http",
  "hyper",
+ "hyper-util",
  "reqwest",
  "serde_json",
  "thiserror 2.0.18",

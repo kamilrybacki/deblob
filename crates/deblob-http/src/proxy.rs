@@ -28,6 +28,9 @@ use deblob_core::id::SchemaRef;
 use deblob_fingerprint::Limits;
 use deblob_match::discovery::DiscoveryMsg;
 use deblob_match::matcher::HotMatcher;
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use hyper_util::server::conn::auto::Builder as HyperConnBuilder;
+use hyper_util::service::TowerToHyperService;
 use tokio_util::sync::CancellationToken;
 use tower_http::timeout::TimeoutLayer;
 use url::Url;
@@ -90,9 +93,23 @@ pub struct HttpProxyCfg {
     /// Hard ceiling on the number of request headers (spec §4).
     pub max_header_count: usize,
     /// Bounded read/request timeout on the inbound handler (spec §4/§6):
-    /// a slow-body/slowloris client is bounded, not able to hold a
+    /// a slow-BODY/slowloris client is bounded, not able to hold a
     /// connection (and the handler task behind it) open indefinitely.
+    /// Enforced by [`tower_http::timeout::TimeoutLayer`] wrapping the
+    /// axum `Service` — which hyper only invokes AFTER the full header
+    /// block has been parsed, so this bounds body delivery, not header
+    /// delivery (see `header_read_timeout` for that).
     pub request_timeout: Duration,
+    /// Bounded timeout on reading the full HTTP header block during
+    /// connection setup (spec §4: "bounded read, write, and HEADER
+    /// timeouts") — the Slowloris defense: a client that dribbles header
+    /// bytes without ever completing the block is disconnected after
+    /// this long. Enforced directly by the `hyper_util` connection
+    /// builder in [`HttpProxy::run`] (`Http1Builder::header_read_timeout`),
+    /// BEFORE hyper ever hands a request to axum's `Service` — `
+    /// request_timeout`/`TimeoutLayer` alone cannot bound this, since
+    /// tower only sees the request once headers are fully parsed.
+    pub header_read_timeout: Duration,
     /// Bounded timeout on the outbound forward to the upstream (spec
     /// §4/§6): a slow/hung upstream returns `504 Gateway Timeout` instead
     /// of hanging the request.
@@ -156,13 +173,26 @@ pub struct HttpProxy;
 
 impl HttpProxy {
     /// Binds `cfg.listen_addr`, serves the ingest route until `shutdown`
-    /// is cancelled, then returns once the listener has drained
-    /// in-flight connections (axum's graceful shutdown).
+    /// is cancelled, then returns once every in-flight connection has
+    /// finished (each one is bounded by `header_read_timeout` +
+    /// `request_timeout`, so this drain itself can never hang).
     ///
     /// Validates `cfg.route` against `cfg.upstream_allowlist` BEFORE
     /// binding any socket (spec §4: "reject/validate at construction if
     /// the configured route points outside the allowlist") — an
     /// off-allowlist route never gets a chance to serve a single request.
+    ///
+    /// Serves via a manually-configured `hyper_util` connection builder
+    /// rather than `axum::serve` (spec §4: "bounded read, write, and
+    /// HEADER timeouts") — `axum::serve` builds a bare
+    /// `hyper_util::server::conn::auto::Builder` with no
+    /// `header_read_timeout`, so a client that dribbles header bytes
+    /// without ever completing the block can hold a connection open
+    /// indefinitely (Slowloris). The tower `TimeoutLayer` on the router
+    /// below is NOT a substitute: hyper only invokes the axum `Service`
+    /// after the full header block has already been parsed, so it bounds
+    /// slow-BODY delivery only. Configuring `header_read_timeout`
+    /// directly on the connection builder closes that gap.
     pub async fn run(
         cfg: HttpProxyCfg,
         matcher: Arc<HotMatcher>,
@@ -199,9 +229,51 @@ impl HttpProxy {
             ))
             .with_state(state);
 
-        axum::serve(listener, router)
-            .with_graceful_shutdown(async move { shutdown.cancelled().await })
-            .await?;
+        // A `Timer` is REQUIRED for `header_read_timeout` to take effect
+        // (hyper_util panics at connection-serve time if one is
+        // configured without it) — `TokioTimer` is the timer backing.
+        let mut conn_builder = HyperConnBuilder::new(TokioExecutor::new());
+        conn_builder
+            .http1()
+            .timer(TokioTimer::new())
+            .header_read_timeout(cfg.header_read_timeout);
+
+        let mut connections = tokio::task::JoinSet::new();
+        loop {
+            tokio::select! {
+                biased;
+                _ = shutdown.cancelled() => break,
+                accepted = listener.accept() => {
+                    match accepted {
+                        Ok((stream, _peer_addr)) => {
+                            let io = TokioIo::new(stream);
+                            let hyper_service = TowerToHyperService::new(router.clone());
+                            let conn_builder = conn_builder.clone();
+                            // Spawned so one slow/stalled client never
+                            // blocks `listener.accept()` for anyone else
+                            // — each connection is bounded on its own by
+                            // `header_read_timeout`/`request_timeout`.
+                            connections.spawn(async move {
+                                if let Err(error) =
+                                    conn_builder.serve_connection(io, hyper_service).await
+                                {
+                                    tracing::debug!(?error, "connection ended with an error");
+                                }
+                            });
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "failed to accept an inbound connection");
+                        }
+                    }
+                }
+            }
+        }
+
+        // Stop accepting new connections; drain what's already in
+        // flight. Each one is individually bounded, so this can never
+        // hang past `header_read_timeout` + `request_timeout` +
+        // `upstream_timeout` (plus response-write time).
+        while connections.join_next().await.is_some() {}
         Ok(())
     }
 }

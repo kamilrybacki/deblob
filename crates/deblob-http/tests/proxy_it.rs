@@ -36,6 +36,7 @@ fn generous_cfg(listen_addr: SocketAddr, upstream_allowlist: Vec<Url>, route: Ur
         max_header_bytes: 64 * 1024,
         max_header_count: 200,
         request_timeout: Duration::from_secs(10),
+        header_read_timeout: Duration::from_secs(10),
         upstream_timeout: Duration::from_secs(10),
     }
 }
@@ -726,6 +727,79 @@ async fn registry_down_tags_unresolved_and_forwards() {
         assert_eq!(forwarded_tag, "unresolved");
     }
 
+    shutdown.cancel();
+    proxy_handle.await.unwrap().unwrap();
+}
+
+/// Rule: a client that dribbles header bytes without ever completing the
+/// header block is bounded by `header_read_timeout`, not able to hold a
+/// connection (and the accept loop behind it) open indefinitely (spec
+/// §4: "bounded read, write, and HEADER timeouts" — the Slowloris
+/// defense specifically on the HEADER path, distinct from
+/// `request_timeout`, which only bounds slow BODY delivery once headers
+/// are already fully parsed).
+#[tokio::test]
+async fn slow_header_client_is_bounded() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (upstream_url, captured) = spawn_test_upstream().await;
+    let listen_addr = free_addr();
+    let mut cfg = generous_cfg(listen_addr, vec![upstream_url.clone()], upstream_url);
+    cfg.header_read_timeout = Duration::from_millis(500);
+    let matcher = matcher(None);
+    let shutdown = CancellationToken::new();
+    let run_shutdown = shutdown.clone();
+    let proxy_handle =
+        tokio::spawn(async move { HttpProxy::run(cfg, matcher, None, run_shutdown).await });
+    wait_for_proxy(listen_addr).await;
+
+    // Open a raw connection, write a partial request line plus ONE
+    // header byte, then stall — no blank line, no rest of the header
+    // value, the header block is never completed.
+    let mut slow_stream = tokio::net::TcpStream::connect(listen_addr)
+        .await
+        .expect("connect slow raw socket to proxy");
+    slow_stream
+        .write_all(b"POST /ingest HTTP/1.1\r\nHost: x\r\nX-Slow: a")
+        .await
+        .expect("write partial header block");
+
+    // The server must close/error the stalled connection within
+    // `header_read_timeout` + a generous margin — never hang
+    // indefinitely waiting for the header block to complete.
+    let read_result = tokio::time::timeout(Duration::from_secs(3), async {
+        let mut buf = [0u8; 16];
+        slow_stream.read(&mut buf).await
+    })
+    .await;
+    assert!(
+        read_result.is_ok(),
+        "server did not close/respond to a stalled-header connection within \
+         header_read_timeout + margin — the Slowloris connection is unbounded"
+    );
+    // Whatever happened on that read (clean EOF, an error response, a
+    // reset) is fine — what matters is it happened, not what it was.
+
+    // Prove the stalled connection didn't block or exhaust the server:
+    // a well-formed request on a SEPARATE connection still succeeds
+    // promptly.
+    let client = reqwest::Client::new();
+    let response = client
+        .post(format!("http://{listen_addr}/ingest"))
+        .header("content-type", "application/json")
+        .body(br#"{"a":1}"#.to_vec())
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+        .expect("well-formed request on a separate connection still succeeds");
+    assert_eq!(response.status(), reqwest::StatusCode::OK);
+    assert_eq!(
+        captured.lock().unwrap().len(),
+        1,
+        "the well-formed request forwarded normally; the stalled one never did"
+    );
+
+    drop(slow_stream);
     shutdown.cancel();
     proxy_handle.await.unwrap().unwrap();
 }
