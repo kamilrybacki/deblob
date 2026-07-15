@@ -36,7 +36,8 @@ use std::net::SocketAddr;
 use std::time::Duration;
 
 use deblob::config::{
-    Config, KafkaConfig, LimitsConfig, ManagementConfig, PromotionConfig, Secrets, SlmConfig,
+    Config, HttpProxyConfig, KafkaConfig, LimitsConfig, ManagementConfig, PromotionConfig, Secrets,
+    SlmConfig,
 };
 use deblob::promote::{FamilyChoice, PromoteRequest};
 use deblob::serve::serve;
@@ -436,6 +437,12 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
         // task at all, so this e2e test's behavior is unaffected by the
         // shadow lane's existence.
         slm: SlmConfig::default(),
+        // Task 4 (P2-C): the HTTP push reverse proxy is out of scope for
+        // this P1 pipeline test — `HttpProxyConfig::default()`
+        // (`enabled: false`) means `serve()` wires up no `HttpProxyCfg`/
+        // `KafkaDiscoverySink`/listener at all, so this e2e test's
+        // behavior is unaffected by the HTTP proxy's existence.
+        http_proxy: HttpProxyConfig::default(),
     };
     let secrets = Secrets {
         api_token: API_TOKEN.to_string(),
@@ -443,6 +450,7 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
         kafka_brokers: brokers.clone(),
         kafka_sasl: None,
         slm_api_token: None,
+        http_ingest_token: None,
     };
     // AOF is on (see `start_redis`), so the persistence gate must pass
     // WITHOUT `--unsafe-volatile` — `allow_volatile: false` here is the

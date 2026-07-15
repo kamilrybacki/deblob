@@ -8,7 +8,9 @@
 //! in the workspace that talks to Kafka; everything else stays adapter-free
 //! (spec §3.3).
 
+pub mod discovery_producer;
 pub mod headers;
 pub mod relay;
 
+pub use discovery_producer::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 pub use relay::{FaultPoint, KafkaSasl, Relay, RelayCfg, RelayError};

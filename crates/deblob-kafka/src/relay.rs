@@ -493,9 +493,13 @@ fn producer_client_config(cfg: &RelayCfg) -> ClientConfig {
 }
 
 /// Applies SASL credentials to a `ClientConfig` if present — shared by
-/// both the consumer and producer builders so the two clients never drift
-/// on how `security.protocol`/`sasl.mechanism` get set.
-fn apply_sasl(c: &mut ClientConfig, sasl: &Option<KafkaSasl>) {
+/// both the consumer and producer builders (and, outside this module,
+/// [`crate::discovery_producer`]'s standalone producer) so every Kafka
+/// client this crate builds never drifts on how
+/// `security.protocol`/`sasl.mechanism` get set. `pub(crate)` rather than
+/// private so the discovery-producer module can reuse it without
+/// duplicating the SASL wiring.
+pub(crate) fn apply_sasl(c: &mut ClientConfig, sasl: &Option<KafkaSasl>) {
     if let Some(sasl) = sasl {
         c.set("security.protocol", &sasl.security_protocol)
             .set("sasl.mechanism", &sasl.mechanism)

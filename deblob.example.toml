@@ -48,3 +48,28 @@ max_concurrency = 2
 sweep_interval_ms = 30000
 min_samples = 5
 min_window_ms = 60000
+
+# [http_proxy] — HTTP push reverse proxy (P2-C Task 4). OFF by default:
+# unless `enabled = true` is set explicitly, `deblob` binds no ingest
+# listener and spawns no proxy task — behavior is identical to a build
+# without the HTTP proxy at all. Every field below is only read when
+# `enabled = true`.
+#
+# `DEBLOB_HTTP_INGEST_TOKEN` is ENV-ONLY — it is NEVER set in this file,
+# and is REQUIRED (startup fails, naming the variable) only when
+# `[http_proxy].require_auth` is `true`. When `require_auth = false` (the
+# default) or `[http_proxy]` is omitted entirely, the token is not
+# required at all.
+# [http_proxy]
+# enabled = false
+# listen_addr = "127.0.0.1:9600"
+# upstream_allowlist = ["https://upstream.internal:8443"]
+# route = "https://upstream.internal:8443/ingest"
+# max_body_bytes = 1048576
+# max_header_bytes = 65536
+# max_header_count = 200
+# request_timeout_ms = 10000
+# header_read_timeout_ms = 10000
+# upstream_timeout_ms = 10000
+# discovery_enqueue_timeout_ms = 500
+# require_auth = false
