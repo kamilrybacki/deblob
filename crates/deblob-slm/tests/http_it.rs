@@ -7,8 +7,8 @@ use std::time::Duration;
 use deblob_core::id::{FamilyId, SchemaId};
 use deblob_monoid::Profile;
 use deblob_slm::contract::{
-    AbstainCause, CandidateProfileView, FamilyCandidate, InferenceBudget, InferenceDecision,
-    InferenceError, InferenceRequest, Relation, SemanticInferencer,
+    AbstainCause, CandidateProfileView, EndpointStatus, FamilyCandidate, InferenceBudget,
+    InferenceDecision, InferenceError, InferenceRequest, Relation, SemanticInferencer,
 };
 use deblob_slm::http::{HttpInferencer, SlmHttpConfig};
 use serde_json::json;
@@ -110,15 +110,23 @@ async fn well_formed_tool_call_parses_to_decision() {
     let inferencer = HttpInferencer::new(cfg(server.uri()));
     let req = request(vec![candidate(&id, 0)]);
 
-    let decision = inferencer.classify(req).await.expect("classify succeeds");
+    let outcome = inferencer.classify(req).await.expect("classify succeeds");
 
     assert_eq!(
-        decision,
+        outcome.decision,
         InferenceDecision::MatchSchema {
             schema_id: id,
             relation: Relation::CompatibleDrift,
         }
     );
+    assert_eq!(
+        outcome.telemetry.repair_count, 0,
+        "no retry ran on a well-formed first response"
+    );
+    assert_eq!(outcome.telemetry.endpoint_status, EndpointStatus::Ok);
+    assert!(!outcome.telemetry.parse_error);
+    assert!(!outcome.telemetry.schema_validation_error);
+    assert_eq!(outcome.telemetry.model_id.as_deref(), Some("test-model"));
 }
 
 #[tokio::test]
@@ -145,14 +153,23 @@ async fn id_outside_topk_then_abstain() {
     let inferencer = HttpInferencer::new(cfg(server.uri()));
     let req = request(vec![candidate(&allowed, 0)]);
 
-    let decision = inferencer.classify(req).await.expect("classify succeeds");
+    let outcome = inferencer.classify(req).await.expect("classify succeeds");
 
     assert_eq!(
-        decision,
+        outcome.decision,
         InferenceDecision::Abstain {
             cause: AbstainCause::Ambiguous,
         }
     );
+    assert_eq!(
+        outcome.telemetry.repair_count, 0,
+        "IdNotAllowed must not retry"
+    );
+    assert!(
+        outcome.telemetry.schema_validation_error,
+        "an unrecovered IdNotAllowed must flag schema_validation_error"
+    );
+    assert!(!outcome.telemetry.parse_error);
 
     let received = server.received_requests().await.expect("requests recorded");
     assert_eq!(
@@ -188,18 +205,99 @@ async fn malformed_then_repaired() {
     let inferencer = HttpInferencer::new(cfg(server.uri()));
     let req = request(vec![candidate(&id, 0)]);
 
-    let decision = inferencer.classify(req).await.expect("classify succeeds");
+    let outcome = inferencer.classify(req).await.expect("classify succeeds");
 
     assert_eq!(
-        decision,
+        outcome.decision,
         InferenceDecision::MatchSchema {
             schema_id: id,
             relation: Relation::Exact,
         }
     );
+    assert_eq!(
+        outcome.telemetry.repair_count, 1,
+        "one repair ran and the decision was recovered"
+    );
+    assert!(
+        !outcome.telemetry.parse_error,
+        "a successfully repaired decision must not flag parse_error"
+    );
+    assert!(!outcome.telemetry.schema_validation_error);
 
     let received = server.received_requests().await.expect("requests recorded");
     assert_eq!(received.len(), 2, "one repair should have run");
+}
+
+/// Task 5b: `repair_count` must reflect exactly one repair for a
+/// malformed-then-valid response sequence — the eval harness (Tasks 6-8)
+/// computes repair rate from this field.
+#[tokio::test]
+async fn telemetry_repair_count_reflects_one_repair() {
+    let server = MockServer::start().await;
+    let id = SchemaId::from_digest(&[8u8; 32]);
+    let good_args = format!(
+        r#"{{"decision":"match_schema","schema_id":"{}","relation":"exact"}}"#,
+        id.as_str()
+    );
+
+    let responder = Sequenced::new(vec![
+        // 1st: no tool call at all -> Malformed.
+        ResponseTemplate::new(200).set_body_json(json!({"choices": [{"message": {}}]})),
+        // 2nd: valid.
+        ResponseTemplate::new(200).set_body_json(tool_call_response(&good_args)),
+    ]);
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(responder)
+        .expect(2)
+        .mount(&server)
+        .await;
+
+    let inferencer = HttpInferencer::new(cfg(server.uri()));
+    let req = request(vec![candidate(&id, 0)]);
+
+    let outcome = inferencer.classify(req).await.expect("classify succeeds");
+
+    assert_eq!(outcome.telemetry.repair_count, 1);
+    assert_eq!(
+        outcome.decision,
+        InferenceDecision::MatchSchema {
+            schema_id: id,
+            relation: Relation::Exact,
+        }
+    );
+}
+
+/// Task 5b: `request_tokens`/`response_tokens` must be populated from an
+/// OpenAI-compatible response's `usage` object when the endpoint reports
+/// one.
+#[tokio::test]
+async fn telemetry_tokens_from_usage() {
+    let server = MockServer::start().await;
+    let id = SchemaId::from_digest(&[9u8; 32]);
+    let args = format!(
+        r#"{{"decision":"match_schema","schema_id":"{}","relation":"exact"}}"#,
+        id.as_str()
+    );
+
+    let mut body = tool_call_response(&args);
+    body["usage"] = json!({"prompt_tokens": 210, "completion_tokens": 14});
+
+    Mock::given(method("POST"))
+        .and(path("/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let inferencer = HttpInferencer::new(cfg(server.uri()));
+    let req = request(vec![candidate(&id, 0)]);
+
+    let outcome = inferencer.classify(req).await.expect("classify succeeds");
+
+    assert_eq!(outcome.telemetry.request_tokens, Some(210));
+    assert_eq!(outcome.telemetry.response_tokens, Some(14));
 }
 
 #[tokio::test]
@@ -225,7 +323,7 @@ async fn persistent_5xx_is_transport_error() {
     let err = inferencer
         .classify(req)
         .await
-        .expect_err("should fail with transport error");
+        .expect_err("should fail with transport error (no InferenceOutcome for a total failure)");
     assert!(
         matches!(err, InferenceError::Transport(_)),
         "expected InferenceError::Transport, got {err:?}"
@@ -294,7 +392,13 @@ async fn cache_hit_skips_endpoint() {
         .await
         .expect("second call served from cache");
 
-    assert_eq!(first, second);
+    assert_eq!(first.decision, second.decision);
+    assert_eq!(
+        second.telemetry.total_latency_ms, None,
+        "a cache hit makes no HTTP call, so latency is unobservable"
+    );
+    assert_eq!(second.telemetry.ttft_ms, None);
+    assert_eq!(second.telemetry.repair_count, 0);
 
     let received = server.received_requests().await.expect("requests recorded");
     assert_eq!(

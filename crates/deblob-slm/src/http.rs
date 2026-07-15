@@ -71,7 +71,7 @@
 
 use std::fmt;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use deblob_core::id::SchemaId;
@@ -80,8 +80,8 @@ use tokio::sync::Semaphore;
 
 use crate::cache::{cache_key, DecisionCache};
 use crate::contract::{
-    validate_decision, AbstainCause, ContractError, InferenceDecision, InferenceError,
-    InferenceRequest, SemanticInferencer,
+    validate_decision, AbstainCause, ContractError, EndpointStatus, InferenceDecision,
+    InferenceError, InferenceOutcome, InferenceRequest, InferenceTelemetry, SemanticInferencer,
 };
 
 /// Tool name the model is required to call.
@@ -93,14 +93,26 @@ const MAX_TOOL_ARG_TOKENS: u32 = 32;
 /// Default in-memory decision cache capacity.
 const DEFAULT_CACHE_CAPACITY: usize = 1024;
 
+/// Token usage extracted from an OpenAI-compatible response's `usage`
+/// object, if the endpoint reported one. Not every OpenAI-compatible server
+/// includes `usage` — both fields are `None` when absent, never guessed.
+#[derive(Debug, Clone, Copy, Default)]
+struct CallUsage {
+    request_tokens: Option<u32>,
+    response_tokens: Option<u32>,
+}
+
 /// Result of a single HTTP call attempt, distinguishing parse errors from
-/// transport errors so the caller can decide whether to retry.
+/// transport errors so the caller can decide whether to retry. Carries
+/// [`CallUsage`] on every branch where a 200 response body was actually
+/// parsed (`Success` and `Malformed`) — a malformed tool call can still
+/// arrive alongside a populated `usage` object.
 #[derive(Debug)]
 enum CallResult {
     /// Success: 200 response with a valid tool call.
-    Success(String),
+    Success(String, CallUsage),
     /// 200 response but malformed (no tool call, unparseable JSON).
-    Malformed,
+    Malformed(CallUsage),
     /// Non-2xx HTTP status or network failure (retriable).
     TransportError(String),
 }
@@ -268,7 +280,20 @@ impl HttpInferencer {
 
         let payload: Value = match response.json().await {
             Ok(v) => v,
-            Err(_) => return CallResult::Malformed, // 200 but unparseable body
+            Err(_) => return CallResult::Malformed(CallUsage::default()), // 200 but unparseable body
+        };
+
+        let usage = CallUsage {
+            request_tokens: payload
+                .get("usage")
+                .and_then(|u| u.get("prompt_tokens"))
+                .and_then(Value::as_u64)
+                .map(|v| v as u32),
+            response_tokens: payload
+                .get("usage")
+                .and_then(|u| u.get("completion_tokens"))
+                .and_then(Value::as_u64)
+                .map(|v| v as u32),
         };
 
         let arguments = payload
@@ -283,15 +308,15 @@ impl HttpInferencer {
             .map(str::to_string);
 
         match arguments {
-            Some(args) => CallResult::Success(args),
-            None => CallResult::Malformed,
+            Some(args) => CallResult::Success(args, usage),
+            None => CallResult::Malformed(usage),
         }
     }
 }
 
 #[async_trait]
 impl SemanticInferencer for HttpInferencer {
-    async fn classify(&self, req: InferenceRequest) -> Result<InferenceDecision, InferenceError> {
+    async fn classify(&self, req: InferenceRequest) -> Result<InferenceOutcome, InferenceError> {
         let allowed_ids: Vec<SchemaId> =
             req.retrieved.iter().map(|c| c.schema_id.clone()).collect();
 
@@ -302,7 +327,24 @@ impl SemanticInferencer for HttpInferencer {
             &req.prompt,
         );
         if let Some(cached) = self.cache.get(&key) {
-            return Ok(cached);
+            // Minimal "cached" telemetry: no HTTP call was made, so latency
+            // and token counts are unobservable here (not `0` — genuinely
+            // unknown for this call). `repair_count: 0` because no retry
+            // logic ran either.
+            return Ok(InferenceOutcome {
+                decision: cached,
+                telemetry: InferenceTelemetry {
+                    request_tokens: None,
+                    response_tokens: None,
+                    ttft_ms: None,
+                    total_latency_ms: None,
+                    repair_count: 0,
+                    endpoint_status: EndpointStatus::Ok,
+                    parse_error: false,
+                    schema_validation_error: false,
+                    model_id: Some(self.cfg.model.clone()),
+                },
+            });
         }
 
         let _permit = self
@@ -311,35 +353,76 @@ impl SemanticInferencer for HttpInferencer {
             .await
             .map_err(|err| InferenceError::Transport(err.to_string()))?;
 
+        let call_started = Instant::now();
+
+        // Telemetry accumulated across the (at most two) call_once attempts
+        // below. `repair_count`/`parse_error`/`schema_validation_error`
+        // reflect the FINAL fate of this classify() call, not every
+        // transient error observed along the way — see
+        // `InferenceTelemetry`'s field docs.
+        let mut repair_count: u32 = 0;
+        let mut parse_error = false;
+        let mut schema_validation_error = false;
+        // No default: every code path below either assigns `usage` from a
+        // response it actually received, or returns early on a total
+        // transport failure (never reaching the telemetry construction that
+        // reads `usage`) — the compiler's definite-assignment check enforces
+        // this invariant instead of a placeholder default that would always
+        // be silently overwritten.
+        let usage: CallUsage;
+
         // First call attempt. Process based on result type.
         let first_result = self.call_once(&req, &allowed_ids).await;
         let decision = match first_result {
-            CallResult::Success(args) => {
+            CallResult::Success(args, first_usage) => {
                 // Successful response: validate the decision and handle errors.
                 match validate_decision(&args, &allowed_ids) {
-                    Ok(decision) => decision,
+                    Ok(decision) => {
+                        usage = first_usage;
+                        decision
+                    }
                     Err(err) => {
                         // Validation failed. Branch on error kind:
                         // - IdNotAllowed: semantic error, no retry (saves prefill).
                         // - Malformed/UnknownField: retriable syntax errors.
                         match err {
-                            ContractError::IdNotAllowed => InferenceDecision::Abstain {
-                                cause: AbstainCause::Ambiguous,
-                            },
+                            ContractError::IdNotAllowed => {
+                                usage = first_usage;
+                                schema_validation_error = true;
+                                InferenceDecision::Abstain {
+                                    cause: AbstainCause::Ambiguous,
+                                }
+                            }
                             ContractError::Malformed(_) | ContractError::UnknownField => {
-                                // Retry the full call once.
+                                // Retry the full call once. `first_usage` is
+                                // intentionally discarded here — `usage` is
+                                // always overwritten by the retry's own
+                                // result below, whichever branch it takes.
+                                repair_count = 1;
                                 match self.call_once(&req, &allowed_ids).await {
-                                    CallResult::Success(second_args) => {
+                                    CallResult::Success(second_args, second_usage) => {
+                                        usage = second_usage;
                                         match validate_decision(&second_args, &allowed_ids) {
                                             Ok(d) => d,
-                                            Err(_) => InferenceDecision::Abstain {
-                                                cause: AbstainCause::Ambiguous,
-                                            },
+                                            Err(retry_err) => {
+                                                mark_unrecovered(
+                                                    &retry_err,
+                                                    &mut parse_error,
+                                                    &mut schema_validation_error,
+                                                );
+                                                InferenceDecision::Abstain {
+                                                    cause: AbstainCause::Ambiguous,
+                                                }
+                                            }
                                         }
                                     }
-                                    CallResult::Malformed => InferenceDecision::Abstain {
-                                        cause: AbstainCause::Ambiguous,
-                                    },
+                                    CallResult::Malformed(second_usage) => {
+                                        usage = second_usage;
+                                        parse_error = true;
+                                        InferenceDecision::Abstain {
+                                            cause: AbstainCause::Ambiguous,
+                                        }
+                                    }
                                     CallResult::TransportError(msg) => {
                                         return Err(InferenceError::Transport(msg));
                                     }
@@ -349,20 +432,35 @@ impl SemanticInferencer for HttpInferencer {
                     }
                 }
             }
-            CallResult::Malformed => {
-                // 200 response but malformed body. Retry once.
+            CallResult::Malformed(_first_usage) => {
+                // 200 response but malformed body. Retry once. `_first_usage`
+                // is unused: this branch always retries, and `usage` is
+                // always overwritten by the retry's own result below.
+                repair_count = 1;
                 match self.call_once(&req, &allowed_ids).await {
-                    CallResult::Success(second_args) => {
+                    CallResult::Success(second_args, second_usage) => {
+                        usage = second_usage;
                         match validate_decision(&second_args, &allowed_ids) {
                             Ok(d) => d,
-                            Err(_) => InferenceDecision::Abstain {
-                                cause: AbstainCause::Ambiguous,
-                            },
+                            Err(retry_err) => {
+                                mark_unrecovered(
+                                    &retry_err,
+                                    &mut parse_error,
+                                    &mut schema_validation_error,
+                                );
+                                InferenceDecision::Abstain {
+                                    cause: AbstainCause::Ambiguous,
+                                }
+                            }
                         }
                     }
-                    CallResult::Malformed => InferenceDecision::Abstain {
-                        cause: AbstainCause::Ambiguous,
-                    },
+                    CallResult::Malformed(second_usage) => {
+                        usage = second_usage;
+                        parse_error = true;
+                        InferenceDecision::Abstain {
+                            cause: AbstainCause::Ambiguous,
+                        }
+                    }
                     CallResult::TransportError(msg) => {
                         return Err(InferenceError::Transport(msg));
                     }
@@ -370,18 +468,31 @@ impl SemanticInferencer for HttpInferencer {
             }
             CallResult::TransportError(msg) => {
                 // Non-2xx status or network failure. Retry once.
+                repair_count = 1;
                 match self.call_once(&req, &allowed_ids).await {
-                    CallResult::Success(second_args) => {
+                    CallResult::Success(second_args, second_usage) => {
+                        usage = second_usage;
                         match validate_decision(&second_args, &allowed_ids) {
                             Ok(d) => d,
-                            Err(_) => InferenceDecision::Abstain {
-                                cause: AbstainCause::Ambiguous,
-                            },
+                            Err(retry_err) => {
+                                mark_unrecovered(
+                                    &retry_err,
+                                    &mut parse_error,
+                                    &mut schema_validation_error,
+                                );
+                                InferenceDecision::Abstain {
+                                    cause: AbstainCause::Ambiguous,
+                                }
+                            }
                         }
                     }
-                    CallResult::Malformed => InferenceDecision::Abstain {
-                        cause: AbstainCause::Ambiguous,
-                    },
+                    CallResult::Malformed(second_usage) => {
+                        usage = second_usage;
+                        parse_error = true;
+                        InferenceDecision::Abstain {
+                            cause: AbstainCause::Ambiguous,
+                        }
+                    }
                     CallResult::TransportError(second_msg) => {
                         // Both attempts failed with transport errors.
                         return Err(InferenceError::Transport(format!(
@@ -393,7 +504,44 @@ impl SemanticInferencer for HttpInferencer {
             }
         };
 
+        // Only reached once we have a usable decision — the endpoint
+        // answered (possibly after one repair), so `endpoint_status` is
+        // always `Ok` here; see `EndpointStatus`'s docs.
+        let total_latency_ms = call_started.elapsed().as_millis() as u64;
+        let telemetry = InferenceTelemetry {
+            request_tokens: usage.request_tokens,
+            response_tokens: usage.response_tokens,
+            // No streaming support in this client — TTFT is approximated
+            // by the full call latency (see `InferenceTelemetry::ttft_ms`'s
+            // docs).
+            ttft_ms: Some(total_latency_ms),
+            total_latency_ms: Some(total_latency_ms),
+            repair_count,
+            endpoint_status: EndpointStatus::Ok,
+            parse_error,
+            schema_validation_error,
+            model_id: Some(self.cfg.model.clone()),
+        };
+
         self.cache.put(key, decision.clone());
-        Ok(decision)
+        Ok(InferenceOutcome {
+            decision,
+            telemetry,
+        })
+    }
+}
+
+/// Sets the appropriate telemetry flag for a [`ContractError`] observed on
+/// the SECOND (repair) attempt that still failed to validate — the decision
+/// is falling back to `Abstain` and will not be retried again (only one
+/// repair ever runs).
+fn mark_unrecovered(
+    err: &ContractError,
+    parse_error: &mut bool,
+    schema_validation_error: &mut bool,
+) {
+    match err {
+        ContractError::IdNotAllowed => *schema_validation_error = true,
+        ContractError::Malformed(_) | ContractError::UnknownField => *parse_error = true,
     }
 }

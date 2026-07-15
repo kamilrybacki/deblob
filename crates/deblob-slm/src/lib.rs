@@ -17,8 +17,9 @@ pub mod http;
 pub mod prompt;
 
 pub use contract::{
-    validate_decision, AbstainCause, ContractError, FamilyCandidate, InferenceBudget,
-    InferenceDecision, InferenceError, InferenceRequest, Novelty, Relation, SemanticInferencer,
+    validate_decision, AbstainCause, ContractError, EndpointStatus, FamilyCandidate,
+    InferenceBudget, InferenceDecision, InferenceError, InferenceOutcome, InferenceRequest,
+    InferenceTelemetry, Novelty, Relation, SemanticInferencer,
 };
 pub use http::{HttpInferencer, SlmHttpConfig};
 pub use prompt::{

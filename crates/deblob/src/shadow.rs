@@ -53,8 +53,9 @@ use deblob_core::id::{CandidateId, FamilyId, SchemaId};
 use deblob_core::ports::{EvidenceStore, Registry};
 use deblob_monoid::Profile;
 use deblob_slm::{
-    build_prompt, AbstainCause, CandidateProfileView, FamilyCandidate, InferenceBudget,
-    InferenceDecision, InferenceRequest, Novelty, Relation, SemanticInferencer,
+    build_prompt, AbstainCause, CandidateProfileView, EndpointStatus as InferenceEndpointStatus,
+    FamilyCandidate, InferenceBudget, InferenceDecision, InferenceRequest, Novelty, Relation,
+    SemanticInferencer,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -321,10 +322,11 @@ pub struct ShadowDecision {
     pub seed: Option<u64>,
     pub max_tokens: Option<u32>,
     pub structured_output_backend: Option<String>,
-    /// The `SemanticInferencer` port does not currently surface token
-    /// counts through `classify()`'s return type (Task 1 contract has no
-    /// metadata envelope) — always `None` in P2, pending a future contract
-    /// extension. Documented gap, not a fabricated value.
+    /// Sourced from `InferenceOutcome::telemetry.request_tokens` /
+    /// `.response_tokens` (Task 5b). `None` when the `SemanticInferencer`
+    /// endpoint was unavailable for this call, on a cache hit, or when the
+    /// endpoint's response didn't include a `usage` object — never a
+    /// fabricated value.
     pub request_tokens: Option<u32>,
     pub response_tokens: Option<u32>,
 
@@ -338,15 +340,26 @@ pub struct ShadowDecision {
     /// amendment's "raw model response (access-controlled)").
     pub raw_model_response: Option<String>,
     pub parsed_decision: Option<ParsedDecisionLog>,
+    /// `Some(..)` (a fixed descriptive message, not the underlying
+    /// `ContractError` text — the `SemanticInferencer` port only surfaces a
+    /// boolean flag, see `InferenceTelemetry::parse_error`) iff the final
+    /// decision is a safe-abstain fallback caused by an unrecoverable
+    /// parse-class contract failure.
     pub parse_error: Option<String>,
+    /// Same shape/caveats as `parse_error`, for an unrecoverable
+    /// `schema_id`-not-in-allow-list failure
+    /// (`InferenceTelemetry::schema_validation_error`).
     pub schema_validation_error: Option<String>,
-    /// `HttpInferencer::classify` performs its one mechanical repair
-    /// internally and does not surface a count through the
-    /// `SemanticInferencer` trait — always `0` in P2, pending the same
-    /// contract extension `request_tokens`/`response_tokens` need.
+    /// Sourced from `InferenceOutcome::telemetry.repair_count` (Task 5b):
+    /// `1` iff `HttpInferencer::classify`'s one mechanical repair ran for
+    /// this call, `0` otherwise (including endpoint-unavailable and
+    /// cache-hit calls).
     pub repair_count: u32,
-    /// Time-to-first-token requires a streaming response; the current port
-    /// is request/response, not streaming — always `None` in P2.
+    /// Sourced from `InferenceOutcome::telemetry.ttft_ms` (Task 5b). The
+    /// current port is request/response, not streaming, so this is the
+    /// documented conservative proxy (full call latency), not a true
+    /// time-to-first-token — see `InferenceTelemetry::ttft_ms`'s docs.
+    /// `None` on endpoint-unavailable or a cache hit.
     pub ttft_ms: Option<u64>,
     pub total_latency_ms: u64,
     pub endpoint_status: EndpointStatus,
@@ -566,46 +579,58 @@ impl ShadowClassifier {
         let call_result = self.inferencer.classify(request).await;
         let total_latency_ms = call_started.elapsed().as_millis() as u64;
 
-        let (endpoint_status, provider_error, raw_model_response) = match &call_result {
-            Ok(decision) => (
-                EndpointStatus::Available,
+        let (endpoint_status, provider_error, raw_model_response, telemetry) = match &call_result {
+            Ok(outcome) => (
+                match outcome.telemetry.endpoint_status {
+                    InferenceEndpointStatus::Ok => EndpointStatus::Available,
+                    InferenceEndpointStatus::Unavailable | InferenceEndpointStatus::Timeout => {
+                        EndpointStatus::Unavailable
+                    }
+                },
                 None,
-                serde_json::to_string(decision).ok(),
+                serde_json::to_string(&outcome.decision).ok(),
+                Some(outcome.telemetry.clone()),
             ),
-            Err(err) => (EndpointStatus::Unavailable, Some(err.to_string()), None),
+            Err(err) => (
+                EndpointStatus::Unavailable,
+                Some(err.to_string()),
+                None,
+                None,
+            ),
         };
 
-        let (is_match_schema, selected_rank, selected_distance, relation) = match &call_result {
-            Ok(InferenceDecision::MatchSchema {
-                schema_id,
-                relation,
-            }) => {
-                let found = retrieval
-                    .candidates
-                    .iter()
-                    .find(|c| &c.schema_id == schema_id);
-                (
-                    true,
-                    found.map(|c| c.rank),
-                    found.map(|c| c.distance),
-                    Some(*relation),
-                )
-            }
-            _ => (false, None, None, None),
-        };
+        let (is_match_schema, selected_rank, selected_distance, relation) =
+            match call_result.as_ref().ok().map(|outcome| &outcome.decision) {
+                Some(InferenceDecision::MatchSchema {
+                    schema_id,
+                    relation,
+                }) => {
+                    let found = retrieval
+                        .candidates
+                        .iter()
+                        .find(|c| &c.schema_id == schema_id);
+                    (
+                        true,
+                        found.map(|c| c.rank),
+                        found.map(|c| c.distance),
+                        Some(*relation),
+                    )
+                }
+                _ => (false, None, None, None),
+            };
 
-        let parsed_decision = call_result.as_ref().ok().map(|decision| ParsedDecisionLog {
-            selected_schema_id: match decision {
+        let parsed_decision = call_result.as_ref().ok().map(|outcome| ParsedDecisionLog {
+            selected_schema_id: match &outcome.decision {
                 InferenceDecision::MatchSchema { schema_id, .. } => Some(schema_id.clone()),
                 _ => None,
             },
             selected_rank,
             relation,
-            novelty: match decision {
+            novelty: match &outcome.decision {
                 InferenceDecision::NewCandidate { novelty } => Some(*novelty),
                 _ => None,
             },
-            abstain_cause: match decision {
+            abstain_cause: match &outcome.decision {
                 InferenceDecision::Abstain { cause } => Some(*cause),
                 _ => None,
             },
@@ -628,9 +653,12 @@ impl ShadowClassifier {
         };
         let policy_outcome = evaluate_policy(&gate_inputs);
 
-        let counterfactual_live_disposition = match (&call_result, is_match_schema) {
+        let counterfactual_live_disposition = match (
+            call_result.as_ref().ok().map(|outcome| &outcome.decision),
+            is_match_schema,
+        ) {
             (
-                Ok(InferenceDecision::MatchSchema {
+                Some(InferenceDecision::MatchSchema {
                     schema_id,
                     relation,
                 }),
@@ -677,15 +705,23 @@ impl ShadowClassifier {
             seed: self.model.seed,
             max_tokens: Some(self.config.max_prompt_tokens),
             structured_output_backend: self.model.structured_output_backend.clone(),
-            request_tokens: None,
-            response_tokens: None,
+            request_tokens: telemetry.as_ref().and_then(|t| t.request_tokens),
+            response_tokens: telemetry.as_ref().and_then(|t| t.response_tokens),
 
             raw_model_response,
             parsed_decision,
-            parse_error: None,
-            schema_validation_error: None,
-            repair_count: 0,
-            ttft_ms: None,
+            parse_error: telemetry
+                .as_ref()
+                .filter(|t| t.parse_error)
+                .map(|_| "parse_error flagged by SemanticInferencer telemetry".to_string()),
+            schema_validation_error: telemetry
+                .as_ref()
+                .filter(|t| t.schema_validation_error)
+                .map(|_| {
+                    "schema_validation_error flagged by SemanticInferencer telemetry".to_string()
+                }),
+            repair_count: telemetry.as_ref().map(|t| t.repair_count).unwrap_or(0),
+            ttft_ms: telemetry.as_ref().and_then(|t| t.ttft_ms),
             total_latency_ms,
             endpoint_status,
             provider_error,
@@ -743,7 +779,7 @@ mod tests {
     use deblob_core::id::FamilyVersion;
     use deblob_core::ports::{CandidateRecord, CandidateState, FamilyRef, SchemaRecord};
     use deblob_fingerprint::{parse_bounded, Limits};
-    use deblob_slm::InferenceError;
+    use deblob_slm::{InferenceError, InferenceOutcome, InferenceTelemetry};
     use std::collections::HashMap;
     use std::sync::Mutex as StdMutex2;
 
@@ -979,6 +1015,25 @@ mod tests {
         Unavailable(String),
     }
 
+    /// Non-trivial [`InferenceTelemetry`] fixture — every field the shadow
+    /// classifier is expected to plumb through gets a distinguishing,
+    /// non-default value so a test can prove the mapping actually happened
+    /// rather than merely leaving every `ShadowDecision` field at its
+    /// zero value by coincidence.
+    fn fake_telemetry() -> InferenceTelemetry {
+        InferenceTelemetry {
+            request_tokens: Some(123),
+            response_tokens: Some(7),
+            ttft_ms: Some(42),
+            total_latency_ms: Some(55),
+            repair_count: 1,
+            endpoint_status: InferenceEndpointStatus::Ok,
+            parse_error: false,
+            schema_validation_error: false,
+            model_id: Some("test-model".to_string()),
+        }
+    }
+
     struct FakeInferencer(FakeOutcome);
 
     #[async_trait::async_trait]
@@ -986,9 +1041,12 @@ mod tests {
         async fn classify(
             &self,
             _req: InferenceRequest,
-        ) -> Result<InferenceDecision, InferenceError> {
+        ) -> Result<InferenceOutcome, InferenceError> {
             match &self.0 {
-                FakeOutcome::Decision(d) => Ok(d.clone()),
+                FakeOutcome::Decision(d) => Ok(InferenceOutcome {
+                    decision: d.clone(),
+                    telemetry: fake_telemetry(),
+                }),
                 FakeOutcome::Unavailable(msg) => Err(InferenceError::Transport(msg.clone())),
             }
         }
@@ -1132,6 +1190,78 @@ mod tests {
             after_writes > 0,
             "sanity: the write(s) counted are ColdLane::ingest's own, made BEFORE the shadow run"
         );
+    }
+
+    /// Task 5b: proves `ShadowDecision`'s telemetry fields are actually
+    /// populated from `InferenceOutcome::telemetry`, not left at their old
+    /// hardcoded `None`/`0` values — the whole point of threading
+    /// `InferenceOutcome` through the `SemanticInferencer` port.
+    #[tokio::test]
+    async fn shadow_decision_carries_telemetry_from_outcome() {
+        let evidence = Arc::new(FakeEvidence::default());
+        let payload = r#"{"telemetry_field":1}"#;
+        let cand_id = cand_id_of(payload);
+
+        let lane = ColdLane::new(evidence.clone());
+        lane.ingest(
+            cand_id.clone(),
+            &node_of(payload),
+            SampleMeta {
+                source: "src-a".to_string(),
+                cursor: None,
+            },
+        )
+        .await
+        .unwrap();
+
+        let registry = Arc::new(FakeRegistry {
+            families: vec![family_ref(9, gen_canonical_matching(payload))],
+        });
+        let inferencer = Arc::new(FakeInferencer(FakeOutcome::Decision(
+            InferenceDecision::MatchSchema {
+                schema_id: schema_id(9),
+                relation: Relation::Exact,
+            },
+        )));
+        let log = Arc::new(InMemoryShadowLog::default());
+        let classifier = ShadowClassifier::new(
+            evidence,
+            registry,
+            inferencer,
+            log,
+            model_meta(),
+            lenient_config(),
+        );
+
+        let decision = classifier
+            .maybe_classify(&cand_id, "src-a")
+            .await
+            .unwrap()
+            .expect("stable candidate must produce a decision");
+
+        let telemetry = fake_telemetry();
+        assert_eq!(decision.request_tokens, telemetry.request_tokens);
+        assert_eq!(decision.response_tokens, telemetry.response_tokens);
+        assert_eq!(decision.ttft_ms, telemetry.ttft_ms);
+        assert_eq!(decision.repair_count, telemetry.repair_count);
+        assert_eq!(
+            decision.repair_count, 1,
+            "sanity: fixture repair_count is 1"
+        );
+        assert!(
+            decision.request_tokens.is_some(),
+            "request_tokens must no longer be structurally None"
+        );
+        assert!(
+            decision.response_tokens.is_some(),
+            "response_tokens must no longer be structurally None"
+        );
+        assert_eq!(decision.parse_error, None, "fixture has parse_error=false");
+        assert_eq!(
+            decision.schema_validation_error, None,
+            "fixture has schema_validation_error=false"
+        );
+        assert_eq!(decision.endpoint_status, EndpointStatus::Available);
     }
 
     #[tokio::test]

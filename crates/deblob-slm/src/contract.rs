@@ -191,7 +191,13 @@ pub struct InferenceRequest {
 
 /// Failure modes from a `SemanticInferencer` implementation. Every variant
 /// maps to a shadow "unavailable" outcome at the caller — never a cold-lane
-/// or relay failure (spec §3.3, §6).
+/// or relay failure (spec §3.3, §6). Reserved for a TOTAL failure: no
+/// [`InferenceOutcome`] (and therefore no [`InferenceTelemetry`]) could be
+/// produced at all. A response that arrived but failed contract validation
+/// (even after the one mechanical repair attempt) is NOT this — it is an
+/// `Ok(InferenceOutcome { decision: InferenceDecision::Abstain { .. }, .. })`
+/// with `telemetry.parse_error`/`telemetry.schema_validation_error` set. See
+/// [`SemanticInferencer::classify`].
 #[derive(Debug, thiserror::Error)]
 pub enum InferenceError {
     #[error("transport error: {0}")]
@@ -202,15 +208,105 @@ pub enum InferenceError {
     Parse(String),
 }
 
+/// Endpoint reachability outcome carried in [`InferenceTelemetry`].
+///
+/// `deblob::shadow::EndpointStatus` (the app-crate type stamped onto
+/// `ShadowDecision`) has only `Available`/`Unavailable` — it cannot be
+/// reused here directly (`deblob` depends on `deblob-slm`, not the
+/// reverse). This type ALIGNS with that one: `Ok` maps to `Available`,
+/// `Unavailable`/`Timeout` both map to `Unavailable`. `Timeout` exists as a
+/// distinct variant so a telemetry consumer can tell a deadline-exceeded
+/// failure apart from a generic transport failure without re-stringifying
+/// an [`InferenceError`]; in the current [`crate::http::HttpInferencer`], a
+/// telemetry-carrying `Ok(InferenceOutcome)` is only ever produced once the
+/// endpoint has actually answered, so `endpoint_status` is always `Ok` in
+/// practice today — `Unavailable`/`Timeout` are reserved for a future
+/// implementation that can produce a degraded-but-usable outcome (e.g. a
+/// safe default) instead of a hard [`InferenceError`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EndpointStatus {
+    Ok,
+    Unavailable,
+    Timeout,
+}
+
+/// Telemetry for one [`SemanticInferencer::classify`] call — latency,
+/// token counts, repair/error flags — surfaced alongside the
+/// [`InferenceDecision`] so the shadow log (`deblob::shadow::ShadowDecision`)
+/// and the eval harness (Tasks 6-8) can compute TTFT, prefill/decode,
+/// token, cost, and repair-rate metrics. Every field is best-effort:
+/// `None`/`0`/`false` means "not observed for this call", never a
+/// fabricated value.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InferenceTelemetry {
+    /// Prompt/input token count from the endpoint's `usage` object, if the
+    /// response included one. `None` if the endpoint didn't report usage
+    /// (not every OpenAI-compatible server does), or on a cache hit.
+    pub request_tokens: Option<u32>,
+    /// Completion/output token count from the endpoint's `usage` object,
+    /// under the same caveats as `request_tokens`.
+    pub response_tokens: Option<u32>,
+    /// Time-to-first-token. The current port is request/response, not
+    /// streaming, so there is no way to observe a true TTFT distinct from
+    /// the full response latency; implementations MAY set this equal to
+    /// `total_latency_ms` as a documented conservative proxy rather than
+    /// leave it `None` when a real value isn't obtainable without
+    /// streaming support. `None` on a cache hit (no call was made).
+    pub ttft_ms: Option<u64>,
+    /// Wall-clock latency of this `classify()` call (all HTTP attempts,
+    /// including the one mechanical repair if it ran). `None` on a cache
+    /// hit.
+    pub total_latency_ms: Option<u64>,
+    /// `1` if the one mechanical repair (Task 2's single retry-on-syntax-
+    /// error) ran, `0` otherwise (including the `IdNotAllowed` immediate-
+    /// abstain path, which never retries, and a cache hit).
+    pub repair_count: u32,
+    /// Whether the endpoint was reached for this call. See
+    /// [`EndpointStatus`]'s docs for what each variant means in practice.
+    pub endpoint_status: EndpointStatus,
+    /// `true` iff the FINAL returned decision is a safe-abstain fallback
+    /// caused by a parse-class contract failure ([`ContractError::Malformed`]
+    /// or [`ContractError::UnknownField`]) that a repair attempt could not
+    /// resolve. `false` when the call produced a validly-parsed decision,
+    /// whether on the first attempt or after a successful repair — a
+    /// transient parse failure that repair fixed is NOT a `parse_error`
+    /// for telemetry purposes (see `repair_count` for that signal).
+    pub parse_error: bool,
+    /// `true` iff the FINAL returned decision is a safe-abstain fallback
+    /// caused by [`ContractError::IdNotAllowed`] (a `schema_id` outside the
+    /// retrieved top-k allow-list) that could not be resolved. Same
+    /// "final outcome only" semantics as `parse_error`.
+    pub schema_validation_error: bool,
+    /// The configured model id this call targeted, echoed from
+    /// [`crate::http::SlmHttpConfig::model`] (or the equivalent config of a
+    /// future `SemanticInferencer` implementation).
+    pub model_id: Option<String>,
+}
+
+/// The full result of one [`SemanticInferencer::classify`] call: the 3-way
+/// decision plus the [`InferenceTelemetry`] observed while producing it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct InferenceOutcome {
+    pub decision: InferenceDecision,
+    pub telemetry: InferenceTelemetry,
+}
+
 /// Vendor-free port for a small-language-model classifier. `deblob-core`
 /// does not define this trait (checked against `ports.rs` as merged to
 /// `main` from P1); it lives here since only `deblob-slm`'s implementations
 /// (`HttpInferencer`, Task 2; later `LocalInferencer`) and its callers need
 /// it, and putting it in `deblob-core` would give the core crate an
 /// `async-trait` shaped opinion about a lane it must stay agnostic to.
+///
+/// Returns `Err(InferenceError)` ONLY for a total transport/timeout failure
+/// with no usable outcome at all (see [`InferenceError`]'s docs). A
+/// contract-invalid-but-recovered (or unrecoverable-but-safely-abstained)
+/// response is `Ok(InferenceOutcome)` — see [`InferenceTelemetry`]'s
+/// `parse_error`/`schema_validation_error` fields.
 #[async_trait]
 pub trait SemanticInferencer: Send + Sync {
-    async fn classify(&self, req: InferenceRequest) -> Result<InferenceDecision, InferenceError>;
+    async fn classify(&self, req: InferenceRequest) -> Result<InferenceOutcome, InferenceError>;
 }
 
 #[cfg(test)]
