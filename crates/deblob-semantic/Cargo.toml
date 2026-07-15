@@ -10,3 +10,7 @@ deblob-core = { path = "../deblob-core" }
 thiserror.workspace = true
 sha2.workspace = true
 unicode-normalization.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+deblob-fingerprint = { path = "../deblob-fingerprint" }

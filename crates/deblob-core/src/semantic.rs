@@ -103,9 +103,14 @@ pub struct MeaningCode {
 
 /// One typed path segment. `Wildcard` (an array element position) is a
 /// distinct typed value, NOT the literal string `"*"` — a raw `"*"` string
-/// must not deserialize into `Wildcard`. Canonical byte-level encoding and
-/// path-sort order are Task 3/4; this is only the shape.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// must not deserialize into `Wildcard`. Canonical byte-level encoding
+/// (Task 3) does NOT use this derived `Ord` for the `sem_` digest preimage
+/// (it sorts by encoded bytes instead); this derive exists so `Vec<PathSegment>`
+/// can key a `BTreeSet`/`BTreeMap` (Task 4: enumerating/validating field
+/// paths against a schema's structural canonical form) — declaration order
+/// (`Key` before `Wildcard`) is an arbitrary but deterministic tie-break,
+/// not a spec-mandated ordering.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PathSegment {
     Key(String),

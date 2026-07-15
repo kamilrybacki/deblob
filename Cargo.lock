@@ -723,6 +723,8 @@ name = "deblob-semantic"
 version = "0.1.0"
 dependencies = [
  "deblob-core",
+ "deblob-fingerprint",
+ "serde_json",
  "sha2",
  "thiserror 2.0.18",
  "unicode-normalization",
