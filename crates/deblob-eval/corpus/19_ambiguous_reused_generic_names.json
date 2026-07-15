@@ -1,0 +1,166 @@
+{
+  "name": "ambiguous_reused_generic_names",
+  "category": "ambiguous_adversarial",
+  "candidate": {
+    "observation_count": 41,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 41,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 41,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"status\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 41,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 41,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"type\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 41,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 41,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"value\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 41,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 41,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "SmallPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"timestamp\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 41,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 41,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_ambiguous_reused_generic_names_a",
+      "schema_id": "sch_ambiguous_reused_generic_names_a",
+      "version": 1,
+      "distance": 0.15,
+      "rank": 1
+    },
+    {
+      "family_id": "fam_ambiguous_reused_generic_names_b",
+      "schema_id": "sch_ambiguous_reused_generic_names_b",
+      "version": 1,
+      "distance": 0.16,
+      "rank": 2
+    },
+    {
+      "family_id": "fam_ambiguous_reused_generic_names_c",
+      "schema_id": "sch_ambiguous_reused_generic_names_c",
+      "version": 1,
+      "distance": 0.17,
+      "rank": 3
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "abstain",
+      "cause": "ambiguous"
+    },
+    "gold_family_id": null,
+    "gold_rank": null,
+    "false_merge_trap": true,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

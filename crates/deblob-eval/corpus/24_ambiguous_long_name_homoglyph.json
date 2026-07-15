@@ -1,0 +1,78 @@
+{
+  "name": "ambiguous_long_name_homoglyph",
+  "category": "ambiguous_adversarial",
+  "candidate": {
+    "observation_count": 13,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_x_\"",
+            "truncated": true,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 13,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 13,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"p\\u0430ssword_r\\u0435set_t\\u043eken\"",
+            "truncated": false,
+            "injection_flagged": true
+          }
+        ],
+        "depth": 0,
+        "present": 13,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 13,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_ambiguous_long_name_homoglyph_a",
+      "schema_id": "sch_ambiguous_long_name_homoglyph_a",
+      "version": 1,
+      "distance": 0.5,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "abstain",
+      "cause": "ambiguous"
+    },
+    "gold_family_id": null,
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

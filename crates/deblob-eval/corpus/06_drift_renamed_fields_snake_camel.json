@@ -1,0 +1,103 @@
+{
+  "name": "drift_renamed_fields_snake_camel",
+  "category": "compatible_drift",
+  "candidate": {
+    "observation_count": 50,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"userId\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 50,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 50,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"createdAt\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 50,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 50,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"isActive\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 50,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 50,
+          "number": 0,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_drift_renamed_fields_snake_camel",
+      "schema_id": "sch_drift_renamed_fields_snake_camel_gold",
+      "version": 2,
+      "distance": 0.22,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_drift_renamed_fields_snake_camel_gold",
+      "relation": "compatible_drift"
+    },
+    "gold_family_id": "sch_drift_renamed_fields_snake_camel_gold",
+    "gold_rank": 1,
+    "false_merge_trap": false,
+    "false_split_trap": true
+  },
+  "partition": "train"
+}

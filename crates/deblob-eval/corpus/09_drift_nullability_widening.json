@@ -1,0 +1,79 @@
+{
+  "name": "drift_nullability_widening",
+  "category": "compatible_drift",
+  "candidate": {
+    "observation_count": 65,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"shipment_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 65,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 65,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"carrier\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 65,
+        "explicit_null": 5,
+        "types": {
+          "null": 5,
+          "bool": 0,
+          "number": 0,
+          "string": 60,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": true,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_drift_nullability_widening",
+      "schema_id": "sch_drift_nullability_widening_gold",
+      "version": 2,
+      "distance": 0.13,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_drift_nullability_widening_gold",
+      "relation": "compatible_drift"
+    },
+    "gold_family_id": "sch_drift_nullability_widening_gold",
+    "gold_rank": 1,
+    "false_merge_trap": false,
+    "false_split_trap": true
+  },
+  "partition": "train"
+}

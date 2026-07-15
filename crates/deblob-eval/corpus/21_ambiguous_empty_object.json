@@ -1,0 +1,21 @@
+{
+  "name": "ambiguous_empty_object",
+  "category": "ambiguous_adversarial",
+  "candidate": {
+    "observation_count": 9,
+    "fields": [],
+    "truncated": false
+  },
+  "retrieved": [],
+  "expected": {
+    "decision": {
+      "decision": "abstain",
+      "cause": "insufficient_evidence"
+    },
+    "gold_family_id": null,
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}

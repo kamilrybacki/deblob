@@ -1,0 +1,79 @@
+{
+  "name": "drift_vendor_prefix_fields",
+  "category": "compatible_drift",
+  "candidate": {
+    "observation_count": 40,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"acme_user_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 40,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 40,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"acme_status\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 40,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 40,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_drift_vendor_prefix_fields",
+      "schema_id": "sch_drift_vendor_prefix_fields_gold",
+      "version": 1,
+      "distance": 0.25,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_drift_vendor_prefix_fields_gold",
+      "relation": "compatible_drift"
+    },
+    "gold_family_id": "sch_drift_vendor_prefix_fields_gold",
+    "gold_rank": 1,
+    "false_merge_trap": false,
+    "false_split_trap": true
+  },
+  "partition": "train"
+}

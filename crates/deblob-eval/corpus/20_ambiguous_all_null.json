@@ -1,0 +1,78 @@
+{
+  "name": "ambiguous_all_null",
+  "category": "ambiguous_adversarial",
+  "candidate": {
+    "observation_count": 15,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"a\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 15,
+        "explicit_null": 15,
+        "types": {
+          "null": 15,
+          "bool": 0,
+          "number": 0,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": true,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"b\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 15,
+        "explicit_null": 15,
+        "types": {
+          "null": 15,
+          "bool": 0,
+          "number": 0,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": true,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_ambiguous_all_null_a",
+      "schema_id": "sch_ambiguous_all_null_a",
+      "version": 1,
+      "distance": 0.5,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "abstain",
+      "cause": "insufficient_evidence"
+    },
+    "gold_family_id": null,
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "test"
+}

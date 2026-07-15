@@ -1,0 +1,103 @@
+{
+  "name": "drift_added_optional_field",
+  "category": "compatible_drift",
+  "candidate": {
+    "observation_count": 70,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"session_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 70,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 70,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"device\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 70,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 70,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"referrer\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 9,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 9,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": true,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_drift_added_optional_field",
+      "schema_id": "sch_drift_added_optional_field_gold",
+      "version": 5,
+      "distance": 0.09,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_drift_added_optional_field_gold",
+      "relation": "compatible_drift"
+    },
+    "gold_family_id": "sch_drift_added_optional_field_gold",
+    "gold_rank": 1,
+    "false_merge_trap": false,
+    "false_split_trap": true
+  },
+  "partition": "train"
+}

@@ -1,0 +1,109 @@
+{
+  "name": "ambiguous_gold_absent_candidate_missing",
+  "category": "ambiguous_adversarial",
+  "candidate": {
+    "observation_count": 60,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"subscription_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 60,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 60,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"plan_code\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 60,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 60,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"renewal_at\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 60,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 60,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_ambiguous_gold_absent_a",
+      "schema_id": "sch_ambiguous_gold_absent_a",
+      "version": 1,
+      "distance": 0.55,
+      "rank": 1
+    },
+    {
+      "family_id": "fam_ambiguous_gold_absent_b",
+      "schema_id": "sch_ambiguous_gold_absent_b",
+      "version": 1,
+      "distance": 0.61,
+      "rank": 2
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "abstain",
+      "cause": "candidate_missing"
+    },
+    "gold_family_id": "sch_ambiguous_gold_absent_candidate_missing_true_family_not_retrieved",
+    "gold_rank": null,
+    "false_merge_trap": false,
+    "false_split_trap": false
+  },
+  "partition": "test"
+}

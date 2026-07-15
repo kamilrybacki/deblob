@@ -1,0 +1,105 @@
+{
+  "name": "incompatible_same_names_diff_units_ids",
+  "category": "incompatible_unsafe",
+  "candidate": {
+    "observation_count": 44,
+    "fields": [
+      {
+        "path": [
+          {
+            "escaped": "\"amount\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 44,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 44,
+          "string": 0,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [
+          "SmallPositive"
+        ],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"currency\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 44,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 44,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      },
+      {
+        "path": [
+          {
+            "escaped": "\"account_id\"",
+            "truncated": false,
+            "injection_flagged": false
+          }
+        ],
+        "depth": 0,
+        "present": 44,
+        "explicit_null": 0,
+        "types": {
+          "null": 0,
+          "bool": 0,
+          "number": 0,
+          "string": 44,
+          "array": 0,
+          "object": 0
+        },
+        "nullable": false,
+        "numeric_buckets": [],
+        "array_empty_seen": false,
+        "array_partial_seen": false
+      }
+    ],
+    "truncated": false
+  },
+  "retrieved": [
+    {
+      "family_id": "fam_incompatible_same_names_diff_units_ids",
+      "schema_id": "sch_incompatible_same_names_diff_units_ids_lookalike",
+      "version": 1,
+      "distance": 0.04,
+      "rank": 1
+    }
+  ],
+  "expected": {
+    "decision": {
+      "decision": "match_schema",
+      "schema_id": "sch_incompatible_same_names_diff_units_ids_lookalike",
+      "relation": "incompatible_similarity"
+    },
+    "gold_family_id": null,
+    "gold_rank": null,
+    "false_merge_trap": true,
+    "false_split_trap": false
+  },
+  "partition": "train"
+}
