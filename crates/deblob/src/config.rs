@@ -33,6 +33,12 @@ pub struct Config {
     pub promotion: PromotionConfig,
     #[serde(default)]
     pub management: ManagementConfig,
+    /// `[slm]` — SLM shadow-lane wiring (P2-A/B Task 5b). Absent from a
+    /// TOML file entirely, or present with `enabled` unset, both fall back
+    /// to [`SlmConfig::default`] (`enabled: false`) — the shadow lane is
+    /// OFF unless an operator explicitly opts in.
+    #[serde(default)]
+    pub slm: SlmConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -127,6 +133,95 @@ impl Default for ManagementConfig {
     }
 }
 
+/// `[slm]` — SLM shadow-lane configuration (P2-A/B Task 5b, deferred
+/// follow-up to Task 5): the `ShadowClassifier` (`crate::shadow`) was
+/// built + unit-tested in Task 5, but nothing in the running binary drove
+/// it until this task's periodic sweep (`crate::shadow::run_shadow_sweep`,
+/// wired into `crate::serve::serve`). `enabled` DEFAULTS TO `false` —
+/// unless a TOML file explicitly sets `enabled = true`, `serve()`
+/// constructs no `HttpInferencer`, no `RedisShadowLog`, and spawns no
+/// sweep task, so every P1/pre-Task-5b behavior and test is unaffected.
+///
+/// The SLM API token is deliberately NOT a field here — it is env-only
+/// (`DEBLOB_SLM_API_TOKEN`, see [`Secrets::slm_api_token`] /
+/// [`validate_secrets`]), same secrets-never-in-TOML rule as
+/// `DEBLOB_API_TOKEN`/`DEBLOB_REDIS_URL`/`DEBLOB_KAFKA_*`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SlmConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Base URL of an OpenAI-compatible endpoint, e.g.
+    /// `http://localhost:8000/v1` — passed straight through to
+    /// `deblob_slm::SlmHttpConfig::base_url`. Only read when `enabled`.
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default = "default_slm_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_slm_max_concurrency")]
+    pub max_concurrency: usize,
+    /// How often (milliseconds) `crate::shadow::run_shadow_sweep` re-scans
+    /// provisional candidates.
+    #[serde(default = "default_slm_sweep_interval_ms")]
+    pub sweep_interval_ms: u64,
+    /// Minimum `sample_count` a candidate needs before the periodic sweep
+    /// offers it to `ShadowClassifier::maybe_classify` — mirrors
+    /// `PromotionPolicy::min_samples` in shape, but is configured as an
+    /// INDEPENDENT threshold (`ShadowClassifier`'s own docs: shadow
+    /// eligibility is allowed to diverge from promotion eligibility,
+    /// typically lower/earlier, to build labeled precision samples
+    /// sooner).
+    #[serde(default = "default_slm_min_samples")]
+    pub min_samples: u64,
+    /// Minimum observed age (`last_seen_ms - first_seen_ms`, milliseconds)
+    /// — mirrors `PromotionPolicy::min_age_ms`.
+    #[serde(default = "default_slm_min_window_ms")]
+    pub min_window_ms: u64,
+}
+
+fn default_slm_timeout_ms() -> u64 {
+    8_000
+}
+
+fn default_slm_max_concurrency() -> usize {
+    2
+}
+
+fn default_slm_sweep_interval_ms() -> u64 {
+    30_000
+}
+
+/// Deliberately lower than `PromotionPolicy::DEFAULT_MIN_SAMPLES` (10) —
+/// the shadow lane exists to build labeled precision data BEFORE a
+/// candidate is promotion-eligible, so its default stability bar is
+/// looser.
+fn default_slm_min_samples() -> u64 {
+    5
+}
+
+/// Deliberately lower than `PromotionPolicy::DEFAULT_MIN_AGE_MS` (5
+/// minutes) — same rationale as [`default_slm_min_samples`].
+fn default_slm_min_window_ms() -> u64 {
+    60_000
+}
+
+impl Default for SlmConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: String::new(),
+            model: String::new(),
+            timeout_ms: default_slm_timeout_ms(),
+            max_concurrency: default_slm_max_concurrency(),
+            sweep_interval_ms: default_slm_sweep_interval_ms(),
+            min_samples: default_slm_min_samples(),
+            min_window_ms: default_slm_min_window_ms(),
+        }
+    }
+}
+
 /// Errors loading/parsing the TOML file or validating startup secrets.
 /// Never carries a secret VALUE — [`ConfigError::MissingEnvVar`] names only
 /// the variable, and [`std::fmt::Display`]/[`std::fmt::Debug`] on every
@@ -184,6 +279,9 @@ pub const ENV_KAFKA_SASL_USERNAME: &str = "DEBLOB_KAFKA_SASL_USERNAME";
 pub const ENV_KAFKA_SASL_PASSWORD: &str = "DEBLOB_KAFKA_SASL_PASSWORD";
 pub const ENV_KAFKA_SASL_MECHANISM: &str = "DEBLOB_KAFKA_SASL_MECHANISM";
 pub const ENV_KAFKA_SECURITY_PROTOCOL: &str = "DEBLOB_KAFKA_SECURITY_PROTOCOL";
+/// The SLM shadow lane's API token — env-only, required IFF `[slm].enabled`
+/// is `true` (see [`validate_secrets`]); never read at all when disabled.
+pub const ENV_SLM_API_TOKEN: &str = "DEBLOB_SLM_API_TOKEN";
 
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 const DEFAULT_SECURITY_PROTOCOL: &str = "SASL_SSL";
@@ -197,6 +295,13 @@ pub struct Secrets {
     pub redis_url: String,
     pub kafka_brokers: String,
     pub kafka_sasl: Option<KafkaSasl>,
+    /// `DEBLOB_SLM_API_TOKEN` (P2-A/B Task 5b). `Some` iff the variable was
+    /// present in the environment; [`validate_secrets`] additionally
+    /// REQUIRES it (errors if absent) when `[slm].enabled` is `true`, but
+    /// otherwise leaves it optional — reading it never depends on whether
+    /// the SLM lane is enabled, only whether calling `serve()` treats its
+    /// absence as fatal.
+    pub slm_api_token: Option<String>,
 }
 
 /// Hand-written (not derived): every field here is a secret value, so the
@@ -211,6 +316,10 @@ impl fmt::Debug for Secrets {
             .field(
                 "kafka_sasl",
                 &self.kafka_sasl.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "slm_api_token",
+                &self.slm_api_token.as_ref().map(|_| "<redacted>"),
             )
             .finish()
     }
@@ -229,7 +338,18 @@ impl fmt::Debug for Secrets {
 /// unset, `kafka_sasl` is `None` and the relay connects without SASL. If
 /// it IS set, `DEBLOB_KAFKA_SASL_PASSWORD` becomes required (mechanism/
 /// security-protocol fall back to sane defaults if unset).
-pub fn validate_secrets(env: &impl Fn(&str) -> Option<String>) -> Result<Secrets, ConfigError> {
+///
+/// `slm_enabled` (the caller's already-parsed `[slm].enabled`, P2-A/B Task
+/// 5b) gates whether `DEBLOB_SLM_API_TOKEN` is REQUIRED: `true` and the
+/// variable is absent → [`ConfigError::MissingEnvVar`] naming
+/// [`ENV_SLM_API_TOKEN`], same as every other required secret. `false`
+/// (the default) never fails on it — the token is read if present
+/// (harmless either way) but its absence is not an error, matching "the
+/// shadow lane is off unless explicitly configured" (see [`SlmConfig`]).
+pub fn validate_secrets(
+    env: &impl Fn(&str) -> Option<String>,
+    slm_enabled: bool,
+) -> Result<Secrets, ConfigError> {
     let api_token = env(ENV_API_TOKEN).ok_or(ConfigError::MissingEnvVar(ENV_API_TOKEN))?;
     let redis_url = env(ENV_REDIS_URL).ok_or(ConfigError::MissingEnvVar(ENV_REDIS_URL))?;
     let kafka_brokers =
@@ -253,11 +373,17 @@ pub fn validate_secrets(env: &impl Fn(&str) -> Option<String>) -> Result<Secrets
         }
     };
 
+    let slm_api_token = env(ENV_SLM_API_TOKEN);
+    if slm_enabled && slm_api_token.is_none() {
+        return Err(ConfigError::MissingEnvVar(ENV_SLM_API_TOKEN));
+    }
+
     Ok(Secrets {
         api_token,
         redis_url,
         kafka_brokers,
         kafka_sasl,
+        slm_api_token,
     })
 }
 
@@ -317,6 +443,15 @@ mod tests {
         assert_eq!(config.promotion.min_age_ms, 300_000);
 
         assert_eq!(config.management.addr, "127.0.0.1:9615");
+
+        assert!(!config.slm.enabled);
+        assert_eq!(config.slm.base_url, "http://localhost:8000/v1");
+        assert_eq!(config.slm.model, "granite-4.0-nano-1b");
+        assert_eq!(config.slm.timeout_ms, 8000);
+        assert_eq!(config.slm.max_concurrency, 2);
+        assert_eq!(config.slm.sweep_interval_ms, 30000);
+        assert_eq!(config.slm.min_samples, 5);
+        assert_eq!(config.slm.min_window_ms, 60000);
     }
 
     #[test]
@@ -341,6 +476,94 @@ mod tests {
         assert_eq!(config.management.addr, "127.0.0.1:9615");
         assert_eq!(config.promotion.min_samples, 10);
         assert_eq!(config.limits.max_bytes, 1_048_576);
+
+        // No `[slm]` section at all — the shadow lane must default to
+        // disabled, same as every other pre-Task-5b config.
+        assert!(!config.slm.enabled);
+        assert_eq!(config.slm.timeout_ms, 8000);
+        assert_eq!(config.slm.max_concurrency, 2);
+        assert_eq!(config.slm.sweep_interval_ms, 30000);
+        assert_eq!(config.slm.min_samples, 5);
+        assert_eq!(config.slm.min_window_ms, 60000);
+    }
+
+    #[test]
+    fn config_parses_slm_section() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [slm]
+            enabled = true
+            base_url = "http://slm.internal:8000/v1"
+            model = "test-model"
+            timeout_ms = 1234
+            max_concurrency = 7
+            sweep_interval_ms = 5000
+            min_samples = 3
+            min_window_ms = 10000
+        "#;
+        let config = Config::parse_toml(toml).expect("[slm] section must parse");
+        assert!(config.slm.enabled);
+        assert_eq!(config.slm.base_url, "http://slm.internal:8000/v1");
+        assert_eq!(config.slm.model, "test-model");
+        assert_eq!(config.slm.timeout_ms, 1234);
+        assert_eq!(config.slm.max_concurrency, 7);
+        assert_eq!(config.slm.sweep_interval_ms, 5000);
+        assert_eq!(config.slm.min_samples, 3);
+        assert_eq!(config.slm.min_window_ms, 10000);
+    }
+
+    #[test]
+    fn slm_section_partial_fields_fall_back_to_defaults() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [slm]
+            enabled = true
+            base_url = "http://slm.internal:8000/v1"
+            model = "test-model"
+        "#;
+        let config = Config::parse_toml(toml).expect("partial [slm] section must parse");
+        assert!(config.slm.enabled);
+        // Omitted fields fall back to the documented defaults.
+        assert_eq!(config.slm.timeout_ms, 8000);
+        assert_eq!(config.slm.max_concurrency, 2);
+        assert_eq!(config.slm.sweep_interval_ms, 30000);
+        assert_eq!(config.slm.min_samples, 5);
+        assert_eq!(config.slm.min_window_ms, 60000);
+    }
+
+    #[test]
+    fn slm_section_rejects_unknown_field() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [slm]
+            enabled = true
+            base_url = "http://slm.internal:8000/v1"
+            model = "test-model"
+            api_token = "should-never-be-in-toml"
+        "#;
+        let err = Config::parse_toml(toml).expect_err("a typo'd/secret field must be rejected");
+        assert!(matches!(err, ConfigError::Parse(_)));
     }
 
     #[test]
@@ -367,7 +590,7 @@ mod tests {
             (ENV_REDIS_URL, "redis://localhost:6379"),
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
-        let secrets = validate_secrets(&secrets_env).expect("all required secrets present");
+        let secrets = validate_secrets(&secrets_env, false).expect("all required secrets present");
         assert_eq!(secrets.api_token, "test-token");
         assert_eq!(secrets.redis_url, "redis://localhost:6379");
         assert_eq!(secrets.kafka_brokers, "localhost:9092");
@@ -383,7 +606,7 @@ mod tests {
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
 
-        let err = validate_secrets(&env).expect_err("missing DEBLOB_API_TOKEN must fail");
+        let err = validate_secrets(&env, false).expect_err("missing DEBLOB_API_TOKEN must fail");
         let message = err.to_string();
         assert!(
             message.contains(ENV_API_TOKEN),
@@ -398,7 +621,7 @@ mod tests {
             (ENV_KAFKA_BROKERS, "localhost:9092"),
         ]));
 
-        let err = validate_secrets(&env).expect_err("missing DEBLOB_REDIS_URL must fail");
+        let err = validate_secrets(&env, false).expect_err("missing DEBLOB_REDIS_URL must fail");
         assert!(err.to_string().contains(ENV_REDIS_URL));
     }
 
@@ -409,7 +632,8 @@ mod tests {
             (ENV_REDIS_URL, "redis://localhost:6379"),
         ]));
 
-        let err = validate_secrets(&env).expect_err("missing DEBLOB_KAFKA_BROKERS must fail");
+        let err =
+            validate_secrets(&env, false).expect_err("missing DEBLOB_KAFKA_BROKERS must fail");
         assert!(err.to_string().contains(ENV_KAFKA_BROKERS));
     }
 
@@ -422,7 +646,8 @@ mod tests {
             (ENV_KAFKA_SASL_USERNAME, "deblob"),
         ]));
 
-        let err = validate_secrets(&env).expect_err("SASL username without password must fail");
+        let err =
+            validate_secrets(&env, false).expect_err("SASL username without password must fail");
         assert!(err.to_string().contains(ENV_KAFKA_SASL_PASSWORD));
     }
 
@@ -436,7 +661,7 @@ mod tests {
             (ENV_KAFKA_SASL_PASSWORD, "s3cr3t"),
         ]));
 
-        let secrets = validate_secrets(&env).expect("full SASL credentials must validate");
+        let secrets = validate_secrets(&env, false).expect("full SASL credentials must validate");
         let sasl = secrets.kafka_sasl.expect("sasl must be Some");
         assert_eq!(sasl.username, "deblob");
         assert_eq!(sasl.password, "s3cr3t");
@@ -452,13 +677,53 @@ mod tests {
             (ENV_KAFKA_BROKERS, "broker.internal:9092"),
             (ENV_KAFKA_SASL_USERNAME, "deblob"),
             (ENV_KAFKA_SASL_PASSWORD, "s3cr3t"),
+            (ENV_SLM_API_TOKEN, "slm-super-secret"),
         ]));
-        let secrets = validate_secrets(&env).unwrap();
+        let secrets = validate_secrets(&env, true).unwrap();
         let rendered = format!("{secrets:?}");
         assert!(!rendered.contains("super-secret-token"));
         assert!(!rendered.contains("pass@localhost"));
         assert!(!rendered.contains("broker.internal"));
         assert!(!rendered.contains("s3cr3t"));
+        assert!(!rendered.contains("slm-super-secret"));
+    }
+
+    #[test]
+    fn slm_enabled_requires_token() {
+        // slm.enabled=true, no DEBLOB_SLM_API_TOKEN → clear error naming
+        // the variable.
+        let env_missing = lookup(fake_env(&[
+            (ENV_API_TOKEN, "test-token"),
+            (ENV_REDIS_URL, "redis://localhost:6379"),
+            (ENV_KAFKA_BROKERS, "localhost:9092"),
+        ]));
+        let err = validate_secrets(&env_missing, true)
+            .expect_err("slm.enabled=true with no DEBLOB_SLM_API_TOKEN must fail");
+        assert!(
+            err.to_string().contains(ENV_SLM_API_TOKEN),
+            "error must name the missing variable: {err}"
+        );
+
+        // slm.enabled=true, DEBLOB_SLM_API_TOKEN present → ok, captured.
+        let env_present = lookup(fake_env(&[
+            (ENV_API_TOKEN, "test-token"),
+            (ENV_REDIS_URL, "redis://localhost:6379"),
+            (ENV_KAFKA_BROKERS, "localhost:9092"),
+            (ENV_SLM_API_TOKEN, "slm-token-value"),
+        ]));
+        let secrets = validate_secrets(&env_present, true)
+            .expect("slm.enabled=true with DEBLOB_SLM_API_TOKEN present must succeed");
+        assert_eq!(secrets.slm_api_token.as_deref(), Some("slm-token-value"));
+
+        // slm.enabled=false, no DEBLOB_SLM_API_TOKEN → ok, not required.
+        let env_disabled = lookup(fake_env(&[
+            (ENV_API_TOKEN, "test-token"),
+            (ENV_REDIS_URL, "redis://localhost:6379"),
+            (ENV_KAFKA_BROKERS, "localhost:9092"),
+        ]));
+        let secrets = validate_secrets(&env_disabled, false)
+            .expect("slm.enabled=false must not require DEBLOB_SLM_API_TOKEN");
+        assert!(secrets.slm_api_token.is_none());
     }
 
     #[test]

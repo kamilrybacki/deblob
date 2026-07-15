@@ -45,12 +45,12 @@
 
 use std::collections::HashSet;
 use std::sync::{Arc, Mutex as StdMutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use data_encoding::HEXLOWER;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, SchemaId};
-use deblob_core::ports::{EvidenceStore, Registry};
+use deblob_core::ports::{CandidateState, EvidenceStore, Registry};
 use deblob_monoid::Profile;
 use deblob_slm::{
     build_prompt, AbstainCause, CandidateProfileView, EndpointStatus as InferenceEndpointStatus,
@@ -59,6 +59,7 @@ use deblob_slm::{
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio_util::sync::CancellationToken;
 
 use crate::policy::PromotionPolicy;
 use crate::retrieval::{retrieve_topk, RetrievalResult, RETRIEVAL_VERSION};
@@ -743,6 +744,101 @@ impl ShadowClassifier {
         self.log.append(cand_id, &decision).await?;
 
         Ok(Some(decision))
+    }
+}
+
+// --- Periodic shadow sweep (P2-A/B Task 5b) ---------------------------
+
+/// `source_id` stamped on every [`ShadowDecision`] the periodic sweep
+/// produces (`ShadowDecision::source_id`), distinguishing sweep-triggered
+/// classifications in the log from any other future caller of
+/// `ShadowClassifier::maybe_classify`.
+pub const SWEEP_SOURCE_ID: &str = "shadow-sweep";
+
+/// Page size for the sweep's `EvidenceStore::list_candidates` pagination.
+const SWEEP_PAGE_SIZE: usize = 500;
+
+/// Periodically enumerates every PROVISIONAL candidate and offers each one
+/// to `classifier.maybe_classify`, until `shutdown` is cancelled — the
+/// runtime driver [`crate::serve::serve`] wires up when `[slm].enabled` is
+/// `true` (see `crate::config::SlmConfig`).
+///
+/// This function is PURE SCHEDULING. It duplicates none of
+/// [`ShadowClassifier::maybe_classify`]'s own eligibility logic: whether a
+/// candidate is "stable enough" is entirely decided by
+/// `ShadowConfig::eligibility` (built from `[slm].min_samples`/
+/// `[slm].min_window_ms`) inside `maybe_classify` itself, and whether a
+/// candidate has already been shadow-classified for its current
+/// candidate-set digest is entirely decided by `maybe_classify`'s own
+/// `classified` debounce cache. Calling `maybe_classify` for every
+/// provisional candidate on every tick is therefore always safe and
+/// idempotent — ineligible/already-classified candidates simply come back
+/// `Ok(None)`.
+///
+/// Zero-mutation is preserved by construction: this loop performs only a
+/// read-only `EvidenceStore::list_candidates` scan and calls
+/// `maybe_classify` (itself proven zero-mutation, see the module docs) —
+/// it issues no registry/evidence writes of its own.
+pub async fn run_shadow_sweep(
+    classifier: Arc<ShadowClassifier>,
+    evidence: Arc<dyn EvidenceStore>,
+    interval: Duration,
+    shutdown: CancellationToken,
+) {
+    let mut ticker = tokio::time::interval(interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // The first tick fires immediately (tokio::time::interval's documented
+    // behavior) — consume it so the sweep doesn't run twice back-to-back
+    // at startup before the configured interval has actually elapsed.
+    ticker.tick().await;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => {
+                tracing::info!("shadow sweep shutting down");
+                return;
+            }
+            _ = ticker.tick() => {
+                sweep_once(classifier.as_ref(), evidence.as_ref()).await;
+            }
+        }
+    }
+}
+
+/// One full pass over every PROVISIONAL candidate, paginating until
+/// `EvidenceStore::list_candidates` reports no further cursor.
+async fn sweep_once(classifier: &ShadowClassifier, evidence: &dyn EvidenceStore) {
+    let mut cursor: Option<String> = None;
+    loop {
+        let page = evidence
+            .list_candidates(CandidateState::Provisional, cursor.clone(), SWEEP_PAGE_SIZE)
+            .await;
+        let (records, next_cursor) = match page {
+            Ok(page) => page,
+            Err(err) => {
+                tracing::warn!(error = %err, "shadow sweep: list_candidates failed, will retry next tick");
+                return;
+            }
+        };
+
+        for record in &records {
+            if let Err(err) = classifier
+                .maybe_classify(&record.candidate_id, SWEEP_SOURCE_ID)
+                .await
+            {
+                tracing::warn!(
+                    candidate_id = %record.candidate_id.as_str(),
+                    error = %err,
+                    "shadow sweep: maybe_classify failed for candidate"
+                );
+            }
+        }
+
+        match next_cursor {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
     }
 }
 
