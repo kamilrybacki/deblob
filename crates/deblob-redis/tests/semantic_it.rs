@@ -339,6 +339,60 @@ async fn different_bytes_with_stale_etag_is_rejected() {
 }
 
 #[tokio::test]
+async fn different_bytes_with_missing_etag_on_annotated_schema_is_rejected() {
+    let (_node, reg, _url) = connect().await;
+    let sch_id = publish_schema(&reg, br#"{"temperature":1}"#, 9).await;
+
+    let initial = metadata_with_unit("Cel");
+    let (initial_bytes, initial_sem) = canon(&initial);
+    reg.append_revision(
+        &sch_id,
+        &initial,
+        &initial_bytes,
+        &initial_sem,
+        "kamil",
+        ReasonCode::Correction,
+        "initial",
+        1,
+        1,
+        None,
+    )
+    .await
+    .unwrap();
+
+    let changed = metadata_with_unit("K");
+    let (changed_bytes, changed_sem) = canon(&changed);
+
+    let err = reg
+        .append_revision(
+            &sch_id,
+            &changed,
+            &changed_bytes,
+            &changed_sem,
+            "kamil",
+            ReasonCode::Correction,
+            "fix the unit",
+            2,
+            2,
+            None, // missing etag — should be rejected as EtagConflict
+        )
+        .await
+        .unwrap_err();
+    match err {
+        SemError::EtagConflict { expected, current } => {
+            assert_eq!(expected, None);
+            assert_eq!(current, Etag(1));
+        }
+        other => panic!("expected EtagConflict, got {other:?}"),
+    }
+
+    let (active_meta, _, etag) = reg.active_semantic(&sch_id).await.unwrap().unwrap();
+    assert_eq!(active_meta, initial);
+    assert_eq!(etag, Etag(1));
+    assert_eq!(reg.revisions(&sch_id).await.unwrap().len(), 1);
+}
+
+#[tokio::test]
 async fn real_change_appends_advances_pointer_and_relinks_reverse_index() {
     let (_node, reg, _url) = connect().await;
     let sch_id = publish_schema(&reg, br#"{"temperature":1}"#, 6).await;
