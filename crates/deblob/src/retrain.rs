@@ -330,6 +330,7 @@ mod tests {
     #[derive(Default)]
     struct FakeFeedbackStore {
         examples: Mutex<Vec<TrainingExample>>,
+        quarantined: Mutex<std::collections::BTreeSet<String>>,
     }
 
     #[async_trait]
@@ -376,6 +377,24 @@ mod tests {
                     .push(ex.clone());
             }
             Ok(map)
+        }
+
+        async fn quarantine_actor(&self, actor: &str) -> Result<(), deblob_core::error::CoreError> {
+            self.quarantined.lock().unwrap().insert(actor.to_string());
+            Ok(())
+        }
+
+        async fn quarantined_actors(
+            &self,
+        ) -> Result<std::collections::BTreeSet<String>, deblob_core::error::CoreError> {
+            Ok(self.quarantined.lock().unwrap().clone())
+        }
+
+        async fn export_snapshot(
+            &self,
+            _dir: &std::path::Path,
+        ) -> Result<deblob_redis::ExportManifest, deblob_core::error::CoreError> {
+            unimplemented!("not exercised by RetrainPlan tests")
         }
     }
 
@@ -529,14 +548,24 @@ mod tests {
         // Seed one hard-negative feedback example to prove step 1 combines
         // both sources.
         let rejected = schema_id(9);
+        let ctx = crate::feedback::CaptureContext {
+            actor: "operator:seed".to_string(),
+            source_trust_level: deblob_slm::SourceTrustLevel::Standard,
+            tool_schema_version: 1,
+            dedup_cluster: String::new(),
+            weights: crate::feedback::FeedbackWeights::default(),
+            partition_key: family(),
+            recorded_at: 1,
+        };
         let example = crate::feedback::capture_trusted_proposal_rejected(
             candidate_view(),
             vec![],
             &rejected,
+            deblob_slm::RejectionReason::WrongFamily,
             None,
-            family(),
-            1,
-        );
+            &ctx,
+        )
+        .expect("WrongFamily is a generator fault, must be emitted");
         feedback.append(&example).await.unwrap();
 
         let hook = FakeFineTuneHook::new(ModelArtifact {

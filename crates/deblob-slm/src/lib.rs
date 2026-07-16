@@ -22,7 +22,7 @@ pub use contract::{
     InferenceBudget, InferenceDecision, InferenceError, InferenceOutcome, InferenceRequest,
     InferenceTelemetry, Novelty, Relation, SemanticInferencer,
 };
-pub use feedback::{LabelSource, TrainingExample};
+pub use feedback::{LabelSource, RejectionReason, SourceTrustLevel, TrainingExample};
 pub use http::{HttpInferencer, SlmHttpConfig};
 pub use prompt::{
     build_prompt, detect_injection, redact_field_name, CandidateProfileView, NumericBucket, Prompt,

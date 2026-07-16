@@ -1546,6 +1546,7 @@ mod tests {
             types: deblob_monoid::TypeCounts::default(),
             nullable: false,
             numeric_buckets: vec![],
+            canonicalized_placeholder: String::new(),
             array_empty_seen: false,
             array_partial_seen: false,
         };

@@ -16,7 +16,9 @@ pub mod semantic;
 
 pub use evidence::{RedisEvidence, RedisEvidenceOpts};
 pub use feedback_store::{
-    FeedbackStore, RedisFeedbackStore, DEFAULT_FEEDBACK_STREAM_MAXLEN, FEEDBACK_STREAM_KEY,
+    assign_split, ExportCaps, ExportManifest, FeedbackStore, ManifestEntry, RedisFeedbackStore,
+    SplitName, DEFAULT_FEEDBACK_STREAM_MAXLEN, FEEDBACK_STREAM_KEY, QUARANTINED_ACTORS_KEY,
+    SAFETY_SUITE_DEDUP_PREFIX,
 };
 pub use health::{HealthGate, HealthState, PersistenceHealth};
 pub use index::{bucket_key, bucket_member};
