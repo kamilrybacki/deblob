@@ -68,6 +68,27 @@ mod tests {
     }
 
     #[test]
+    fn produce_ns_round_trip_stays_close_to_a_fresh_now_ns() {
+        // Guards against exactly the class of bug behind the smoke run's
+        // impossible p50 (40s latency for a 12s produce window): if
+        // `encode_produce_ns`/`now_ns` ever drifted onto different units
+        // (ns vs ms) or different epochs, a value stamped "now" and
+        // decoded straight back would land far from a second, independent
+        // `now_ns()` call — not within a millisecond-scale delta.
+        let stamped = encode_produce_ns(now_ns());
+        let decoded = decode_produce_ns(&stamped).expect("round trip decodes");
+        let fresh = now_ns();
+
+        let delta_ns = fresh.saturating_sub(decoded);
+        let one_second_ns = 1_000_000_000u64;
+        assert!(
+            delta_ns < one_second_ns,
+            "decoded produce_ns ({decoded}) drifted {delta_ns}ns from a fresh now_ns() \
+             ({fresh}) — encode/decode or the clock they share is broken"
+        );
+    }
+
+    #[test]
     fn now_ns_is_a_plausible_recent_timestamp() {
         // Sanity, not a strict correctness proof: must be well after the
         // Unix epoch and not absurdly far in the future (catches an

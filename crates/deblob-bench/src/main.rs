@@ -25,6 +25,7 @@ use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
 
+use deblob_bench::measurer::DEFAULT_IDLE_TIMEOUT;
 use deblob_bench::producer::{KeyDistribution, RateLimit};
 use deblob_bench::report::{self, BenchReport};
 use deblob_bench::scenarios::{self, PayloadArg, ScenarioConfig, ScenarioKind};
@@ -110,10 +111,17 @@ struct RunArgs {
     #[arg(long)]
     key_pool: Option<u32>,
 
-    /// How long the measurer waits for tagged records after production
-    /// finishes, in seconds.
+    /// Hard overall backstop: how long the measurer waits in total before
+    /// giving up regardless of progress, in seconds.
     #[arg(long, default_value_t = 60)]
     measure_timeout_secs: u64,
+
+    /// How long the measurer waits after the LAST observed tagged message
+    /// before deciding the run is done, in seconds. The primary stop
+    /// condition in practice — `measure_timeout_secs` is only the
+    /// backstop for a stalled/unreachable broker.
+    #[arg(long, default_value_t = DEFAULT_IDLE_TIMEOUT.as_secs())]
+    measure_idle_timeout_secs: u64,
 
     /// `k` for the `neighbors` scenario's `GET semantic-neighbors?k=`.
     #[arg(long, default_value_t = 10)]
@@ -198,6 +206,7 @@ fn resolve_scenario_config(
         rate: rate_limit(args.rate),
         key_distribution: key_distribution(args.key_pool),
         measure_timeout: Duration::from_secs(args.measure_timeout_secs),
+        measure_idle_timeout: Duration::from_secs(args.measure_idle_timeout_secs),
         neighbors_k: args.neighbors_k,
         target_candidate_id: args.target_candidate_id.clone(),
         promote_family: args.promote_family.clone(),
@@ -360,6 +369,10 @@ mod tests {
         assert_eq!(args.seed, 42);
         assert_eq!(args.rate, None);
         assert_eq!(args.measure_timeout_secs, 60);
+        assert_eq!(
+            args.measure_idle_timeout_secs,
+            DEFAULT_IDLE_TIMEOUT.as_secs()
+        );
     }
 
     #[test]
@@ -394,6 +407,7 @@ mod tests {
             rate: None,
             key_pool: None,
             measure_timeout_secs: 60,
+            measure_idle_timeout_secs: 10,
             neighbors_k: 10,
             target_candidate_id: None,
             promote_family: "new".to_string(),

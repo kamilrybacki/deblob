@@ -115,38 +115,117 @@ pub fn consumer_client_config(brokers: &str, group_id: &str) -> ClientConfig {
     c
 }
 
-/// Consumes from `topic` until either `expected` messages have been
-/// processed or `deadline` elapses (an overall deadline, not a per-message
-/// timeout — a slow first message doesn't eat into the budget for the
-/// rest), folding every message into a fresh [`MeasureAccumulator`].
+/// Default "give up waiting for the next message" window used by
+/// [`measure_topic`] when the caller doesn't override it. Chosen to comfortably
+/// exceed the relay's own tag latency (spec evidence: `resolve_structural`
+/// completed in ≤5ms per message even under the buggy smoke run) while still
+/// ending a run promptly once production has genuinely finished.
+pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Why [`measure_topic`]'s consume loop stopped. Exists so the stop
+/// decision is directly observable/testable, not just an implicit `break`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopReason {
+    /// Saw `expected` messages. `expected == 0` (no target set) never
+    /// produces this variant — the loop then runs until idle/deadline.
+    ReachedExpected,
+    /// No new message arrived for `idle_timeout` — production (or the
+    /// relay) has gone quiet; waiting longer won't surface more.
+    Idle,
+    /// The overall deadline elapsed regardless of progress — a hard
+    /// backstop so a stalled broker can't hang the bench forever.
+    Deadline,
+}
+
+/// Pure stop-condition check for [`measure_topic`]'s consume loop.
+/// `idle_elapsed` is the time since the last message was received (or
+/// since the loop started, if none yet); `deadline_elapsed` is whether the
+/// overall wall-clock deadline has passed. This is the fix for the smoke
+/// run's truncated 927-of-2000 capture: rather than a single overall
+/// deadline that can expire mid-backlog (e.g. eaten by a slow initial
+/// group join), the loop now keeps consuming as long as messages keep
+/// arriving, only stopping on genuine completion, genuine silence, or the
+/// hard backstop.
+pub fn measure_stop_reason(
+    received: u64,
+    expected: u64,
+    idle_elapsed: Duration,
+    idle_timeout: Duration,
+    deadline_elapsed: bool,
+) -> Option<StopReason> {
+    if expected > 0 && received >= expected {
+        return Some(StopReason::ReachedExpected);
+    }
+    if idle_elapsed >= idle_timeout {
+        return Some(StopReason::Idle);
+    }
+    if deadline_elapsed {
+        return Some(StopReason::Deadline);
+    }
+    None
+}
+
+/// Consumes from `topic` until [`measure_stop_reason`] says to stop:
+/// `expected` messages seen, `idle_timeout` elapsed since the last
+/// message, or the overall `deadline` elapsed. Folds every message into a
+/// fresh [`MeasureAccumulator`], which the caller compares against
+/// `expected`/the producer's own sent count to report received-vs-expected
+/// explicitly rather than silently under-counting.
 pub async fn measure_topic(
     brokers: &str,
     group_id: &str,
     topic: &str,
     expected: u64,
     deadline: Duration,
+    idle_timeout: Duration,
 ) -> Result<MeasureAccumulator, MeasurerError> {
     let consumer: StreamConsumer = consumer_client_config(brokers, group_id).create()?;
     consumer.subscribe(&[topic])?;
 
     let mut acc = MeasureAccumulator::default();
-    let end = tokio::time::Instant::now() + deadline;
-    while expected == 0 || acc.received < expected {
-        let remaining = end.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
+    let overall_deadline = tokio::time::Instant::now() + deadline;
+    let mut last_progress = tokio::time::Instant::now();
+
+    loop {
+        let now = tokio::time::Instant::now();
+        let idle_elapsed = now.saturating_duration_since(last_progress);
+        let deadline_elapsed = now >= overall_deadline;
+        if measure_stop_reason(
+            acc.received,
+            expected,
+            idle_elapsed,
+            idle_timeout,
+            deadline_elapsed,
+        )
+        .is_some()
+        {
             break;
         }
-        match tokio::time::timeout(remaining, consumer.recv()).await {
+
+        let remaining_deadline = overall_deadline.saturating_duration_since(now);
+        let remaining_idle = idle_timeout.saturating_sub(idle_elapsed);
+        let wait = remaining_deadline.min(remaining_idle);
+        if wait.is_zero() {
+            break;
+        }
+
+        match tokio::time::timeout(wait, consumer.recv()).await {
             Ok(Ok(msg)) => {
                 let processed = process_headers(msg.headers(), now_ns());
                 acc.record(processed);
+                last_progress = tokio::time::Instant::now();
             }
-            // A genuine Kafka error or the overall deadline firing both end
-            // the measurement window early — the caller sees whatever was
-            // accumulated so far via `Ok(acc)`, never loses it to a hard
-            // error over a partial run.
+            // A genuine Kafka error ends the measurement window early —
+            // the caller sees whatever was accumulated so far via
+            // `Ok(acc)`, never loses it to a hard error over a partial
+            // run.
             Ok(Err(_kafka_err)) => break,
-            Err(_elapsed) => break,
+            // Either the idle window or the overall deadline elapsed
+            // first (`wait` was bounded by whichever is smaller) — loop
+            // back to `measure_stop_reason` to determine which and stop
+            // cleanly on the next iteration rather than treating a
+            // `tokio::time::timeout` timeout as a hard error.
+            Err(_elapsed) => {}
         }
     }
     Ok(acc)
@@ -234,6 +313,96 @@ mod tests {
         assert_eq!(acc.histogram.len(), 1);
         assert_eq!(acc.outcomes.known, 1);
         assert_eq!(acc.outcomes.unresolved, 1);
+    }
+
+    #[test]
+    fn stop_reason_fires_on_reaching_expected_before_idle_or_deadline() {
+        let reason = measure_stop_reason(
+            2000,
+            2000,
+            Duration::from_millis(1),
+            Duration::from_secs(10),
+            false,
+        );
+        assert_eq!(reason, Some(StopReason::ReachedExpected));
+    }
+
+    #[test]
+    fn stop_reason_is_none_while_short_of_expected_and_not_idle_or_expired() {
+        let reason = measure_stop_reason(
+            927,
+            2000,
+            Duration::from_millis(1),
+            Duration::from_secs(10),
+            false,
+        );
+        assert_eq!(reason, None);
+    }
+
+    #[test]
+    fn stop_reason_fires_idle_even_when_short_of_expected() {
+        // This is the truncation bug from the smoke run, made explicit:
+        // 927 of 2000 received must NOT silently stop unless the run has
+        // genuinely gone idle or hit the hard deadline.
+        let reason = measure_stop_reason(
+            927,
+            2000,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            false,
+        );
+        assert_eq!(reason, Some(StopReason::Idle));
+    }
+
+    #[test]
+    fn stop_reason_fires_deadline_as_the_last_resort_backstop() {
+        let reason = measure_stop_reason(
+            927,
+            2000,
+            Duration::from_millis(1),
+            Duration::from_secs(10),
+            true,
+        );
+        assert_eq!(reason, Some(StopReason::Deadline));
+    }
+
+    #[test]
+    fn stop_reason_with_no_expected_target_runs_until_idle_or_deadline() {
+        // `expected == 0` (no target set) must never match
+        // `ReachedExpected` — the loop should run until idle/deadline
+        // regardless of how many messages have been received.
+        assert_eq!(
+            measure_stop_reason(
+                0,
+                0,
+                Duration::from_millis(1),
+                Duration::from_secs(10),
+                false
+            ),
+            None
+        );
+        assert_eq!(
+            measure_stop_reason(
+                500,
+                0,
+                Duration::from_secs(10),
+                Duration::from_secs(10),
+                false
+            ),
+            Some(StopReason::Idle)
+        );
+    }
+
+    #[test]
+    fn stop_reason_prefers_reached_expected_over_a_simultaneous_idle_or_deadline() {
+        let reason = measure_stop_reason(
+            2000,
+            2000,
+            Duration::from_secs(10),
+            Duration::from_secs(10),
+            true,
+        );
+        assert_eq!(reason, Some(StopReason::ReachedExpected));
     }
 
     #[test]

@@ -55,7 +55,18 @@ COPY crates ./crates
 # Build both the server binary (`deblob`) and the benchmark client
 # (`deblob-bench`) — one image serves the Deblob Deployment (ENTRYPOINT
 # deblob) and the in-cluster benchmark Job (command deblob-bench).
-RUN cargo build --release --locked --package deblob --package deblob-bench
+#
+# Cache mounts on the cargo registry + target dir: without them, every
+# source change re-links AND re-downloads/re-compiles the full dependency
+# graph (~15 min). `target/` is a cache mount, so it never lands in the
+# image's layer filesystem — the two binaries are copied out to /out
+# (a normal, non-mounted path) inside this same RUN before the mount is
+# torn down, so the runtime stage can still COPY them out below.
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/build/target \
+    cargo build --release --locked --package deblob --package deblob-bench \
+    && mkdir -p /out \
+    && cp target/release/deblob target/release/deblob-bench /out/
 
 ########################################
 # Runtime
@@ -78,8 +89,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd -g 65532 nonroot \
     && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot
 
-COPY --from=builder /build/target/release/deblob /usr/local/bin/deblob
-COPY --from=builder /build/target/release/deblob-bench /usr/local/bin/deblob-bench
+COPY --from=builder /out/deblob /usr/local/bin/deblob
+COPY --from=builder /out/deblob-bench /usr/local/bin/deblob-bench
 
 WORKDIR /app
 

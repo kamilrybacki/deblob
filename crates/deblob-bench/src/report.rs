@@ -23,6 +23,11 @@ pub struct ScenarioResult {
     pub produce_errors: u64,
     pub produce_wall_time_secs: f64,
     pub throughput_msgs_per_sec: f64,
+    /// How many messages the measurer was told to expect on the tagged
+    /// topic for this run — `produce_stats.sent` (spec: report received
+    /// vs. expected explicitly rather than letting a truncated capture
+    /// hide behind a bare `tagged_received` count).
+    pub tagged_expected: u64,
     pub tagged_received: u64,
     pub missing_latency_header: u64,
     pub latency: Option<LatencySummaryMs>,
@@ -56,6 +61,7 @@ impl ScenarioResult {
             produce_errors: produce_stats.send_errors,
             produce_wall_time_secs: wall_secs,
             throughput_msgs_per_sec: throughput,
+            tagged_expected: produce_stats.sent,
             tagged_received: accumulator.received,
             missing_latency_header: accumulator.missing_latency,
             latency: accumulator.histogram.summary_ms(),
@@ -110,8 +116,8 @@ pub fn render_human(report: &BenchReport) -> String {
             r.produced, r.produce_errors, r.produce_wall_time_secs, r.throughput_msgs_per_sec
         ));
         s.push_str(&format!(
-            "tagged received: {}   missing latency header: {}\n",
-            r.tagged_received, r.missing_latency_header
+            "tagged received: {} of {} expected   missing latency header: {}\n",
+            r.tagged_received, r.tagged_expected, r.missing_latency_header
         ));
         match &r.latency {
             Some(l) => s.push_str(&format!(
@@ -192,6 +198,7 @@ mod tests {
         assert_eq!(result.produced, 100);
         assert_eq!(result.produce_errors, 1);
         assert_eq!(result.throughput_msgs_per_sec, 50.0); // 100 / 2s
+        assert_eq!(result.tagged_expected, 100);
         assert_eq!(result.tagged_received, 6);
         assert_eq!(result.missing_latency_header, 1);
         assert_eq!(result.tag_outcomes.known, 5);
@@ -231,6 +238,7 @@ mod tests {
         assert_eq!(scenarios.len(), 2);
         assert_eq!(scenarios[0]["scenario"], "throughput");
         assert_eq!(scenarios[0]["produced"], 100);
+        assert_eq!(scenarios[0]["tagged_expected"], 100);
         assert_eq!(scenarios[0]["tag_outcomes"]["known"], 5);
         assert_eq!(scenarios[0]["probes"][0]["op"], "list_candidates");
         assert!(scenarios[0]["latency"]["p50_ms"].is_number());
@@ -245,6 +253,7 @@ mod tests {
         assert!(human.contains("--- throughput ---"));
         assert!(human.contains("produced: 100"));
         assert!(human.contains("throughput: 50.0 msgs/s"));
+        assert!(human.contains("tagged received: 6 of 100 expected"));
         assert!(human.contains("tag outcomes: known=5"));
         assert!(human.contains("list_candidates -> 200"));
         assert!(human.contains("note: a note"));

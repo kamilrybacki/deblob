@@ -14,8 +14,7 @@ use std::time::Duration;
 
 use rdkafka::config::ClientConfig;
 use rdkafka::message::{Header, OwnedHeaders};
-use rdkafka::producer::{FutureProducer, FutureRecord};
-use rdkafka::util::Timeout;
+use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord};
 
 use crate::header::{encode_produce_ns, now_ns, PRODUCE_NS_HEADER};
 use crate::record::GeneratedRecord;
@@ -94,10 +93,35 @@ pub fn build_producer(brokers: &str) -> Result<FutureProducer, ProducerError> {
     Ok(producer_client_config(brokers).create()?)
 }
 
-/// Drives `records` onto `topic`, one `FutureProducer::send` per record,
-/// each stamped with a fresh `bench-produce-ns` header (spec §3.1) and an
-/// optional key from `keys`. Paces sends when `rate` is
-/// [`RateLimit::PerSecond`]; otherwise sends as fast as the queue accepts.
+/// Caps how many in-flight [`DeliveryFuture`]s `produce_stream` accumulates
+/// before draining them. Bounds memory on very large `--count` runs while
+/// still letting sends run far ahead of their broker acks — the point of
+/// pipelining at all.
+const INFLIGHT_BATCH: usize = 5_000;
+
+/// Whether the in-flight delivery-future buffer has grown large enough to
+/// drain now. Pulled out as a pure predicate so the pipelining threshold
+/// is unit-testable without a broker.
+fn should_drain(inflight_len: usize, batch_size: usize) -> bool {
+    batch_size > 0 && inflight_len >= batch_size
+}
+
+/// Drives `records` onto `topic`, each stamped with a fresh
+/// `bench-produce-ns` header (spec §3.1) and an optional key from `keys`.
+/// Paces sends when `rate` is [`RateLimit::PerSecond`]; otherwise sends as
+/// fast as the local queue accepts.
+///
+/// Pipelined via [`FutureProducer::send_result`]: that call enqueues onto
+/// the producer's local queue and returns a [`DeliveryFuture`]
+/// immediately — it does NOT await the broker's delivery ack the way
+/// `FutureProducer::send` does. Awaiting every delivery ack inline (the
+/// bug this replaces) serializes each record behind its own network
+/// round-trip, so the measured "throughput" is really the client's
+/// one-at-a-time latency, not the broker/relay's real capacity. Here the
+/// futures are collected and drained in bounded batches (`INFLIGHT_BATCH`)
+/// so many sends are in flight at once, sends stay memory-bounded on large
+/// `--count` runs, and every delivery outcome still lands in
+/// `stats.sent`/`stats.send_errors`.
 pub async fn produce_stream(
     producer: &FutureProducer,
     topic: &str,
@@ -112,6 +136,8 @@ pub async fn produce_stream(
         RateLimit::PerSecond(r) if r > 0.0 => Some(1_000_000_000.0 / r),
         RateLimit::PerSecond(_) => None,
     };
+
+    let mut inflight: Vec<DeliveryFuture> = Vec::with_capacity(INFLIGHT_BATCH);
 
     for (index, record) in records.enumerate() {
         if let Some(interval_ns) = interval_ns {
@@ -137,17 +163,44 @@ pub async fn produce_stream(
             future_record = future_record.key(k);
         }
 
-        match producer
-            .send(future_record, Timeout::After(Duration::from_secs(10)))
-            .await
-        {
-            Ok(_delivery) => stats.sent += 1,
-            Err((_err, _owned_msg)) => stats.send_errors += 1,
+        match producer.send_result(future_record) {
+            Ok(delivery) => {
+                inflight.push(delivery);
+                if should_drain(inflight.len(), INFLIGHT_BATCH) {
+                    drain_inflight(&mut inflight, &mut stats).await;
+                }
+            }
+            // The local queue rejected the record outright (e.g. full) —
+            // it was never handed to the broker, so it's a send error
+            // exactly like a delivery failure below.
+            Err(_queue_full_or_similar) => stats.send_errors += 1,
         }
     }
 
+    // Drain whatever's left after the loop — the tail batch is almost
+    // always smaller than `INFLIGHT_BATCH`.
+    drain_inflight(&mut inflight, &mut stats).await;
+
     stats.wall_time = start.elapsed();
     stats
+}
+
+/// Awaits every pending future in `inflight`, folding each delivery
+/// outcome into `stats`, then empties `inflight`. The single drain point
+/// both the batch boundary and the post-loop tail call into, so the
+/// success/error accounting only lives in one place.
+async fn drain_inflight(inflight: &mut Vec<DeliveryFuture>, stats: &mut ProduceStats) {
+    for delivery in inflight.drain(..) {
+        match delivery.await {
+            Ok(Ok(_partition_offset)) => stats.sent += 1,
+            Ok(Err((_err, _owned_msg))) => stats.send_errors += 1,
+            // The producer was dropped before its delivery report
+            // arrived. Never expected in practice (the producer outlives
+            // the whole `produce_stream` call) but must count as an
+            // error rather than silently vanishing from the totals.
+            Err(_canceled) => stats.send_errors += 1,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +234,27 @@ mod tests {
         let cfg = producer_client_config("localhost:9092");
         assert_eq!(cfg.get("bootstrap.servers"), Some("localhost:9092"));
         assert_eq!(cfg.get("enable.idempotence"), Some("true"));
+    }
+
+    #[test]
+    fn should_drain_is_false_below_the_batch_size() {
+        assert!(!should_drain(0, 5_000));
+        assert!(!should_drain(4_999, 5_000));
+    }
+
+    #[test]
+    fn should_drain_is_true_at_and_above_the_batch_size() {
+        assert!(should_drain(5_000, 5_000));
+        assert!(should_drain(5_001, 5_000));
+    }
+
+    #[test]
+    fn should_drain_never_fires_for_a_zero_batch_size() {
+        // A zero threshold must never be interpreted as "always drain" —
+        // it would turn every single send into its own batch (right back
+        // to the pre-fix serial-await behavior).
+        assert!(!should_drain(0, 0));
+        assert!(!should_drain(100, 0));
     }
 
     #[test]

@@ -16,6 +16,7 @@ use clap::ValueEnum;
 use crate::config::{PayloadSize, SyntheticConfig};
 use crate::fixtures::{real_world_stream, RealWorldKind};
 use crate::generator::generate;
+use crate::header::now_ns;
 use crate::measurer::{measure_topic, MeasureAccumulator};
 use crate::prober::{MgmtProber, ProbeSample};
 use crate::producer::{build_producer, produce_stream, KeyDistribution, ProduceStats, RateLimit};
@@ -97,6 +98,10 @@ pub struct ScenarioConfig {
     pub rate: RateLimit,
     pub key_distribution: KeyDistribution,
     pub measure_timeout: Duration,
+    /// How long the measurer waits after the LAST observed tagged message
+    /// before deciding the run is done (as opposed to `measure_timeout`,
+    /// the hard overall backstop). See `crate::measurer::measure_stop_reason`.
+    pub measure_idle_timeout: Duration,
     /// `k` for the `neighbors` scenario's `GET semantic-neighbors?k=`.
     pub neighbors_k: usize,
     /// `cold-lane` scenario: candidate id to promote. `None` skips the
@@ -164,13 +169,23 @@ pub fn promote_body(family: &str, reason: &str) -> serde_json::Value {
 }
 
 /// Runs one scenario end to end: produce `cfg`'s stream onto the raw
-/// topic, measure the tagged topic for up to `cfg.measure_timeout`,
-/// optionally probe the management API, and fold the result into a
-/// [`ScenarioResult`]. Every failure mode (producer construction, the
-/// measurer erroring, a missing mgmt-API target) degrades to a `notes`
-/// entry rather than a panic or an `Err` — a benchmark run must always
-/// finish with a report, even a partial one, so the operator running it
-/// unattended on a k3s worker never gets nothing back.
+/// topic while CONCURRENTLY measuring the tagged topic, optionally probe
+/// the management API, and fold the result into a [`ScenarioResult`].
+/// Every failure mode (producer construction, the measurer erroring, a
+/// missing mgmt-API target) degrades to a `notes` entry rather than a
+/// panic or an `Err` — a benchmark run must always finish with a report,
+/// even a partial one, so the operator running it unattended on a k3s
+/// worker never gets nothing back.
+///
+/// The measurer is spawned FIRST and runs alongside `produce_stream`,
+/// rather than after it: a produce-then-consume ordering leaves every
+/// early-tagged message sitting in the topic, already tagged, until the
+/// whole produce loop finishes and the consumer even subscribes — which
+/// measures "how long the backlog waited," not real end-to-end tag
+/// latency (this was the smoke run's p50=40s exceeding its own 12s
+/// produce wall-time). Each run also gets a fresh, per-run consumer group
+/// id, so no earlier run's group state can ever cause this one to skip
+/// messages.
 pub async fn run_scenario(cfg: &ScenarioConfig) -> ScenarioResult {
     let mut notes = Vec::new();
 
@@ -181,6 +196,40 @@ pub async fn run_scenario(cfg: &ScenarioConfig) -> ScenarioResult {
             None
         }
     };
+
+    let group_id = format!("{}-{}", cfg.group_id, now_ns());
+    let measure_handle = {
+        let brokers = cfg.brokers.clone();
+        let tagged_topic = cfg.tagged_topic.clone();
+        // `cfg.count` (not `produce_stats.sent`, which doesn't exist yet
+        // since production hasn't run) is the measurer's target — it's
+        // known upfront and matches `build_stream`'s guaranteed output
+        // length (see `build_stream_for_synthetic_scenarios_honors_count`
+        // below). A shortfall from send errors still ends the run
+        // promptly via the idle timeout rather than waiting out the full
+        // deadline for messages that will never arrive.
+        let expected = cfg.count as u64;
+        let deadline = cfg.measure_timeout;
+        let idle_timeout = cfg.measure_idle_timeout;
+        tokio::spawn(async move {
+            measure_topic(
+                &brokers,
+                &group_id,
+                &tagged_topic,
+                expected,
+                deadline,
+                idle_timeout,
+            )
+            .await
+        })
+    };
+    // Yield once so the spawned measurer task gets a chance to actually
+    // start (build its consumer, subscribe, begin polling) before this
+    // task starts flooding the raw topic. Not a correctness requirement —
+    // a fresh, `earliest`-reset consumer group never skips messages
+    // regardless of exactly when it subscribes — just reduces how much of
+    // the earliest backlog gets read in a single post-hoc catch-up burst.
+    tokio::task::yield_now().await;
 
     let mut produce_stats = ProduceStats::default();
     if let Some(producer) = &producer {
@@ -195,21 +244,27 @@ pub async fn run_scenario(cfg: &ScenarioConfig) -> ScenarioResult {
         .await;
     }
 
-    let accumulator = match measure_topic(
-        &cfg.brokers,
-        &cfg.group_id,
-        &cfg.tagged_topic,
-        produce_stats.sent,
-        cfg.measure_timeout,
-    )
-    .await
-    {
-        Ok(acc) => acc,
-        Err(err) => {
+    let accumulator = match measure_handle.await {
+        Ok(Ok(acc)) => acc,
+        Ok(Err(err)) => {
             notes.push(format!("measurer failed: {err}"));
             MeasureAccumulator::default()
         }
+        Err(join_err) => {
+            notes.push(format!("measurer task panicked: {join_err}"));
+            MeasureAccumulator::default()
+        }
     };
+
+    if accumulator.received != produce_stats.sent {
+        notes.push(format!(
+            "measurer received {} of {} sent messages (--count was {}); see \
+             tagged_expected/tagged_received and tag_outcomes for detail — a \
+             mismatch after the idle timeout means either the run is still \
+             draining or some sent records never reached the tagged topic",
+            accumulator.received, produce_stats.sent, cfg.count
+        ));
+    }
 
     let probes = run_probes(cfg, &mut notes).await;
 
@@ -319,6 +374,7 @@ mod tests {
             rate: RateLimit::MaxThroughput,
             key_distribution: KeyDistribution::None,
             measure_timeout: Duration::from_secs(1),
+            measure_idle_timeout: Duration::from_millis(200),
             neighbors_k: 10,
             target_candidate_id: None,
             promote_family: "new".to_string(),
