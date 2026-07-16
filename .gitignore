@@ -3,6 +3,11 @@
 .env
 *.gguf
 
+# Python bytecode cache (Task 6: deploy/experiment/modal/trainer.py's
+# `py_compile` gate leaves these behind).
+__pycache__/
+*.pyc
+
 # Real experiment secrets (Task 5) — only the `.example.yaml` template with
 # placeholders is checked in; see deploy/experiment/README.md.
 deploy/experiment/35-experiment-secret.yaml

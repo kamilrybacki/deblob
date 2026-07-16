@@ -20,14 +20,22 @@
 //!
 //! - [`fake_backend`] — [`FakeBackend`], the deterministic in-process
 //!   backend EVERY test in this crate uses.
-//! - [`hf_jobs`] — [`HfJobsBackend`], the DEFAULT real backend (shells out
+//! - [`hf_jobs`] — [`HfJobsBackend`], the original real backend (shells out
 //!   to the `hf jobs` CLI), never invoked in this crate's test suite.
+//! - [`modal`] — [`modal::ModalBackend`], the CHOSEN arm-C real backend
+//!   (Modal T4 + the $30/mo free credit — the cheapest real-training
+//!   path): talks to a Modal web endpoint over HTTP+JSON, headless token
+//!   pair from env, never invoked in this crate's test suite except
+//!   against a mocked HTTP boundary (`wiremock`), never a live network
+//!   call.
 
 pub mod fake_backend;
 pub mod hf_jobs;
+pub mod modal;
 
 pub use fake_backend::FakeBackend;
 pub use hf_jobs::{HfJobsBackend, HfJobsConfig};
+pub use modal::{ModalBackend, ModalConfig, ModalCredentials};
 
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};

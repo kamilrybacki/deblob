@@ -127,8 +127,9 @@ Env-only, never baked into an image or ConfigMap:
 
 | Key | Purpose |
 |---|---|
-| `HF_TOKEN` | Authenticates the `hf` CLI itself, which `HfJobsBackend` (`crates/deblob-experiment/src/continual/training_job/hf_jobs.rs`) shells out to (`hf jobs run ...`) from the experiment Job's own pod, to submit/poll arm-C's remote fine-tune job. |
-| `FINE_TUNE_API_KEY` | Placeholder for a future non-HF-Jobs `TrainingBackend` (spec §8: "pluggable"). Unused today — leave as the placeholder value if you have no second backend. |
+| `MODAL_TOKEN_ID` / `MODAL_TOKEN_SECRET` | The CHOSEN arm-C backend's headless token pair — `ModalBackend` (`crates/deblob-experiment/src/continual/training_job/modal.rs`) reads exactly these two env vars (`ModalCredentials::from_env`) to authenticate its `/submit`/`/status` calls against `deploy/experiment/modal/trainer.py`'s deployed web endpoint. No browser flow at submit/poll time. |
+| `HF_TOKEN` | Authenticates the `hf` CLI itself, which `HfJobsBackend` (`crates/deblob-experiment/src/continual/training_job/hf_jobs.rs`) shells out to (`hf jobs run ...`) from the experiment Job's own pod — only needed if `backend = "hfjobs"` (the kept-working fallback; Modal is the default). |
+| `FINE_TUNE_API_KEY` | Placeholder for any future THIRD `TrainingBackend` (spec §8: "pluggable"). Unused today — leave as the placeholder value if you have no third backend. |
 
 Copy `35-experiment-secret.example.yaml` to `35-experiment-secret.yaml`
 (gitignored — see `/.gitignore`), fill in real values, `kubectl apply` it.
@@ -138,23 +139,28 @@ Never commit the filled-in file.
 
 Spec §7/§9: "no real GPU training inside the cluster ... the REMOTE
 fine-tune backend ... is pluggable ... the harness treats it as 'submit
-job -> receive gated quantized adapter'." Concretely: `HfJobsBackend`
-builds and shells out an `hf jobs run --flavor <hardware_flavor> --secrets
-<hf_token_secret_ref> ...` command from wherever
+job -> receive gated quantized adapter'." **Modal is the CHOSEN backend**
+(T4 GPUs + the ~$30/mo free credit, the cheapest real-training path — see
+`docs/experiment-setup-checklist.md` §3); `HfJobsBackend` is a config-swap
+sibling kept working. Concretely, with `backend = "modal"`:
+`ModalBackend::submit` POSTs the spec to `deploy/experiment/modal/
+trainer.py`'s deployed web endpoint (`/submit`) from wherever
 `TrainingBackendFineTuneHook::train` runs — in this deploy, that's the
 `deblob-experiment` Job's own pod, on a CPU-only worker. That pod:
 
-1. Submits the job (`hf jobs run ...`) — the actual training compute runs
-   on Hugging Face's infrastructure, not this cluster.
-2. Polls for completion.
+1. Submits the job over HTTP+JSON — the actual T4 training compute runs
+   on Modal's infrastructure, not this cluster.
+2. Polls `/status/{job_id}` for completion.
 3. Receives artifact **digests only** (never raw weights) — see
    `TRAINING_CHECKPOINT_KEY`/`QUANTIZED_WEIGHTS_KEY` in `training_job/mod.rs`.
 4. Hands those digests to `deblob::model_registry`'s existing statistical
    gate + two-stage canary — unchanged, no new promotion logic.
 
-`hardware_flavor` and `max_usd_ceiling`/`max_runtime_minutes` (the budget
-ceiling — a spec over the ceiling is rejected **before** any backend
-`submit` call, per `validate_budget` in `training_job/mod.rs`) are set in
+`modal_endpoint_base`/caching knobs and `max_usd_ceiling`/
+`max_runtime_minutes` (the budget ceiling — a spec over the ceiling is
+rejected **before** any backend `submit` call, enforced TWICE: once
+generically by `validate_budget` in `training_job/mod.rs`, and again
+inside `ModalBackend::submit` itself) are set in
 `30-experiment-config.yaml`'s `[continual.training_job]` section.
 `lw-main` and the control-plane node are never involved in any of this.
 

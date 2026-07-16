@@ -18,21 +18,22 @@ Model endpoints run **on the k3s workers, CPU-only** (no GPU needed for inferenc
   - **(c)** drop Needle from the roster and run the experiment on Granite/Qwen/FunctionGemma (fully supported today).
   - Recommendation: start with **(c)**, add Needle later via (a)/(b) — it doesn't block anything else.
 
-## 3. Remote fine-tune (arm C only) — 🟡 one account + one token
-Arm C's retrain round is the **only** thing that leaves the cluster (workers have no GPU; confirmed). It's a provider-neutral `TrainingJob`, default backend **HF Jobs**:
-- **Hugging Face account + Pro subscription** — HF Jobs requires Pro (~$9/mo). 🔴 (small recurring cost)
-- **HF write token** — generate at huggingface.co/settings/tokens, scope: write. 🟡
-- **An HF model repo** (private) for the trained adapter artifacts. 🟡
-- **Cost:** ~$0.067 per retrain round on a T4; **100 rounds ≈ $6.67**. A hard **$0.50/round budget ceiling is enforced in code** before any job is submitted.
+## 3. Remote fine-tune (arm C only) — 🟡 one account + one token pair
+Arm C's retrain round is the **only** thing that leaves the cluster (workers have no GPU; confirmed). It's a provider-neutral `TrainingJob`; **Modal is the chosen backend** — T4 GPUs + the free ~$30/mo starter credit is the cheapest *real*-training path (no paid subscription tier required):
+- **Create a Modal account** — modal.com, free signup, no card required to start. 🟢
+- **Generate a token pair** — modal.com → Settings → API Tokens → "New Token" gives you `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET`. Headless: the SAME pair authenticates both `modal deploy deploy/experiment/modal/trainer.py` (deploying the trainer app, one-time) and `ModalBackend`'s submit/poll calls at runtime — `ModalCredentials::from_env` reads exactly these two env vars, no browser login flow anywhere in the hook. 🟡
+- **Set a spend cap** — modal.com → Settings → Billing → usage limit, so nothing can exceed the free credit even if the code-side guard were ever bypassed. This is IN ADDITION to (not instead of) the code-side `max_usd_ceiling`/`max_runtime_minutes` guard, which is enforced TWICE: once by the generic hook (`validate_budget`), and again inside `ModalBackend::submit` itself before any network call is made.
+- **Deploy the trainer app once** — `modal deploy deploy/experiment/modal/trainer.py`; copy the printed web-endpoint URL into `30-experiment-config.yaml`'s `modal_endpoint_base`.
+- **Cost:** T4 is billed per-second; the free credit covers a substantial number of rounds for these tiny (270M–1.5B param) models. `trainer.py`'s module docstring documents the image + base-model-weight caching that keeps cold-start cost down (the single biggest avoidable per-round cost).
 - Only the arms A/B (deterministic + zero-shot SLM) need *none* of this — they run fully on-cluster today.
 
-### Optional alternatives (not required for the default path)
-- **Modal** (fallback backend) — 🟡 account, ~$30/mo starter credit covers many rounds. Add later, config-swap, no code change.
+### Kept working (not the default path)
+- **HF Jobs** (`HfJobsBackend`) — still config-selectable (`backend = "hfjobs"` in `30-experiment-config.yaml`) if you'd rather run on Hugging Face's infrastructure instead. Needs an HF account + Pro subscription (~$9/mo) + a write token; see the commented-out `hf_token_secret_ref`/`output_repo`/`hardware_flavor` keys in that same file and `HF_TOKEN` in the Secret template.
 - **Together / Fireworks** (managed fine-tune API) — 🔴 only worth it for a *Qwen-only* per-model experiment; **$4/job minimum makes them ~40–400× costlier than raw GPU** for these tiny models, and they can't cover Granite MoE or Needle. Skip unless you specifically want the Qwen managed comparison.
 
 ## 4. Secrets to create — 🟡
 Create the k8s Secret from the template (real file is gitignored):
-- `deploy/experiment/35-experiment-secret.example.yaml` → fill `HF_TOKEN` (+ any optional API keys) → apply as the real Secret, or route through Vault→sops→k8s per the homelab pattern.
+- `deploy/experiment/35-experiment-secret.example.yaml` → fill `MODAL_TOKEN_ID` + `MODAL_TOKEN_SECRET` (and `HF_TOKEN` only if using the `hfjobs` fallback, + any other optional keys) → apply as the real Secret, or route through Vault→sops→k8s per the homelab pattern.
 - **Never** put tokens in the ConfigMap or images — the manifests read them env-from-Secret only.
 
 ## 5. Repo push — 🟡 your go-ahead
@@ -41,4 +42,4 @@ Create the k8s Secret from the template (real file is gitignored):
 ## Minimum to run something real, today
 Arms **A0/A1/B0/B1/B2** on the **synthetic + GitHub/Wikimedia** corpora with **Granite + Qwen + FunctionGemma**, all on-cluster, need only step 2 (weights, mostly automatic). That already produces the headline **risk-vs-coverage at zero-false-merge** plot + the **B2 redundancy verdict** + the four-layer breakdown — i.e. the "does the SLM lane earn its keep" answer — **without any paid account**.
 
-Add step 3 (HF Pro + token) only when you want the **arm-C continual-learning trajectory** with real fine-tuning.
+Add step 3 (a free Modal account + token pair) only when you want the **arm-C continual-learning trajectory** with real fine-tuning.

@@ -1,10 +1,13 @@
-//! [`HfJobsBackend`] — the DEFAULT real remote [`TrainingBackend`] (spec
-//! §8): shells out to the `hf jobs` CLI. [`HfJobsBackend::build_command`]
-//! is real, tested argv construction; `submit`/`poll` are exercised by
-//! NOTHING in this crate's test suite (no live network/CLI in tests — spec:
-//! "NOT invoked in tests"). Wiring a real endpoint is a deploy-time concern
-//! (mirrors `deblob::retrain::ShellFineTuneHook`'s own real-shell-out
-//! pattern, at arm's length via `tokio::process::Command`).
+//! [`HfJobsBackend`] — an alternative real remote [`TrainingBackend`] (spec
+//! §8): shells out to the `hf jobs` CLI. Superseded as arm C's CHOSEN
+//! backend by `super::modal::ModalBackend` (Modal T4 + the $30/mo free
+//! credit is the cheaper real-training path), but kept working and
+//! config-selectable — `HfJobsBackend::build_command` is real, tested
+//! argv construction; `submit`/`poll` are exercised by NOTHING in this
+//! crate's test suite (no live network/CLI in tests — spec: "NOT invoked
+//! in tests"). Wiring a real endpoint is a deploy-time concern (mirrors
+//! `deblob::retrain::ShellFineTuneHook`'s own real-shell-out pattern, at
+//! arm's length via `tokio::process::Command`).
 
 use async_trait::async_trait;
 
