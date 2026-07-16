@@ -1,0 +1,231 @@
+loaded 25 golden corpus case(s) from crates/deblob-eval/corpus
+scoring endpoint model="granite3.1-moe:1b" (token configured, not logged)...
+
+=== retrieval-k = 1 ===
+=== Deblob SLM Eval Report ===
+Total cases: 25
+
+--- HEADLINE (go/no-go gates; Hermes' Task 5 review) ---
+Wrong-valid rate:                          4.00%  (1/25 cases)
+                    schema-valid (parsed + contract-conformant) BUT semantically WRONG.
+                    Tracked SEPARATELY from schema-valid rate below — a high schema-valid rate
+                    can never mask this number. Go-live gate: ≤ 0.5%.
+False-merge rate:                          0.00%  (0/5 false-merge-trap cases)
+                    an ACCEPTED match to the WRONG family. Hermes' HARD go-live gate: ZERO
+                    false merges — false merges corrupt identity; false splits (below) merely
+                    reduce coverage and are repairable.
+False-split rate:                        100.00%  (6/6 false-split-trap cases)
+
+--- Parse / schema-valid / semantic correctness ---
+JSON parse rate:            4.00%
+Schema-valid rate:          4.00%  (NOT a success criterion on its own)
+Exact semantic accuracy:    12.00%
+Decision-choice accuracy:   28.00%
+
+--- Abstention ---
+Precision: 28.00%   Recall: 100.00%
+
+--- Id-constraint ---
+Violations (schema_id outside retrieved top-k): 0
+
+--- Retrieval quality ---
+recall@1: 69.23%   recall@3: 92.31%   recall@5: 92.31%   MRR: 0.7949
+
+--- Relation confusion (expected relation x actual relation, match cases) ---
+  expected=Exact actual=NOT-A-MATCH count=3
+  expected=CompatibleDrift actual=NOT-A-MATCH count=9
+  expected=IncompatibleSimilarity actual=NOT-A-MATCH count=3
+
+--- Novel family ---
+Recall: 0.00%   Precision: n/a (no supporting cases in this run)
+
+--- Gold-absent abstention ---
+Rate: 0.00%
+
+--- Per-category worst-slice precision ---
+  KnownExact: 0.00% (n=3)
+  CompatibleDrift: 0.00% (n=9)
+  IncompatibleUnsafe: 0.00% (n=3)
+  NewFamily: 0.00% (n=3)
+  AmbiguousAdversarial: 42.86% (n=7)
+  WORST SLICE: 0.00% (KnownExact)
+
+--- Prompt-injection resistance ---
+50.00%  (2 injection-flagged case(s) in this run)
+
+--- Repair ---
+Repair rate: 96.00%   Repair success rate: 0.00%   Repairs/accepted: n/a
+
+--- Failure classes ---
+Timeout: 0.00%   Provider-error: 0.00%   Malformed: 96.00%   Refusal: n/a (no supporting cases in this run)
+
+--- Latency ---
+TTFT p50/p95: 8954ms / 10881ms   Total p50/p95: 8954ms / 10881ms
+Prefill p50: n/a   Decode p50: n/a
+
+--- Tokens / cost ---
+avg request tokens: 503.2   avg response tokens: 18.5   cost: n/a
+
+--- Cache / invocation-avoidance ---
+Cache-hit rate: 4.00%
+
+--- Multi-run (filled only if the caller ran a second pass) ---
+Candidate-order sensitivity: n/a (no supporting cases in this run)   Repeatability: n/a (no supporting cases in this run)
+
+--- Deferred (no supporting data in this eval harness; see metrics.rs docs) ---
+  redaction_induced_accuracy_loss, human_label_iaa, counterfactual_unsafe_acceptance_rate: need data outside the golden corpus schema (paired raw/redacted cases, a second human labeler, and the Task 5 shadow log's counterfactual_live_disposition field, respectively).
+  refusal_rate, prefill/decode latency split, cost: no distinguishable signal / no streaming support / no pricing table wired into this harness.
+  prompt/model/quant regression delta: needs a SECOND Metrics run — see crate::metrics::regression_delta.
+
+=== retrieval-k = 3 ===
+=== Deblob SLM Eval Report ===
+Total cases: 25
+
+--- HEADLINE (go/no-go gates; Hermes' Task 5 review) ---
+Wrong-valid rate:                         56.00%  (14/25 cases)
+                    schema-valid (parsed + contract-conformant) BUT semantically WRONG.
+                    Tracked SEPARATELY from schema-valid rate below — a high schema-valid rate
+                    can never mask this number. Go-live gate: ≤ 0.5%.
+False-merge rate:                          0.00%  (0/5 false-merge-trap cases)
+                    an ACCEPTED match to the WRONG family. Hermes' HARD go-live gate: ZERO
+                    false merges — false merges corrupt identity; false splits (below) merely
+                    reduce coverage and are repairable.
+False-split rate:                        100.00%  (6/6 false-split-trap cases)
+
+--- Parse / schema-valid / semantic correctness ---
+JSON parse rate:            64.00%
+Schema-valid rate:          64.00%  (NOT a success criterion on its own)
+Exact semantic accuracy:    12.00%
+Decision-choice accuracy:   28.00%
+
+--- Abstention ---
+Precision: 28.00%   Recall: 100.00%
+
+--- Id-constraint ---
+Violations (schema_id outside retrieved top-k): 0
+
+--- Retrieval quality ---
+recall@1: 69.23%   recall@3: 92.31%   recall@5: 92.31%   MRR: 0.7949
+
+--- Relation confusion (expected relation x actual relation, match cases) ---
+  expected=Exact actual=NOT-A-MATCH count=3
+  expected=CompatibleDrift actual=NOT-A-MATCH count=9
+  expected=IncompatibleSimilarity actual=NOT-A-MATCH count=3
+
+--- Novel family ---
+Recall: 0.00%   Precision: n/a (no supporting cases in this run)
+
+--- Gold-absent abstention ---
+Rate: 0.00%
+
+--- Per-category worst-slice precision ---
+  KnownExact: 0.00% (n=3)
+  CompatibleDrift: 0.00% (n=9)
+  IncompatibleUnsafe: 0.00% (n=3)
+  NewFamily: 0.00% (n=3)
+  AmbiguousAdversarial: 42.86% (n=7)
+  WORST SLICE: 0.00% (KnownExact)
+
+--- Prompt-injection resistance ---
+50.00%  (2 injection-flagged case(s) in this run)
+
+--- Repair ---
+Repair rate: 36.00%   Repair success rate: 0.00%   Repairs/accepted: n/a
+
+--- Failure classes ---
+Timeout: 0.00%   Provider-error: 0.00%   Malformed: 36.00%   Refusal: n/a (no supporting cases in this run)
+
+--- Latency ---
+TTFT p50/p95: 10712ms / 14963ms   Total p50/p95: 10712ms / 14963ms
+Prefill p50: n/a   Decode p50: n/a
+
+--- Tokens / cost ---
+avg request tokens: 589.8   avg response tokens: 16.3   cost: n/a
+
+--- Cache / invocation-avoidance ---
+Cache-hit rate: 64.00%
+
+--- Multi-run (filled only if the caller ran a second pass) ---
+Candidate-order sensitivity: n/a (no supporting cases in this run)   Repeatability: n/a (no supporting cases in this run)
+
+--- Deferred (no supporting data in this eval harness; see metrics.rs docs) ---
+  redaction_induced_accuracy_loss, human_label_iaa, counterfactual_unsafe_acceptance_rate: need data outside the golden corpus schema (paired raw/redacted cases, a second human labeler, and the Task 5 shadow log's counterfactual_live_disposition field, respectively).
+  refusal_rate, prefill/decode latency split, cost: no distinguishable signal / no streaming support / no pricing table wired into this harness.
+  prompt/model/quant regression delta: needs a SECOND Metrics run — see crate::metrics::regression_delta.
+
+=== retrieval-k = 5 ===
+=== Deblob SLM Eval Report ===
+Total cases: 25
+
+--- HEADLINE (go/no-go gates; Hermes' Task 5 review) ---
+Wrong-valid rate:                         88.00%  (22/25 cases)
+                    schema-valid (parsed + contract-conformant) BUT semantically WRONG.
+                    Tracked SEPARATELY from schema-valid rate below — a high schema-valid rate
+                    can never mask this number. Go-live gate: ≤ 0.5%.
+False-merge rate:                          0.00%  (0/5 false-merge-trap cases)
+                    an ACCEPTED match to the WRONG family. Hermes' HARD go-live gate: ZERO
+                    false merges — false merges corrupt identity; false splits (below) merely
+                    reduce coverage and are repairable.
+False-split rate:                        100.00%  (6/6 false-split-trap cases)
+
+--- Parse / schema-valid / semantic correctness ---
+JSON parse rate:            100.00%
+Schema-valid rate:          100.00%  (NOT a success criterion on its own)
+Exact semantic accuracy:    12.00%
+Decision-choice accuracy:   28.00%
+
+--- Abstention ---
+Precision: 28.00%   Recall: 100.00%
+
+--- Id-constraint ---
+Violations (schema_id outside retrieved top-k): 0
+
+--- Retrieval quality ---
+recall@1: 69.23%   recall@3: 92.31%   recall@5: 92.31%   MRR: 0.7949
+
+--- Relation confusion (expected relation x actual relation, match cases) ---
+  expected=Exact actual=NOT-A-MATCH count=3
+  expected=CompatibleDrift actual=NOT-A-MATCH count=9
+  expected=IncompatibleSimilarity actual=NOT-A-MATCH count=3
+
+--- Novel family ---
+Recall: 0.00%   Precision: n/a (no supporting cases in this run)
+
+--- Gold-absent abstention ---
+Rate: 0.00%
+
+--- Per-category worst-slice precision ---
+  KnownExact: 0.00% (n=3)
+  CompatibleDrift: 0.00% (n=9)
+  IncompatibleUnsafe: 0.00% (n=3)
+  NewFamily: 0.00% (n=3)
+  AmbiguousAdversarial: 42.86% (n=7)
+  WORST SLICE: 0.00% (KnownExact)
+
+--- Prompt-injection resistance ---
+50.00%  (2 injection-flagged case(s) in this run)
+
+--- Repair ---
+Repair rate: 0.00%   Repair success rate: n/a (no supporting cases in this run)   Repairs/accepted: n/a
+
+--- Failure classes ---
+Timeout: 0.00%   Provider-error: 0.00%   Malformed: 0.00%   Refusal: n/a (no supporting cases in this run)
+
+--- Latency ---
+TTFT p50/p95: n/a / n/a   Total p50/p95: n/a / n/a
+Prefill p50: n/a   Decode p50: n/a
+
+--- Tokens / cost ---
+avg request tokens: n/a   avg response tokens: n/a   cost: n/a
+
+--- Cache / invocation-avoidance ---
+Cache-hit rate: 100.00%
+
+--- Multi-run (filled only if the caller ran a second pass) ---
+Candidate-order sensitivity: n/a (no supporting cases in this run)   Repeatability: n/a (no supporting cases in this run)
+
+--- Deferred (no supporting data in this eval harness; see metrics.rs docs) ---
+  redaction_induced_accuracy_loss, human_label_iaa, counterfactual_unsafe_acceptance_rate: need data outside the golden corpus schema (paired raw/redacted cases, a second human labeler, and the Task 5 shadow log's counterfactual_live_disposition field, respectively).
+  refusal_rate, prefill/decode latency split, cost: no distinguishable signal / no streaming support / no pricing table wired into this harness.
+  prompt/model/quant regression delta: needs a SECOND Metrics run — see crate::metrics::regression_delta.
+
