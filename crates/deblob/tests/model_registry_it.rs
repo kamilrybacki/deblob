@@ -1,25 +1,34 @@
 //! `RedisModelRegistry` against a REAL Redis (Docker via testcontainers) —
 //! mirrors `crates/deblob-redis/tests/registry_it.rs`'s setup. Proves the
-//! governed, gated model-promotion invariant (spec:
-//! `docs/superpowers/specs/2026-07-16-slm-continual-learning.md` §4):
+//! governed, gated model-promotion invariants (spec:
+//! `docs/superpowers/specs/2026-07-16-slm-continual-learning.md` §4,
+//! §B6-B8, §B11):
 //!
-//!   - a candidate with `false_merge_rate > 0` is NEVER promoted (audited
+//!   - a candidate with `false_merge_count > 0` is NEVER promoted (audited
 //!     `Rejected`, active pointer untouched);
-//!   - a candidate that passes the gate AND improves on the current active
-//!     IS promoted;
-//!   - a candidate WORSE than the current active is rejected even though it
-//!     independently passes the gate's own thresholds;
-//!   - `rollback` restores the prior active, and the promoted-then-rolled-
-//!     back model is marked `RolledBack`.
+//!   - `attach_evidence` alone NEVER produces `Active` — only
+//!     `ShadowCandidate` (pass) or `Rejected` (fail) — spec §B7/§B11;
+//!   - `promote` is a SEPARATE action: it requires the candidate to
+//!     already be `ShadowCandidate`, an attached evidence bundle, and (per
+//!     `GateConfig::require_explicit_approval`) an explicit approval —
+//!     without approval it is refused even though the candidate already
+//!     passed its offline gate;
+//!   - a candidate WORSE than the current active is rejected by
+//!     `attach_evidence` even though it independently passes the gate's
+//!     own thresholds;
+//!   - `rollback` restores the prior active's WHOLE artifact bundle (spec
+//!     §B8) — not just a digest — and marks the superseded model
+//!     `RolledBack`.
 
 use deblob::model_registry::{
-    EvalMetricsSummary, GoLiveGate, ModelRegistry, ModelState, ModelVersion, PromotionOutcome,
-    RedisModelRegistry,
+    ArtifactBundle, FamilySlice, GateConfig, GateDecision, GateEvidence, ModelRegistry, ModelState,
+    ModelVersion, PromotionApproval, TrainedFrom,
 };
+use deblob_core::id::FamilyId;
 use testcontainers_modules::{redis::Redis, testcontainers::runners::AsyncRunner};
 
 async fn connect() -> (
-    RedisModelRegistry,
+    deblob::model_registry::RedisModelRegistry,
     testcontainers_modules::testcontainers::ContainerAsync<Redis>,
 ) {
     let node = Redis::default().start().await.unwrap();
@@ -27,67 +36,133 @@ async fn connect() -> (
         "redis://127.0.0.1:{}",
         node.get_host_port_ipv4(6379).await.unwrap()
     );
-    let registry = RedisModelRegistry::connect(&url).await.unwrap();
+    let registry = deblob::model_registry::RedisModelRegistry::connect(&url)
+        .await
+        .unwrap();
     (registry, node)
 }
 
-fn metrics(
-    false_merge_rate: Option<f64>,
-    wrong_valid_rate: f64,
-    accepted_precision: f64,
-    exact_semantic_accuracy: f64,
-) -> EvalMetricsSummary {
-    EvalMetricsSummary {
-        total_cases: 200,
-        false_merge_rate,
-        wrong_valid_rate,
-        accepted_precision,
-        exact_semantic_accuracy,
+/// Permissive gate for IT plumbing tests — the gate MATH itself is
+/// exhaustively unit-tested in `deblob::model_registry`; these tests only
+/// need it to actually pass/fail predictably over a tiny synthetic
+/// evidence bundle.
+fn test_gate() -> GateConfig {
+    GateConfig {
+        min_test_n: 1,
+        per_family_min_n: 1,
+        per_family_precision_floor: 0.0,
+        max_false_merge_upper_ci: 1.0,
+        min_shadow_hold_ms: 0,
+        ..GateConfig::default()
     }
 }
 
-fn version(id: &str, eval_metrics: EvalMetricsSummary, recorded_at: i64) -> ModelVersion {
+fn evidence(
+    false_merge_count: usize,
+    false_merge_trap_count: usize,
+    wrong_valid_rate: f64,
+    accepted_precision: f64,
+    exact_semantic_accuracy: f64,
+) -> GateEvidence {
+    GateEvidence {
+        aggregate: deblob::model_registry::EvalMetricsSummary {
+            total_cases: 200,
+            false_merge_rate: if false_merge_trap_count > 0 {
+                Some(false_merge_count as f64 / false_merge_trap_count as f64)
+            } else {
+                None
+            },
+            false_merge_count,
+            false_merge_trap_count,
+            wrong_valid_rate,
+            accepted_precision,
+            exact_semantic_accuracy,
+            oracle_retrieval_exact_accuracy: Some(exact_semantic_accuracy),
+            retrieval_recall_at_5: Some(0.99),
+        },
+        per_family: vec![],
+        false_merge_upper_ci: if false_merge_trap_count > 0 {
+            Some(false_merge_count as f64 / false_merge_trap_count as f64)
+        } else {
+            None
+        },
+        computed_at: 0,
+    }
+}
+
+fn bundle(weights_digest: &str) -> ArtifactBundle {
+    ArtifactBundle {
+        weights_digest: weights_digest.to_string(),
+        tokenizer: "tok-v1".to_string(),
+        prompt_template_version: "prompt-v1".to_string(),
+        runtime: "vllm-0.9".to_string(),
+        quantization: "int8".to_string(),
+        retrieval_index_version: "idx-v1".to_string(),
+        grammar: "grammar-v1".to_string(),
+        catalog: "catalog-v1".to_string(),
+    }
+}
+
+fn version(id: &str, recorded_at: i64) -> ModelVersion {
     ModelVersion {
         model_id: id.to_string(),
-        digest: format!("sha256:{id}"),
-        trained_from: "feedback+synthetic seed".to_string(),
-        eval_metrics,
+        bundle: bundle(&format!("sha256:quant-{id}")),
+        training_checkpoint_digest: format!("sha256:ckpt-{id}"),
+        trained_from: TrainedFrom {
+            base_snapshot_id: "base-snapshot-v0".to_string(),
+            feedback_cursor: "feedback_examples=0".to_string(),
+            corpus_seed: "synthetic_train_cases=1 synthetic_holdout_cases=1".to_string(),
+        },
+        evidence: None,
         recorded_at,
+        shadow_since: None,
         state: ModelState::Candidate,
+    }
+}
+
+fn approved(actor: &str) -> PromotionApproval {
+    PromotionApproval {
+        approved: true,
+        actor: actor.to_string(),
     }
 }
 
 #[tokio::test]
 async fn a_candidate_with_any_false_merge_is_never_promoted() {
     let (registry, _node) = connect().await;
-    let gate = GoLiveGate::default();
+    let gate = test_gate();
 
-    let candidate = version(
-        "model-false-merge",
-        metrics(Some(0.001), 0.001, 0.999, 0.95),
-        1000,
-    );
+    let candidate = version("model-false-merge", 1000);
     registry
         .register_candidate(candidate.clone())
         .await
         .unwrap();
 
-    let outcome = registry.promote_if_gated(candidate, &gate).await.unwrap();
+    let decision = registry
+        .attach_evidence(
+            "model-false-merge",
+            evidence(1, 200, 0.001, 0.999, 0.95),
+            &gate,
+        )
+        .await
+        .unwrap();
 
-    match outcome {
-        PromotionOutcome::Rejected { reasons, candidate } => {
+    match decision {
+        GateDecision::Rejected { reasons, candidate } => {
             assert!(
-                reasons.iter().any(|r| r.contains("false_merge_rate")),
+                reasons.iter().any(|r| r.contains("false_merge_count")),
                 "expected a false-merge gate reason, got {reasons:?}"
             );
             assert_eq!(candidate.state, ModelState::Rejected);
         }
-        other => panic!("a false-merging candidate must never be Promoted, got {other:?}"),
+        other => {
+            panic!("a false-merging candidate must never enter ShadowCandidate, got {other:?}")
+        }
     }
 
     assert!(
         registry.get_active().await.unwrap().is_none(),
-        "the active pointer must remain untouched by a rejected promotion"
+        "the active pointer must remain untouched by a rejected evidence attachment"
     );
 
     // Audited: the rejection is visible in history with the Rejected state.
@@ -99,35 +174,157 @@ async fn a_candidate_with_any_false_merge_is_never_promoted() {
     assert_eq!(recorded.state, ModelState::Rejected);
 }
 
+/// Spec §B7/§B11 — the headline separation-of-duties + two-stage-canary
+/// invariant: `attach_evidence` passing the offline gate produces
+/// `ShadowCandidate`, NEVER `Active`. Only a SEPARATE, explicitly
+/// approved `promote` call ever moves the active alias.
+#[tokio::test]
+async fn attach_evidence_passing_the_gate_yields_shadow_candidate_never_directly_active() {
+    let (registry, _node) = connect().await;
+    let gate = test_gate();
+
+    let candidate = version("model-shadow", 1000);
+    registry.register_candidate(candidate).await.unwrap();
+
+    let decision = registry
+        .attach_evidence("model-shadow", evidence(0, 200, 0.001, 0.999, 0.95), &gate)
+        .await
+        .unwrap();
+
+    match decision {
+        GateDecision::EnteredShadow(v) => {
+            assert_eq!(v.state, ModelState::ShadowCandidate);
+            assert!(v.evidence.is_some(), "evidence must be attached");
+            assert!(v.shadow_since.is_some());
+        }
+        other => panic!("expected EnteredShadow, got {other:?}"),
+    }
+
+    assert!(
+        registry.get_active().await.unwrap().is_none(),
+        "passing the offline gate alone must never activate the candidate"
+    );
+    let stored = registry.get("model-shadow").await.unwrap().unwrap();
+    assert_eq!(stored.state, ModelState::ShadowCandidate);
+
+    // The SEPARATE, explicitly-approved promote call is what actually
+    // moves the alias.
+    let promoted = registry
+        .promote("model-shadow", approved("ops:kamil"), &gate)
+        .await
+        .unwrap();
+    assert_eq!(promoted.state, ModelState::Active);
+    assert_eq!(
+        registry.get_active().await.unwrap().unwrap().model_id,
+        "model-shadow"
+    );
+}
+
+/// Spec §B7: `promote` requires an explicit approval when
+/// `GateConfig::require_explicit_approval` is set — even for a candidate
+/// that already passed the offline gate and is sitting in
+/// `ShadowCandidate`.
+#[tokio::test]
+async fn promote_without_explicit_approval_is_refused_even_after_the_gate_passed() {
+    let (registry, _node) = connect().await;
+    let gate = test_gate();
+    assert!(gate.require_explicit_approval);
+
+    let candidate = version("model-needs-approval", 1000);
+    registry.register_candidate(candidate).await.unwrap();
+    let decision = registry
+        .attach_evidence(
+            "model-needs-approval",
+            evidence(0, 200, 0.001, 0.999, 0.95),
+            &gate,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(decision, GateDecision::EnteredShadow(_)));
+
+    let err = registry
+        .promote(
+            "model-needs-approval",
+            PromotionApproval {
+                approved: false,
+                actor: "ops:kamil".to_string(),
+            },
+            &gate,
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        deblob_core::error::CoreError::PolicyRejected(_)
+    ));
+    assert!(
+        registry.get_active().await.unwrap().is_none(),
+        "an unapproved promote must never move the active alias"
+    );
+}
+
+/// Spec §B7: `promote` refuses a candidate that never went through
+/// `attach_evidence` at all — it must still be `Candidate`, not
+/// `ShadowCandidate`.
+#[tokio::test]
+async fn promote_refuses_a_bare_candidate_that_never_passed_attach_evidence() {
+    let (registry, _node) = connect().await;
+    let gate = test_gate();
+
+    let candidate = version("model-bare", 1000);
+    registry.register_candidate(candidate).await.unwrap();
+
+    let err = registry
+        .promote("model-bare", approved("ops:kamil"), &gate)
+        .await
+        .unwrap_err();
+    assert!(matches!(err, deblob_core::error::CoreError::Conflict(_)));
+    assert!(registry.get_active().await.unwrap().is_none());
+}
+
 #[tokio::test]
 async fn a_candidate_that_passes_the_gate_and_improves_is_promoted() {
     let (registry, _node) = connect().await;
-    let gate = GoLiveGate::default();
+    let gate = test_gate();
 
-    // No active model yet: a gate-passing candidate is promoted
-    // unconditionally (nothing to regress against).
-    let first = version("model-first", metrics(Some(0.0), 0.001, 0.999, 0.9), 1000);
-    registry.register_candidate(first.clone()).await.unwrap();
-    let outcome = registry.promote_if_gated(first, &gate).await.unwrap();
-    assert!(matches!(outcome, PromotionOutcome::Promoted(_)));
+    // No active model yet: a gate-passing candidate reaches
+    // ShadowCandidate unconditionally (nothing to regress against), then
+    // is explicitly promoted.
+    let first = version("model-first", 1000);
+    registry.register_candidate(first).await.unwrap();
+    let decision = registry
+        .attach_evidence("model-first", evidence(0, 200, 0.001, 0.999, 0.9), &gate)
+        .await
+        .unwrap();
+    assert!(matches!(decision, GateDecision::EnteredShadow(_)));
+    registry
+        .promote("model-first", approved("ops:kamil"), &gate)
+        .await
+        .unwrap();
     assert_eq!(
         registry.get_active().await.unwrap().unwrap().model_id,
         "model-first"
     );
 
     // A second candidate that BOTH passes the gate and improves on the
-    // first must be promoted, displacing the first as active.
-    let second = version(
-        "model-second",
-        metrics(Some(0.0), 0.0005, 0.9995, 0.95),
-        2000,
-    );
-    registry.register_candidate(second.clone()).await.unwrap();
-    let outcome = registry.promote_if_gated(second, &gate).await.unwrap();
-    match outcome {
-        PromotionOutcome::Promoted(v) => assert_eq!(v.model_id, "model-second"),
-        other => panic!("expected Promoted, got {other:?}"),
-    }
+    // first must reach ShadowCandidate and then, on promote, displace the
+    // first as active.
+    let second = version("model-second", 2000);
+    registry.register_candidate(second).await.unwrap();
+    let decision = registry
+        .attach_evidence(
+            "model-second",
+            evidence(0, 200, 0.0005, 0.9995, 0.95),
+            &gate,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(decision, GateDecision::EnteredShadow(_)));
+    let promoted = registry
+        .promote("model-second", approved("ops:kamil"), &gate)
+        .await
+        .unwrap();
+    assert_eq!(promoted.model_id, "model-second");
     assert_eq!(
         registry.get_active().await.unwrap().unwrap().model_id,
         "model-second"
@@ -137,23 +334,33 @@ async fn a_candidate_that_passes_the_gate_and_improves_is_promoted() {
 #[tokio::test]
 async fn a_candidate_worse_than_the_active_model_is_rejected_even_if_it_passes_the_gate_alone() {
     let (registry, _node) = connect().await;
-    let gate = GoLiveGate::default();
+    let gate = test_gate();
 
-    let active = version("model-active", metrics(Some(0.0), 0.001, 0.999, 0.9), 1000);
-    registry.register_candidate(active.clone()).await.unwrap();
-    let outcome = registry.promote_if_gated(active, &gate).await.unwrap();
-    assert!(matches!(outcome, PromotionOutcome::Promoted(_)));
+    let active = version("model-active", 1000);
+    registry.register_candidate(active).await.unwrap();
+    let decision = registry
+        .attach_evidence("model-active", evidence(0, 200, 0.001, 0.999, 0.9), &gate)
+        .await
+        .unwrap();
+    assert!(matches!(decision, GateDecision::EnteredShadow(_)));
+    registry
+        .promote("model-active", approved("ops:kamil"), &gate)
+        .await
+        .unwrap();
 
     // This candidate independently PASSES the go-live gate thresholds
     // (wrong_valid_rate/accepted_precision both comfortably inside the
     // default bounds) but has LOWER exact_semantic_accuracy than the
     // active model — it must still be rejected as a regression.
-    let worse = version("model-worse", metrics(Some(0.0), 0.001, 0.999, 0.5), 2000);
-    registry.register_candidate(worse.clone()).await.unwrap();
-    let outcome = registry.promote_if_gated(worse, &gate).await.unwrap();
+    let worse = version("model-worse", 2000);
+    registry.register_candidate(worse).await.unwrap();
+    let decision = registry
+        .attach_evidence("model-worse", evidence(0, 200, 0.001, 0.999, 0.5), &gate)
+        .await
+        .unwrap();
 
-    match outcome {
-        PromotionOutcome::Rejected { reasons, .. } => {
+    match decision {
+        GateDecision::Rejected { reasons, .. } => {
             assert!(
                 reasons
                     .iter()
@@ -161,7 +368,7 @@ async fn a_candidate_worse_than_the_active_model_is_rejected_even_if_it_passes_t
                 "expected a regression reason, got {reasons:?}"
             );
         }
-        other => panic!("a regressing candidate must never be Promoted, got {other:?}"),
+        other => panic!("a regressing candidate must never enter ShadowCandidate, got {other:?}"),
     }
 
     assert_eq!(
@@ -171,38 +378,162 @@ async fn a_candidate_worse_than_the_active_model_is_rejected_even_if_it_passes_t
     );
 }
 
+/// Spec §B6 acceptance: a candidate that passes every AGGREGATE number
+/// but regresses a per-family slice below the floor (with sufficient N)
+/// must be rejected by `attach_evidence`.
 #[tokio::test]
-async fn rollback_restores_the_prior_active_and_marks_the_current_one_rolled_back() {
+async fn a_candidate_passing_aggregate_but_failing_a_per_family_slice_is_rejected() {
     let (registry, _node) = connect().await;
-    let gate = GoLiveGate::default();
+    let gate = GateConfig {
+        per_family_min_n: 10,
+        per_family_precision_floor: 0.99,
+        min_test_n: 1,
+        max_false_merge_upper_ci: 1.0,
+        min_shadow_hold_ms: 0,
+        ..GateConfig::default()
+    };
 
-    let first = version(
-        "model-rb-first",
-        metrics(Some(0.0), 0.001, 0.999, 0.9),
-        1000,
-    );
+    let candidate = version("model-slice-bad", 1000);
+    registry.register_candidate(candidate).await.unwrap();
+
+    let mut ev = evidence(0, 0, 0.001, 0.999, 0.95); // strong aggregate
+    ev.per_family = vec![FamilySlice {
+        family_id: FamilyId::new_v7(),
+        n: 50,
+        correct: 20, // 40% precision, well under the floor, plenty of N
+        precision: 0.4,
+    }];
+
+    let decision = registry
+        .attach_evidence("model-slice-bad", ev, &gate)
+        .await
+        .unwrap();
+    match decision {
+        GateDecision::Rejected { reasons, .. } => {
+            assert!(
+                reasons.iter().any(|r| r.contains("family")),
+                "expected a per-family rejection reason, got {reasons:?}"
+            );
+        }
+        other => panic!("expected Rejected on a bad per-family slice, got {other:?}"),
+    }
+}
+
+/// Spec §B6 acceptance: a candidate below `min_test_n` is inconclusive —
+/// not promotable — even with otherwise-perfect metrics.
+#[tokio::test]
+async fn a_candidate_below_min_test_n_is_inconclusive_not_promotable() {
+    let (registry, _node) = connect().await;
+    let gate = GateConfig {
+        min_test_n: 500,
+        max_false_merge_upper_ci: 1.0,
+        per_family_min_n: 1,
+        per_family_precision_floor: 0.0,
+        min_shadow_hold_ms: 0,
+        ..GateConfig::default()
+    };
+
+    let candidate = version("model-too-small", 1000);
+    registry.register_candidate(candidate).await.unwrap();
+    let mut ev = evidence(0, 0, 0.0, 1.0, 1.0);
+    ev.aggregate.total_cases = 50; // below min_test_n
+
+    let decision = registry
+        .attach_evidence("model-too-small", ev, &gate)
+        .await
+        .unwrap();
+    match decision {
+        GateDecision::Rejected { reasons, candidate } => {
+            assert!(
+                reasons.iter().any(|r| r.contains("INCONCLUSIVE")),
+                "expected an inconclusive reason, got {reasons:?}"
+            );
+            assert_eq!(candidate.state, ModelState::Rejected);
+        }
+        other => panic!("expected Rejected (inconclusive), got {other:?}"),
+    }
+}
+
+/// Spec §B8 acceptance: `rollback` restores the WHOLE artifact bundle
+/// (weights + tokenizer + prompt template + runtime + quantization +
+/// retrieval index + grammar + catalog) — not just a weights digest.
+#[tokio::test]
+async fn rollback_restores_the_whole_composite_artifact_bundle() {
+    let (registry, _node) = connect().await;
+    let gate = test_gate();
+
+    let mut first = version("model-rb-first", 1000);
+    first.bundle = ArtifactBundle {
+        weights_digest: "sha256:quant-v1".to_string(),
+        tokenizer: "tok-v1".to_string(),
+        prompt_template_version: "prompt-v1".to_string(),
+        runtime: "vllm-0.9".to_string(),
+        quantization: "int8".to_string(),
+        retrieval_index_version: "idx-v1".to_string(),
+        grammar: "grammar-v1".to_string(),
+        catalog: "catalog-v1".to_string(),
+    };
     registry.register_candidate(first.clone()).await.unwrap();
-    registry.promote_if_gated(first, &gate).await.unwrap();
+    let decision = registry
+        .attach_evidence("model-rb-first", evidence(0, 200, 0.001, 0.999, 0.9), &gate)
+        .await
+        .unwrap();
+    assert!(matches!(decision, GateDecision::EnteredShadow(_)));
+    registry
+        .promote("model-rb-first", approved("ops:kamil"), &gate)
+        .await
+        .unwrap();
 
-    let second = version(
-        "model-rb-second",
-        metrics(Some(0.0), 0.0005, 0.9995, 0.95),
-        2000,
-    );
+    let mut second = version("model-rb-second", 2000);
+    second.bundle = ArtifactBundle {
+        weights_digest: "sha256:quant-v2".to_string(),
+        tokenizer: "tok-v2".to_string(), // a DIFFERENT tokenizer than v1
+        prompt_template_version: "prompt-v2".to_string(),
+        runtime: "vllm-0.10".to_string(),
+        quantization: "int4".to_string(),
+        retrieval_index_version: "idx-v2".to_string(),
+        grammar: "grammar-v2".to_string(),
+        catalog: "catalog-v2".to_string(),
+    };
     registry.register_candidate(second.clone()).await.unwrap();
-    let outcome = registry.promote_if_gated(second, &gate).await.unwrap();
-    assert!(matches!(outcome, PromotionOutcome::Promoted(_)));
+    let decision = registry
+        .attach_evidence(
+            "model-rb-second",
+            evidence(0, 200, 0.0005, 0.9995, 0.95),
+            &gate,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(decision, GateDecision::EnteredShadow(_)));
+    registry
+        .promote("model-rb-second", approved("ops:kamil"), &gate)
+        .await
+        .unwrap();
     assert_eq!(
-        registry.get_active().await.unwrap().unwrap().model_id,
-        "model-rb-second"
+        registry
+            .get_active()
+            .await
+            .unwrap()
+            .unwrap()
+            .bundle
+            .tokenizer,
+        "tok-v2"
     );
 
     let restored = registry.rollback("ops:kamil").await.unwrap();
     assert_eq!(restored.model_id, "model-rb-first");
     assert_eq!(
-        registry.get_active().await.unwrap().unwrap().model_id,
-        "model-rb-first",
-        "rollback must restore the prior active model as the current active"
+        restored.bundle, first.bundle,
+        "rollback must restore the WHOLE prior bundle, byte for byte"
+    );
+
+    let active = registry.get_active().await.unwrap().unwrap();
+    assert_eq!(active.model_id, "model-rb-first");
+    assert_eq!(
+        active.bundle, first.bundle,
+        "the restored active model's bundle must match the original v1 bundle exactly \
+         (tokenizer/prompt_template_version/runtime/quantization/retrieval_index_version/\
+         grammar/catalog all restored together, not just the weights digest)"
     );
 
     let history = registry.history().await.unwrap();
@@ -220,11 +551,18 @@ async fn rollback_restores_the_prior_active_and_marks_the_current_one_rolled_bac
 #[tokio::test]
 async fn rollback_without_a_prior_active_is_a_conflict() {
     let (registry, _node) = connect().await;
-    let gate = GoLiveGate::default();
+    let gate = test_gate();
 
-    let only = version("model-solo", metrics(Some(0.0), 0.001, 0.999, 0.9), 1000);
-    registry.register_candidate(only.clone()).await.unwrap();
-    registry.promote_if_gated(only, &gate).await.unwrap();
+    let only = version("model-solo", 1000);
+    registry.register_candidate(only).await.unwrap();
+    registry
+        .attach_evidence("model-solo", evidence(0, 200, 0.001, 0.999, 0.9), &gate)
+        .await
+        .unwrap();
+    registry
+        .promote("model-solo", approved("ops:kamil"), &gate)
+        .await
+        .unwrap();
 
     let err = registry.rollback("ops:kamil").await.unwrap_err();
     assert!(matches!(err, deblob_core::error::CoreError::Conflict(_)));
@@ -233,8 +571,38 @@ async fn rollback_without_a_prior_active_is_a_conflict() {
 #[tokio::test]
 async fn registering_the_same_model_id_twice_is_rejected() {
     let (registry, _node) = connect().await;
-    let v = version("dup-model", metrics(Some(0.0), 0.001, 0.999, 0.9), 1000);
+    let v = version("dup-model", 1000);
     registry.register_candidate(v.clone()).await.unwrap();
     let err = registry.register_candidate(v).await.unwrap_err();
+    assert!(matches!(err, deblob_core::error::CoreError::Conflict(_)));
+}
+
+/// Spec §B7: evidence is attached exactly once — a second
+/// `attach_evidence` call against an already-decided (non-`Candidate`)
+/// model is refused.
+#[tokio::test]
+async fn attach_evidence_twice_on_the_same_candidate_is_a_conflict() {
+    let (registry, _node) = connect().await;
+    let gate = test_gate();
+
+    let candidate = version("model-double-evidence", 1000);
+    registry.register_candidate(candidate).await.unwrap();
+    registry
+        .attach_evidence(
+            "model-double-evidence",
+            evidence(0, 200, 0.001, 0.999, 0.9),
+            &gate,
+        )
+        .await
+        .unwrap();
+
+    let err = registry
+        .attach_evidence(
+            "model-double-evidence",
+            evidence(0, 200, 0.001, 0.999, 0.9),
+            &gate,
+        )
+        .await
+        .unwrap_err();
     assert!(matches!(err, deblob_core::error::CoreError::Conflict(_)));
 }

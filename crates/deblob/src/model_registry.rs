@@ -1,90 +1,214 @@
 //! Governed model registry + gated promotion (spec:
-//! `docs/superpowers/specs/2026-07-16-slm-continual-learning.md` §4).
+//! `docs/superpowers/specs/2026-07-16-slm-continual-learning.md` §4, §B6-8,
+//! §B11-12 — "Amendments from joint research").
 //!
 //! Applies the SAME evidence discipline the schema registry
 //! (`deblob_core::ports::Registry`) already holds for schema promotion to
-//! MODEL VERSIONS: immutable records, an atomic + audited state
-//! transition, and — the headline invariant — a candidate becomes `Active`
-//! ONLY IF it both passes the go-live gate
-//! (`docs/shadow-golive-gate.md`) on its own held-out metrics AND does not
-//! regress against the current `Active` model on the SAME held-out set.
-//! Everything else (a gate-failing OR regressing candidate) lands in
-//! `Rejected`, audited with the exact reasons — never silently dropped,
-//! never partially applied. `rollback` restores the immediately prior
-//! `Active` model.
+//! MODEL VERSIONS: immutable records, atomic + audited state transitions.
+//! Three amendments from the joint-research review reshape how that
+//! discipline is expressed here:
+//!
+//! - **§B6 statistical gate.** The gate is not "zero failures": it
+//!   requires a minimum test-N ([`GateConfig::min_test_n`]), per-family
+//!   precision floors ([`GateConfig::per_family_precision_floor`]) checked
+//!   with a Wilson-score confidence bound (not a bare point estimate), and
+//!   a non-inferiority margin vs the active model
+//!   ([`GateConfig::non_inferiority_margin`]). The `false_merge` hard gate
+//!   stays absolute (`false_merge_count > 0` fails unconditionally,
+//!   independent of every threshold below), but is now ALSO backed by an
+//!   upper confidence bound given N
+//!   ([`GateEvidence::false_merge_upper_ci`]) — zero observed false
+//!   merges out of a tiny N is inconclusive, not proof of safety.
+//! - **§B7 separation of duties.** No single call can ever move the
+//!   active alias. [`ModelRegistry::register_candidate`] produces a bare
+//!   [`ModelVersion`] in [`ModelState::Candidate`] with `evidence: None`.
+//!   [`ModelRegistry::attach_evidence`] is the ONLY place gate math runs —
+//!   it writes the [`GateEvidence`] bundle and transitions the candidate
+//!   to [`ModelState::ShadowCandidate`] (pass) or [`ModelState::Rejected`]
+//!   (fail); it can NEVER produce [`ModelState::Active`].
+//!   [`ModelRegistry::promote`] is a SEPARATE controller action: it only
+//!   accepts a candidate already in `ShadowCandidate` state, requires the
+//!   evidence bundle to already be attached, and — per
+//!   [`GateConfig::require_explicit_approval`] — an explicit
+//!   [`PromotionApproval`]. `crate::retrain::RetrainPlan` calls
+//!   `register_candidate` + `attach_evidence` only; it holds no path to
+//!   `promote` at all (see that module's tests).
+//! - **§B11 live-shadow canary.** `attach_evidence` passing the offline
+//!   gate is NOT full promotion — it is entry into
+//!   [`ModelState::ShadowCandidate`], the same shadow lane
+//!   `crate::shadow` already runs on real traffic. `promote` additionally
+//!   enforces [`GateConfig::min_shadow_hold_ms`] has elapsed since
+//!   `shadow_since` before it will move the alias.
+//!
+//! `rollback` restores the immediately prior `Active` model **in full**
+//! (§B8: the whole [`ArtifactBundle`], not just a weights digest) — see
+//! that method's docs.
 //!
 //! # Why this lives in `deblob`, not `deblob-redis`
 //!
-//! `EvalMetricsSummary` is derived from `deblob_eval::{EvalRun, Metrics}` —
-//! `deblob-redis` has (and should have) no dependency on the eval harness.
-//! Keeping the trait + the Redis-backed implementation together here
-//! mirrors how `crate::trusted`/`crate::policy` already hold
+//! `EvalMetricsSummary`/[`GateEvidence`] are derived from
+//! `deblob_eval::{EvalRun, Metrics}` — `deblob-redis` has (and should
+//! have) no dependency on the eval harness. Keeping the trait + the
+//! Redis-backed implementation together here mirrors how
+//! `crate::trusted`/`crate::policy` already hold
 //! `Arc<dyn Registry>`/`Arc<dyn EvidenceStore>` from `deblob-core` while
-//! implementing their OWN governed logic in the `deblob` crate; `redis` is
-//! already a direct dependency of this crate for exactly this shape of
-//! narrow, self-contained governed store.
+//! implementing their OWN governed logic in the `deblob` crate.
+
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use deblob_core::error::CoreError;
+use deblob_core::id::FamilyId;
 use deblob_eval::{CaseResult, EvalRun, Metrics};
 use redis::Client;
 use serde::{Deserialize, Serialize};
 
-/// The `actor` string every retrain-driven registry write is attributed to
-/// in the audit trail — distinct from a human operator string, mirroring
-/// `crate::trusted::TRUSTED_ACTOR`'s convention.
+/// The `actor` string every retrain-driven registry write (registration,
+/// evidence attachment) is attributed to in the audit trail — distinct
+/// from a human/controller operator string. [`ModelRegistry::promote`] is
+/// audited under `approval.actor` instead (spec §B7: promotion is a
+/// SEPARATE, human/controller-attributed action, never this system actor).
 pub const RETRAIN_ACTOR: &str = "retrain:v1";
 
-/// Lifecycle state of one [`ModelVersion`].
+/// 95% two-sided Wilson-score `z`. [`GateConfig::confidence_z`] defaults
+/// to this but is itself ablatable — see that field's docs.
+pub const Z_95: f64 = 1.959_963_985;
+
+/// Lifecycle state of one [`ModelVersion`]. Spec §B7/§B11: the state
+/// machine is `Candidate -> ShadowCandidate -> Active`, plus terminal
+/// `Rejected`/`RolledBack` — no transition skips a stage, and only
+/// [`ModelRegistry::promote`] ever produces `Active`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelState {
-    /// Registered, not yet evaluated against the gate.
+    /// Registered by `register_candidate`; no [`GateEvidence`] attached
+    /// yet.
     Candidate,
+    /// Passed [`ModelRegistry::attach_evidence`]'s offline gate — now
+    /// eligible for the live-shadow lane (spec §B11). NOT active; a
+    /// worse-than-active OR un-held candidate can sit here indefinitely.
+    ShadowCandidate,
     /// The currently (or, historically, once) promoted model. Exactly one
     /// [`ModelVersion`] is the registry's CURRENT active pointer at a
-    /// time — see [`ModelRegistry::get_active`].
+    /// time — see [`ModelRegistry::get_active`]. Reachable ONLY via
+    /// [`ModelRegistry::promote`].
     Active,
-    /// Failed the go-live gate or regressed vs the active model at
-    /// promotion time. Audited with reasons; never becomes `Active`
-    /// without a fresh, passing `promote_if_gated` call.
+    /// Failed `attach_evidence`'s gate/regression check. Audited with
+    /// reasons; never becomes `ShadowCandidate`/`Active` without a fresh
+    /// candidate + a fresh, passing `attach_evidence` call.
     Rejected,
     /// Was `Active`, then superseded by [`ModelRegistry::rollback`].
     RolledBack,
 }
 
+// ---------------------------------------------------------------------
+// Composite artifact bundle (spec §B8)
+// ---------------------------------------------------------------------
+
+/// The WHOLE inference bundle a [`ModelVersion`] versions — not just the
+/// weights (spec §B8). `rollback` restores every one of these fields at
+/// once, atomically, because the whole record (not a bare digest) is what
+/// gets swapped back onto the active pointer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ArtifactBundle {
+    /// Digest of the QUANTIZED weights — the artifact the gate actually
+    /// evaluates (spec §B8: "the gate evaluates the QUANTIZED artifact,
+    /// recorded separately from the training checkpoint" — see
+    /// [`ModelVersion::training_checkpoint_digest`] for the other side of
+    /// that separation).
+    pub weights_digest: String,
+    pub tokenizer: String,
+    pub prompt_template_version: String,
+    pub runtime: String,
+    pub quantization: String,
+    pub retrieval_index_version: String,
+    pub grammar: String,
+    pub catalog: String,
+}
+
+impl ArtifactBundle {
+    /// Builds a full bundle from a fixed [`BundleTemplate`] (the
+    /// non-weights identity: tokenizer/runtime/grammar/etc, usually
+    /// unchanged run over run) plus the one field that DOES change per
+    /// candidate — the quantized weights digest.
+    pub fn new(weights_digest: String, template: &BundleTemplate) -> Self {
+        Self {
+            weights_digest,
+            tokenizer: template.tokenizer.clone(),
+            prompt_template_version: template.prompt_template_version.clone(),
+            runtime: template.runtime.clone(),
+            quantization: template.quantization.clone(),
+            retrieval_index_version: template.retrieval_index_version.clone(),
+            grammar: template.grammar.clone(),
+            catalog: template.catalog.clone(),
+        }
+    }
+}
+
+/// Every [`ArtifactBundle`] field EXCEPT the weights digest — the parts of
+/// the inference bundle a retrain run does not itself change (spec §B8).
+/// `RetrainPlan` callers supply this once (deployment config); the
+/// per-candidate weights digest is merged in via [`ArtifactBundle::new`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleTemplate {
+    pub tokenizer: String,
+    pub prompt_template_version: String,
+    pub runtime: String,
+    pub quantization: String,
+    pub retrieval_index_version: String,
+    pub grammar: String,
+    pub catalog: String,
+}
+
+/// Reproducible training provenance (spec §B9): `base_snapshot_id` is a
+/// FIXED, caller-supplied base checkpoint identity — `RetrainPlan` never
+/// derives it from whatever the previous `Active`/`ShadowCandidate` model
+/// happened to be, so retraining never recursively mutates "the latest
+/// adapter". `feedback_cursor`/`corpus_seed` remain descriptive audit
+/// metadata, not foreign keys (same posture as
+/// `deblob_core::ports::SchemaRecord::provenance`).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TrainedFrom {
+    pub base_snapshot_id: String,
+    pub feedback_cursor: String,
+    pub corpus_seed: String,
+}
+
+// ---------------------------------------------------------------------
+// Gate evidence (spec §B6, §B12)
+// ---------------------------------------------------------------------
+
 /// Gate-relevant metrics computed from a candidate's HELD-OUT evaluation
-/// run (spec §4; go-live thresholds from `docs/shadow-golive-gate.md`).
+/// run (spec §4/§B6; go-live thresholds from `docs/shadow-golive-gate.md`).
 /// `false_merge_rate: None` means the held-out corpus carried no
-/// false-merge-trap case — see [`gate_reasons`]'s docs for how that's
-/// treated (never fabricated as `0.0`).
+/// false-merge-trap case; `retrieval_recall_at_5: None` means no case
+/// carried a gold schema id — neither is ever fabricated as `0.0`/`1.0`.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct EvalMetricsSummary {
     pub total_cases: usize,
     pub false_merge_rate: Option<f64>,
+    pub false_merge_count: usize,
+    pub false_merge_trap_count: usize,
     pub wrong_valid_rate: f64,
     /// Fraction of ACCEPTED matches (`InferenceDecision::is_accepted_match`)
     /// that were exactly correct — "of what the model was willing to
     /// merge, how much was right" (go-live gate: "accepted precision").
     /// `1.0` (vacuously) if the run accepted no match at all.
     pub accepted_precision: f64,
+    /// End-to-end exact-match accuracy over EVERY case (retrieval misses
+    /// included) — the generator's real-world number.
     pub exact_semantic_accuracy: f64,
-}
-
-impl EvalMetricsSummary {
-    /// Builds a summary from a [`deblob_eval::EvalRun`]/[`Metrics`] pair
-    /// produced by evaluating a candidate against the held-out gate
-    /// corpus. `accepted_precision` isn't a field `Metrics` itself
-    /// exposes, so it's derived here directly from the run's records.
-    pub fn from_eval(run: &EvalRun, metrics: &Metrics) -> Self {
-        Self {
-            total_cases: metrics.total_cases,
-            false_merge_rate: metrics.false_merge_rate,
-            wrong_valid_rate: metrics.wrong_valid_rate,
-            accepted_precision: accepted_precision(run),
-            exact_semantic_accuracy: metrics.exact_semantic_accuracy,
-        }
-    }
+    /// Spec §B12: generator exact-match accuracy restricted to cases
+    /// where the gold schema WAS present in the retrieved top-k
+    /// (`gold_rank.is_some()`) — isolates the generator's own error rate
+    /// from retrieval failure the generator structurally cannot fix.
+    /// `None` if no case in the run carries a gold rank at all.
+    pub oracle_retrieval_exact_accuracy: Option<f64>,
+    /// Spec §B12: retrieval recall@5, tracked and gated SEPARATELY from
+    /// generator accuracy — a regression here is its own failure mode
+    /// (see [`regression_reasons`]), never folded into the accuracy
+    /// checks above. `None` if no case carries a gold schema id.
+    pub retrieval_recall_at_5: Option<f64>,
 }
 
 fn accepted_precision(run: &EvalRun) -> f64 {
@@ -110,146 +234,489 @@ fn accepted_precision(run: &EvalRun) -> f64 {
     }
 }
 
-/// Go-live gate thresholds (spec §4; `docs/shadow-golive-gate.md`).
-/// `false_merge_rate == 0` is NOT a field here — it is a HARD, non-
-/// configurable requirement enforced unconditionally by [`gate_reasons`],
-/// exactly mirroring `crate::trusted`'s no-false-merge invariant: no
-/// threshold anywhere in this codebase may ever relax it.
+/// Spec §B12: generator accuracy restricted to gold-retrieved cases —
+/// isolates generator error from retrieval error. See
+/// [`EvalMetricsSummary::oracle_retrieval_exact_accuracy`]'s docs.
+fn oracle_retrieval_exact_accuracy(run: &EvalRun) -> Option<f64> {
+    let mut n = 0usize;
+    let mut correct = 0usize;
+    for record in &run.records {
+        if record.expected.gold_rank.is_some() {
+            n += 1;
+            if let Ok(outcome) = &record.outcome {
+                if outcome.decision == record.expected.decision {
+                    correct += 1;
+                }
+            }
+        }
+    }
+    if n == 0 {
+        None
+    } else {
+        Some(correct as f64 / n as f64)
+    }
+}
+
+/// One family's exact-match precision slice over a held-out run — the
+/// unit spec §B6's per-family floor is checked against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FamilySlice {
+    pub family_id: FamilyId,
+    pub n: usize,
+    pub correct: usize,
+    pub precision: f64,
+}
+
+fn per_family_slices(run: &EvalRun) -> Vec<FamilySlice> {
+    let mut agg: HashMap<FamilyId, (usize, usize)> = HashMap::new();
+    for record in &run.records {
+        let Some(family_id) = record.retrieved.first().map(|c| c.family_id.clone()) else {
+            continue;
+        };
+        let entry = agg.entry(family_id).or_insert((0, 0));
+        entry.0 += 1;
+        if let Ok(outcome) = &record.outcome {
+            if outcome.decision == record.expected.decision {
+                entry.1 += 1;
+            }
+        }
+    }
+    let mut out: Vec<FamilySlice> = agg
+        .into_iter()
+        .map(|(family_id, (n, correct))| FamilySlice {
+            family_id,
+            n,
+            correct,
+            precision: if n == 0 {
+                1.0
+            } else {
+                correct as f64 / n as f64
+            },
+        })
+        .collect();
+    out.sort_by(|a, b| a.family_id.as_str().cmp(b.family_id.as_str()));
+    out
+}
+
+/// Two-sided Wilson score interval bound for a binomial proportion
+/// `successes/n` at confidence `z` (spec §B6: "confidence intervals").
+/// `n == 0` returns the maximally uninformative bound (`1.0` upper / `0.0`
+/// lower) — no evidence means no confidence, never a fabricated midpoint.
+fn wilson_bound(successes: usize, n: usize, z: f64, upper: bool) -> f64 {
+    if n == 0 {
+        return if upper { 1.0 } else { 0.0 };
+    }
+    let n = n as f64;
+    let p = (successes as f64 / n).clamp(0.0, 1.0);
+    let z2 = z * z;
+    let denom = 1.0 + z2 / n;
+    let center = p + z2 / (2.0 * n);
+    let margin = z * ((p * (1.0 - p) / n) + (z2 / (4.0 * n * n))).max(0.0).sqrt();
+    let bound = if upper {
+        (center + margin) / denom
+    } else {
+        (center - margin) / denom
+    };
+    bound.clamp(0.0, 1.0)
+}
+
+/// The full gate evidence bundle [`ModelRegistry::attach_evidence`] writes
+/// onto a candidate (spec §B6/§B7/§B12) — never present on a bare
+/// `Candidate` produced by `register_candidate`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct GateEvidence {
+    pub aggregate: EvalMetricsSummary,
+    /// Spec §B6: per-family slices — a candidate can pass every aggregate
+    /// number and still be rejected here.
+    pub per_family: Vec<FamilySlice>,
+    /// Spec §B6: upper confidence bound on the true false-merge rate,
+    /// given `aggregate.false_merge_count`/`aggregate.false_merge_trap_count`.
+    /// `None` iff the held-out corpus carried no false-merge-trap case at
+    /// all (nothing to bound).
+    pub false_merge_upper_ci: Option<f64>,
+    pub computed_at: i64,
+}
+
+impl GateEvidence {
+    /// Builds evidence from a [`deblob_eval::EvalRun`]/[`Metrics`] pair —
+    /// the candidate's held-out gate-corpus evaluation. `z` is
+    /// [`GateConfig::confidence_z`] (kept as a parameter, not read from
+    /// `GateConfig` directly, so evidence-building stays decoupled from
+    /// which specific gate it will later be checked against).
+    pub fn from_eval(run: &EvalRun, metrics: &Metrics, now_ms: i64, z: f64) -> Self {
+        let aggregate = EvalMetricsSummary {
+            total_cases: metrics.total_cases,
+            false_merge_rate: metrics.false_merge_rate,
+            false_merge_count: metrics.false_merge_count,
+            false_merge_trap_count: metrics.false_merge_trap_count,
+            wrong_valid_rate: metrics.wrong_valid_rate,
+            accepted_precision: accepted_precision(run),
+            exact_semantic_accuracy: metrics.exact_semantic_accuracy,
+            oracle_retrieval_exact_accuracy: oracle_retrieval_exact_accuracy(run),
+            retrieval_recall_at_5: metrics.recall_at_5,
+        };
+        let false_merge_upper_ci = if metrics.false_merge_trap_count > 0 {
+            Some(wilson_bound(
+                metrics.false_merge_count,
+                metrics.false_merge_trap_count,
+                z,
+                true,
+            ))
+        } else {
+            None
+        };
+        Self {
+            aggregate,
+            per_family: per_family_slices(run),
+            false_merge_upper_ci,
+            computed_at: now_ms,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Gate config + reasons (spec §B6)
+// ---------------------------------------------------------------------
+
+/// Statistical gate thresholds (spec §B6) — replaces the old flat
+/// "zero-failures" `GoLiveGate`. Every field except the hard false-merge
+/// check is a config parameter, explicitly ablatable, mirroring
+/// `crate::feedback::FeedbackWeights`'s convention. Defaults are the
+/// go-live numbers from `docs/shadow-golive-gate.md` where that document
+/// specifies one, and are documented "unvalidated — ablate" otherwise.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub struct GoLiveGate {
+pub struct GateConfig {
+    /// Statistical power floor over the WHOLE held-out run — below this,
+    /// the candidate is INCONCLUSIVE (not promotable), not merely
+    /// "unproven". `docs/shadow-golive-gate.md`'s full go-live gate uses
+    /// 3000 (shadow-log accepted decisions); this offline per-retrain gate
+    /// defaults lower since it runs on the eval harness's held-out corpus,
+    /// not live shadow traffic — raise it once the corpus is large enough
+    /// to support it.
+    pub min_test_n: usize,
     /// Go-live gate: "wrong-valid rate ≤ 0.5%".
     pub max_wrong_valid_rate: f64,
     /// Go-live gate: "accepted precision ≥ 99.5%".
     pub min_accepted_precision: f64,
+    /// A family slice below `per_family_min_n` cases is exempt from
+    /// [`per_family_precision_floor`] — not enough evidence to judge it
+    /// either way (mirrors `docs/shadow-golive-gate.md`'s "no slice of
+    /// ≥ 100 examples below 99% precision").
+    pub per_family_min_n: usize,
+    pub per_family_precision_floor: f64,
+    /// Spec §B12: retrieval recall@5 floor, checked independently of
+    /// every generator-accuracy number above.
+    pub min_retrieval_recall_at_5: f64,
+    /// Spec §B6: how much WORSE a candidate's `exact_semantic_accuracy`/
+    /// `wrong_valid_rate` may be than the active model's before it counts
+    /// as a regression — a true non-inferiority margin, not "strictly no
+    /// worse at all". **Unvalidated — ablate.**
+    pub non_inferiority_margin: f64,
+    /// Spec §B12: the SAME kind of margin, applied to
+    /// `retrieval_recall_at_5` — its own regression check, never folded
+    /// into `non_inferiority_margin`.
+    pub retrieval_non_inferiority_margin: f64,
+    /// Spec §B6: the false-merge hard gate is ALSO backed by this upper
+    /// confidence bound on the true rate (given
+    /// `false_merge_trap_count`) — a candidate with 0 observed false
+    /// merges over a tiny N still fails here as INCONCLUSIVE.
+    pub max_false_merge_upper_ci: f64,
+    /// `z` for every Wilson-score bound this gate computes. Defaults to
+    /// [`Z_95`] (95% two-sided) — ablatable.
+    pub confidence_z: f64,
+    /// Spec §B7: whether [`ModelRegistry::promote`] requires
+    /// `approval.approved == true`. `true` in every deployed
+    /// configuration; `false` exists only for a test/dev registry where
+    /// the approval ceremony itself is out of scope.
+    pub require_explicit_approval: bool,
+    /// Spec §B11: minimum wall-clock hold in `ShadowCandidate` (live
+    /// canary lane) before `promote` will accept it, measured from
+    /// `ModelVersion::shadow_since`. `0` (test default) means no hold —
+    /// operators MUST configure a real hold period in production.
+    pub min_shadow_hold_ms: i64,
 }
 
-impl Default for GoLiveGate {
+impl Default for GateConfig {
     fn default() -> Self {
         Self {
+            min_test_n: 200,
             max_wrong_valid_rate: 0.005,
             min_accepted_precision: 0.995,
+            per_family_min_n: 20,
+            per_family_precision_floor: 0.99,
+            min_retrieval_recall_at_5: 0.95,
+            non_inferiority_margin: 0.01,
+            retrieval_non_inferiority_margin: 0.02,
+            max_false_merge_upper_ci: 0.01,
+            confidence_z: Z_95,
+            require_explicit_approval: true,
+            min_shadow_hold_ms: 0,
         }
     }
 }
 
-/// Every reason `candidate` fails the go-live gate on its own held-out
-/// metrics — empty iff it passes. `false_merge_rate` is checked FIRST and
-/// unconditionally (spec: "the hard gate"): any nonzero measured rate
-/// fails regardless of every other number. `None` (no false-merge-trap
-/// case in the held-out corpus) is NOT treated as a failure — there is no
-/// evidence of a false merge, so there is nothing to fail on; this is a
-/// property of the held-out corpus's composition, not a fabricated `0.0`.
-pub fn gate_reasons(candidate: &EvalMetricsSummary, gate: &GoLiveGate) -> Vec<String> {
+/// Every reason `evidence` fails its OWN offline gate (spec §B6) —
+/// empty iff it passes. `false_merge_count` is checked FIRST and
+/// unconditionally (the hard gate): any nonzero measured count fails
+/// regardless of every other number. A candidate below `min_test_n`, or
+/// whose false-merge upper confidence bound is too wide given N, is
+/// prefixed `INCONCLUSIVE` (not `REJECTED` for cause) — see this
+/// function's callers for how the two are handled identically (neither
+/// is promotable) but reported distinctly.
+pub fn gate_reasons(evidence: &GateEvidence, gate: &GateConfig) -> Vec<String> {
     let mut reasons = Vec::new();
-    if let Some(rate) = candidate.false_merge_rate {
-        if rate > 0.0 {
+    let agg = &evidence.aggregate;
+
+    if agg.total_cases < gate.min_test_n {
+        reasons.push(format!(
+            "INCONCLUSIVE: total_cases {} < min_test_n {} (statistical power floor)",
+            agg.total_cases, gate.min_test_n
+        ));
+    }
+
+    // The hard gate: any measured false merge fails, unconditionally.
+    if agg.false_merge_count > 0 {
+        reasons.push(format!(
+            "false_merge_count {} > 0 (HARD gate — zero false merges required)",
+            agg.false_merge_count
+        ));
+    }
+    // Statistical backing for the hard gate: even 0 observed false
+    // merges is not proof of safety if N is too small to bound the true
+    // rate tightly.
+    if let Some(upper) = evidence.false_merge_upper_ci {
+        if upper > gate.max_false_merge_upper_ci {
             reasons.push(format!(
-                "false_merge_rate {rate:.4} > 0 (HARD gate — zero false merges required)"
+                "INCONCLUSIVE: false_merge upper confidence bound {:.4} > {:.4} \
+                 (N={} too small to certify zero false merges)",
+                upper, gate.max_false_merge_upper_ci, agg.false_merge_trap_count
             ));
         }
     }
-    if candidate.wrong_valid_rate > gate.max_wrong_valid_rate {
+
+    if agg.wrong_valid_rate > gate.max_wrong_valid_rate {
         reasons.push(format!(
             "wrong_valid_rate {:.4} > {:.4}",
-            candidate.wrong_valid_rate, gate.max_wrong_valid_rate
+            agg.wrong_valid_rate, gate.max_wrong_valid_rate
         ));
     }
-    if candidate.accepted_precision < gate.min_accepted_precision {
+    if agg.accepted_precision < gate.min_accepted_precision {
         reasons.push(format!(
             "accepted_precision {:.4} < {:.4}",
-            candidate.accepted_precision, gate.min_accepted_precision
+            agg.accepted_precision, gate.min_accepted_precision
         ));
     }
+
+    // Spec §B12: retrieval recall is its OWN gate axis, independent of
+    // every generator-accuracy check above.
+    if let Some(recall) = agg.retrieval_recall_at_5 {
+        if recall < gate.min_retrieval_recall_at_5 {
+            reasons.push(format!(
+                "retrieval_recall_at_5 {:.4} < floor {:.4} (retrieval gate — independent of \
+                 generator accuracy)",
+                recall, gate.min_retrieval_recall_at_5
+            ));
+        }
+    }
+
+    // Spec §B6: per-family precision floor — checked with a Wilson lower
+    // bound (not the bare point estimate) so a slice only fails when
+    // there is enough evidence to be confident it is actually bad, but a
+    // slice below `per_family_min_n` is exempt entirely (not enough
+    // evidence to judge either way).
+    for slice in &evidence.per_family {
+        if slice.n < gate.per_family_min_n {
+            continue;
+        }
+        let lower = wilson_bound(slice.correct, slice.n, gate.confidence_z, false);
+        if lower < gate.per_family_precision_floor {
+            reasons.push(format!(
+                "family {} precision {:.4} (n={}, wilson_lower={:.4}) < floor {:.4} — \
+                 aggregate can pass while this slice fails",
+                slice.family_id.as_str(),
+                slice.precision,
+                slice.n,
+                lower,
+                gate.per_family_precision_floor
+            ));
+        }
+    }
+
     reasons
 }
 
 /// Every reason `candidate` regresses against `active` on the SAME
-/// held-out set — empty iff it does not regress. A candidate that passes
-/// the gate but regresses is still rejected (spec §4: "does NOT regress vs
-/// the current active").
+/// held-out set — empty iff it does not regress beyond
+/// [`GateConfig::non_inferiority_margin`]/[`GateConfig::retrieval_non_inferiority_margin`].
+/// A candidate that passes its own gate but regresses is still rejected
+/// (spec §4/§B6: "does NOT regress vs the current active", now expressed
+/// as non-inferiority rather than strict improvement).
 pub fn regression_reasons(
-    candidate: &EvalMetricsSummary,
-    active: &EvalMetricsSummary,
+    candidate: &GateEvidence,
+    active: &GateEvidence,
+    gate: &GateConfig,
 ) -> Vec<String> {
     let mut reasons = Vec::new();
-    if candidate.wrong_valid_rate > active.wrong_valid_rate {
+    let c = &candidate.aggregate;
+    let a = &active.aggregate;
+
+    // False merges must never regress — no margin, ever.
+    if c.false_merge_count > a.false_merge_count {
         reasons.push(format!(
-            "regresses wrong_valid_rate: candidate {:.4} > active {:.4}",
-            candidate.wrong_valid_rate, active.wrong_valid_rate
+            "regresses false_merge_count: candidate {} > active {}",
+            c.false_merge_count, a.false_merge_count
         ));
     }
-    if candidate.exact_semantic_accuracy < active.exact_semantic_accuracy {
+
+    if c.exact_semantic_accuracy + gate.non_inferiority_margin < a.exact_semantic_accuracy {
         reasons.push(format!(
-            "regresses exact_semantic_accuracy: candidate {:.4} < active {:.4}",
-            candidate.exact_semantic_accuracy, active.exact_semantic_accuracy
+            "regresses exact_semantic_accuracy beyond non_inferiority_margin {:.4}: candidate \
+             {:.4} < active {:.4}",
+            gate.non_inferiority_margin, c.exact_semantic_accuracy, a.exact_semantic_accuracy
         ));
     }
-    if let (Some(c), Some(a)) = (candidate.false_merge_rate, active.false_merge_rate) {
-        if c > a {
+    if c.wrong_valid_rate > a.wrong_valid_rate + gate.non_inferiority_margin {
+        reasons.push(format!(
+            "regresses wrong_valid_rate beyond non_inferiority_margin {:.4}: candidate {:.4} > \
+             active {:.4}",
+            gate.non_inferiority_margin, c.wrong_valid_rate, a.wrong_valid_rate
+        ));
+    }
+
+    // Spec §B12: retrieval recall regression is its OWN gate — a
+    // candidate can have flat-or-better generator accuracy and still be
+    // flagged here.
+    if let (Some(cr), Some(ar)) = (c.retrieval_recall_at_5, a.retrieval_recall_at_5) {
+        if cr + gate.retrieval_non_inferiority_margin < ar {
             reasons.push(format!(
-                "regresses false_merge_rate: candidate {c:.4} > active {a:.4}"
+                "regresses retrieval_recall_at_5 beyond retrieval_non_inferiority_margin {:.4}: \
+                 candidate {:.4} < active {:.4} (retrieval gate — independent of generator \
+                 accuracy)",
+                gate.retrieval_non_inferiority_margin, cr, ar
             ));
         }
     }
+
     reasons
 }
 
+// ---------------------------------------------------------------------
+// ModelVersion + registry (spec §B7/§B8/§B11)
+// ---------------------------------------------------------------------
+
 /// One governed model version — the audited unit [`ModelRegistry`]
-/// manages. `trained_from` is a human-readable provenance string (feedback
-/// cursor + corpus seed description), not a foreign key: model
-/// provenance is descriptive audit metadata, same posture as
-/// `deblob_core::ports::SchemaRecord::provenance`.
+/// manages. Spec §B8: versions the WHOLE inference bundle, not just
+/// weights. Spec §B7: `evidence` is `None` on every freshly-registered
+/// candidate — it is written exactly once, by `attach_evidence`, never by
+/// `register_candidate`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelVersion {
     pub model_id: String,
-    pub digest: String,
-    pub trained_from: String,
-    pub eval_metrics: EvalMetricsSummary,
+    pub bundle: ArtifactBundle,
+    /// Digest of the TRAINING checkpoint, kept separate from
+    /// `bundle.weights_digest` (the quantized artifact the gate actually
+    /// evaluates) — spec §B8.
+    pub training_checkpoint_digest: String,
+    pub trained_from: TrainedFrom,
+    /// `None` until `attach_evidence` runs — spec §B7's separation of
+    /// duties made structural: a bare `Candidate` cannot even carry gate
+    /// evidence.
+    pub evidence: Option<GateEvidence>,
     pub recorded_at: i64,
+    /// Set when `attach_evidence` transitions this version into
+    /// `ShadowCandidate` — the clock `promote`'s
+    /// `GateConfig::min_shadow_hold_ms` check reads from. `None` until
+    /// then.
+    pub shadow_since: Option<i64>,
     pub state: ModelState,
 }
 
-/// Outcome of [`ModelRegistry::promote_if_gated`].
+/// Outcome of [`ModelRegistry::attach_evidence`] — spec §B7/§B11: this is
+/// the ONLY place gate math runs, and it can produce
+/// [`ModelState::ShadowCandidate`] or [`ModelState::Rejected`], NEVER
+/// [`ModelState::Active`].
 #[derive(Debug, Clone, PartialEq)]
-pub enum PromotionOutcome {
-    /// The candidate passed the gate and did not regress — now `Active`.
-    Promoted(ModelVersion),
+pub enum GateDecision {
+    /// The candidate passed its own gate and did not regress vs the
+    /// current active (if any) — now `ShadowCandidate`, eligible for live
+    /// canary evaluation and, later, an explicit `promote`.
+    EnteredShadow(ModelVersion),
     /// The candidate failed the gate and/or regressed — now `Rejected`,
-    /// with every failing reason (gate + regression combined).
+    /// with every failing/inconclusive reason (gate + regression
+    /// combined).
     Rejected {
         reasons: Vec<String>,
         candidate: ModelVersion,
     },
 }
 
-/// Governed, immutable, audited registry of model versions. See the module
-/// docs for the promotion invariant every implementation must uphold.
+/// Spec §B7: the explicit, human/controller-attributed approval
+/// `ModelRegistry::promote` requires when
+/// [`GateConfig::require_explicit_approval`] is set. `actor` is who/what
+/// approved it — attributed in the audit trail instead of
+/// [`RETRAIN_ACTOR`], since promotion is deliberately NOT a system-actor
+/// action.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PromotionApproval {
+    pub approved: bool,
+    pub actor: String,
+}
+
+/// Governed, immutable, audited registry of model versions. See the
+/// module docs for the state machine every implementation must uphold —
+/// in particular: `attach_evidence` never produces `Active`, and
+/// `promote` is the ONLY method that ever does.
 #[async_trait]
 pub trait ModelRegistry: Send + Sync {
-    /// Registers a NEW candidate (state `Candidate`). `Err(Conflict)` if
-    /// `model_id` is already registered — a model version's identity is
-    /// write-once.
+    /// Registers a NEW candidate (state `Candidate`, `evidence: None`).
+    /// `Err(Conflict)` if `model_id` is already registered — a model
+    /// version's identity is write-once.
     async fn register_candidate(&self, version: ModelVersion) -> Result<(), CoreError>;
 
     /// The current active model, if any.
     async fn get_active(&self) -> Result<Option<ModelVersion>, CoreError>;
 
-    /// Evaluates `candidate` against `gate` AND, if there is a current
-    /// active model, against it for regression. Atomically transitions
-    /// `candidate` to `Active` (and updates the active pointer) on success,
-    /// or to `Rejected` (pointer untouched) on failure — either way,
-    /// audited with `actor = "retrain:v1"`. Never partially applied.
-    async fn promote_if_gated(
+    /// One registered model version by id, if any.
+    async fn get(&self, model_id: &str) -> Result<Option<ModelVersion>, CoreError>;
+
+    /// Spec §B6/§B7: writes `evidence` onto the `model_id` candidate and
+    /// evaluates it (own gate + regression vs the current active, if
+    /// any). `Err(Conflict)` if `model_id` is not currently in
+    /// `ModelState::Candidate` (evidence is attached exactly once).
+    /// Atomically transitions the candidate to `ShadowCandidate` (pass)
+    /// or `Rejected` (fail) — audited with `actor = RETRAIN_ACTOR`. NEVER
+    /// produces `Active`.
+    async fn attach_evidence(
         &self,
-        candidate: ModelVersion,
-        gate: &GoLiveGate,
-    ) -> Result<PromotionOutcome, CoreError>;
+        model_id: &str,
+        evidence: GateEvidence,
+        gate: &GateConfig,
+    ) -> Result<GateDecision, CoreError>;
+
+    /// Spec §B7/§B11: the ONLY method that can ever move the active
+    /// alias. `Err(Conflict)` if `model_id` is not currently
+    /// `ShadowCandidate` (skips straight from `Candidate`, or promoting
+    /// an already-terminal version, are both rejected the same way).
+    /// `Err(PolicyRejected)` if `gate.require_explicit_approval &&
+    /// !approval.approved`, or if `gate.min_shadow_hold_ms` has not yet
+    /// elapsed since `shadow_since`. On success: atomically transitions
+    /// to `Active`, updates the active pointer, retains the previous
+    /// active for `rollback` — audited with `actor = approval.actor`.
+    async fn promote(
+        &self,
+        model_id: &str,
+        approval: PromotionApproval,
+        gate: &GateConfig,
+    ) -> Result<ModelVersion, CoreError>;
 
     /// Restores the model that was active immediately before the current
     /// one — the current active transitions to `RolledBack`, audited with
-    /// `actor`. `Err(Conflict)` if there is no prior active to restore
-    /// (nothing has ever been promoted, or a rollback already consumed the
-    /// only prior).
+    /// `actor`. Restores the WHOLE prior [`ModelVersion`] record
+    /// (`bundle` included — spec §B8), since the active pointer simply
+    /// moves back to that record's id rather than reconstructing any
+    /// field piecemeal. `Err(Conflict)` if there is no prior active to
+    /// restore (nothing has ever been promoted, or a rollback already
+    /// consumed the only prior).
     async fn rollback(&self, actor: &str) -> Result<ModelVersion, CoreError>;
 
     /// Every registered model version, oldest first — the audit-readable
@@ -270,9 +737,16 @@ fn redis_err(e: redis::RedisError) -> CoreError {
     CoreError::RegistryUnavailable(e.to_string())
 }
 
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
 /// Redis-backed [`ModelRegistry`]. All gate/regression math runs in Rust
-/// (pure, over already-fetched [`EvalMetricsSummary`] values) BEFORE any
-/// Redis write — every write this type issues is therefore a determinate,
+/// (pure, over already-fetched [`GateEvidence`] values) BEFORE any Redis
+/// write — every write this type issues is therefore a determinate,
 /// already-decided state transition, applied atomically via
 /// `redis::pipe().atomic()` (MULTI/EXEC), the same pattern
 /// `deblob-redis::evidence` uses for its own multi-key writes. This is a
@@ -413,55 +887,114 @@ impl ModelRegistry for RedisModelRegistry {
         }
     }
 
-    async fn promote_if_gated(
-        &self,
-        mut candidate: ModelVersion,
-        gate: &GoLiveGate,
-    ) -> Result<PromotionOutcome, CoreError> {
-        let active = self.get_active().await?;
+    async fn get(&self, model_id: &str) -> Result<Option<ModelVersion>, CoreError> {
+        self.get_model(model_id).await
+    }
 
-        let mut reasons = gate_reasons(&candidate.eval_metrics, gate);
-        if let Some(active_version) = &active {
-            reasons.extend(regression_reasons(
-                &candidate.eval_metrics,
-                &active_version.eval_metrics,
-            ));
+    async fn attach_evidence(
+        &self,
+        model_id: &str,
+        evidence: GateEvidence,
+        gate: &GateConfig,
+    ) -> Result<GateDecision, CoreError> {
+        let mut candidate = self.get_model(model_id).await?.ok_or(CoreError::NotFound)?;
+        if candidate.state != ModelState::Candidate {
+            return Err(CoreError::Conflict(format!(
+                "model {model_id} is not in Candidate state (found {:?}) — evidence is \
+                 attached exactly once",
+                candidate.state
+            )));
         }
 
-        if reasons.is_empty() {
-            candidate.state = ModelState::Active;
-            self.write_model(&candidate).await?;
+        let active = self.get_active().await?;
 
-            let mut conn = self.conn();
-            let mut pipe = redis::pipe();
-            pipe.atomic();
-            pipe.cmd("SET")
-                .arg(ACTIVE_KEY)
-                .arg(&candidate.model_id)
-                .ignore();
-            match &active {
-                Some(prior) => {
-                    pipe.cmd("SET")
-                        .arg(PRIOR_ACTIVE_KEY)
-                        .arg(&prior.model_id)
-                        .ignore();
-                }
-                None => {
-                    pipe.cmd("DEL").arg(PRIOR_ACTIVE_KEY).ignore();
-                }
+        let mut reasons = gate_reasons(&evidence, gate);
+        if let Some(active_version) = &active {
+            if let Some(active_evidence) = &active_version.evidence {
+                reasons.extend(regression_reasons(&evidence, active_evidence, gate));
             }
-            let _: () = pipe.query_async(&mut conn).await.map_err(redis_err)?;
+        }
 
-            self.audit("promote", &candidate.model_id, RETRAIN_ACTOR, &[])
+        candidate.evidence = Some(evidence);
+
+        if reasons.is_empty() {
+            candidate.state = ModelState::ShadowCandidate;
+            candidate.shadow_since = Some(now_ms());
+            self.write_model(&candidate).await?;
+            self.audit("attach_evidence:shadow", model_id, RETRAIN_ACTOR, &[])
                 .await?;
-            Ok(PromotionOutcome::Promoted(candidate))
+            Ok(GateDecision::EnteredShadow(candidate))
         } else {
             candidate.state = ModelState::Rejected;
             self.write_model(&candidate).await?;
-            self.audit("reject", &candidate.model_id, RETRAIN_ACTOR, &reasons)
+            self.audit("attach_evidence:reject", model_id, RETRAIN_ACTOR, &reasons)
                 .await?;
-            Ok(PromotionOutcome::Rejected { reasons, candidate })
+            Ok(GateDecision::Rejected { reasons, candidate })
         }
+    }
+
+    async fn promote(
+        &self,
+        model_id: &str,
+        approval: PromotionApproval,
+        gate: &GateConfig,
+    ) -> Result<ModelVersion, CoreError> {
+        let mut candidate = self.get_model(model_id).await?.ok_or(CoreError::NotFound)?;
+        if candidate.state != ModelState::ShadowCandidate {
+            return Err(CoreError::Conflict(format!(
+                "model {model_id} is not in ShadowCandidate state (found {:?}) — \
+                 attach_evidence must pass before promote is even eligible",
+                candidate.state
+            )));
+        }
+        if candidate.evidence.is_none() {
+            return Err(CoreError::PolicyRejected(format!(
+                "model {model_id} has no gate evidence attached — cannot promote"
+            )));
+        }
+        if gate.require_explicit_approval && !approval.approved {
+            return Err(CoreError::PolicyRejected(
+                "promote requires an explicit approval (require_explicit_approval=true)".into(),
+            ));
+        }
+        if let Some(since) = candidate.shadow_since {
+            let elapsed = now_ms() - since;
+            if elapsed < gate.min_shadow_hold_ms {
+                return Err(CoreError::PolicyRejected(format!(
+                    "shadow hold period not yet elapsed: {elapsed}ms < {}ms",
+                    gate.min_shadow_hold_ms
+                )));
+            }
+        }
+
+        let active = self.get_active().await?;
+
+        candidate.state = ModelState::Active;
+        self.write_model(&candidate).await?;
+
+        let mut conn = self.conn();
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        pipe.cmd("SET")
+            .arg(ACTIVE_KEY)
+            .arg(&candidate.model_id)
+            .ignore();
+        match &active {
+            Some(prior) => {
+                pipe.cmd("SET")
+                    .arg(PRIOR_ACTIVE_KEY)
+                    .arg(&prior.model_id)
+                    .ignore();
+            }
+            None => {
+                pipe.cmd("DEL").arg(PRIOR_ACTIVE_KEY).ignore();
+            }
+        }
+        let _: () = pipe.query_async(&mut conn).await.map_err(redis_err)?;
+
+        self.audit("promote", &candidate.model_id, &approval.actor, &[])
+            .await?;
+        Ok(candidate)
     }
 
     async fn rollback(&self, actor: &str) -> Result<ModelVersion, CoreError> {
@@ -490,6 +1023,9 @@ impl ModelRegistry for RedisModelRegistry {
         active_version.state = ModelState::RolledBack;
         self.write_model(&active_version).await?;
 
+        // The FULL prior ModelVersion record — bundle included (spec
+        // §B8) — is what gets restored; nothing here reconstructs any
+        // field piecemeal.
         let restored = self
             .get_model(&prior_id)
             .await?
@@ -535,32 +1071,69 @@ impl ModelRegistry for RedisModelRegistry {
 mod tests {
     use super::*;
 
+    fn family(byte: u8) -> FamilyId {
+        FamilyId::parse(&format!("fam_00000000-0000-7000-8000-0000000000{byte:02x}")).unwrap()
+    }
+
     fn passing_metrics() -> EvalMetricsSummary {
         EvalMetricsSummary {
-            total_cases: 100,
+            total_cases: 200,
             false_merge_rate: Some(0.0),
+            false_merge_count: 0,
+            false_merge_trap_count: 200,
             wrong_valid_rate: 0.001,
             accepted_precision: 0.999,
             exact_semantic_accuracy: 0.9,
+            oracle_retrieval_exact_accuracy: Some(0.95),
+            retrieval_recall_at_5: Some(0.98),
+        }
+    }
+
+    fn passing_evidence() -> GateEvidence {
+        GateEvidence {
+            aggregate: passing_metrics(),
+            per_family: vec![],
+            false_merge_upper_ci: Some(0.005),
+            computed_at: 0,
         }
     }
 
     #[test]
-    fn any_nonzero_false_merge_rate_fails_the_hard_gate() {
-        let mut candidate = passing_metrics();
-        candidate.false_merge_rate = Some(0.0001);
-        let reasons = gate_reasons(&candidate, &GoLiveGate::default());
+    fn any_nonzero_false_merge_count_fails_the_hard_gate() {
+        let mut evidence = passing_evidence();
+        evidence.aggregate.false_merge_count = 1;
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
         assert!(
-            reasons.iter().any(|r| r.contains("false_merge_rate")),
-            "expected a false_merge_rate failure reason, got {reasons:?}"
+            reasons.iter().any(|r| r.contains("false_merge_count")),
+            "expected a false_merge_count failure reason, got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn zero_false_merges_over_too_small_n_is_inconclusive_not_a_pass() {
+        // 0 observed false merges out of only 5 trap cases: the point
+        // estimate is 0.0, but the Wilson upper bound is wide — this must
+        // NOT be treated as "proven safe".
+        let mut evidence = passing_evidence();
+        evidence.aggregate.false_merge_trap_count = 5;
+        evidence.aggregate.total_cases = 200;
+        evidence.false_merge_upper_ci = Some(wilson_bound(0, 5, Z_95, true));
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.contains("INCONCLUSIVE") && r.contains("false_merge")),
+            "expected an inconclusive false-merge-CI reason, got {reasons:?}"
         );
     }
 
     #[test]
     fn no_false_merge_trap_cases_is_not_treated_as_a_failure() {
-        let mut candidate = passing_metrics();
-        candidate.false_merge_rate = None;
-        let reasons = gate_reasons(&candidate, &GoLiveGate::default());
+        let mut evidence = passing_evidence();
+        evidence.aggregate.false_merge_rate = None;
+        evidence.aggregate.false_merge_trap_count = 0;
+        evidence.false_merge_upper_ci = None;
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
         assert!(
             reasons.is_empty(),
             "an absent false_merge_rate (no trap cases in the held-out corpus) must not fail \
@@ -569,45 +1142,164 @@ mod tests {
     }
 
     #[test]
+    fn below_min_test_n_is_inconclusive() {
+        let mut evidence = passing_evidence();
+        evidence.aggregate.total_cases = 10;
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.contains("INCONCLUSIVE") && r.contains("min_test_n")),
+            "expected an inconclusive min_test_n reason, got {reasons:?}"
+        );
+    }
+
+    #[test]
     fn wrong_valid_rate_above_threshold_fails() {
-        let mut candidate = passing_metrics();
-        candidate.wrong_valid_rate = 0.05;
-        let reasons = gate_reasons(&candidate, &GoLiveGate::default());
+        let mut evidence = passing_evidence();
+        evidence.aggregate.wrong_valid_rate = 0.05;
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
         assert!(reasons.iter().any(|r| r.contains("wrong_valid_rate")));
     }
 
     #[test]
     fn accepted_precision_below_threshold_fails() {
-        let mut candidate = passing_metrics();
-        candidate.accepted_precision = 0.5;
-        let reasons = gate_reasons(&candidate, &GoLiveGate::default());
+        let mut evidence = passing_evidence();
+        evidence.aggregate.accepted_precision = 0.5;
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
         assert!(reasons.iter().any(|r| r.contains("accepted_precision")));
     }
 
     #[test]
-    fn fully_passing_metrics_has_no_gate_reasons() {
-        let reasons = gate_reasons(&passing_metrics(), &GoLiveGate::default());
+    fn retrieval_recall_below_floor_fails_independently() {
+        let mut evidence = passing_evidence();
+        evidence.aggregate.retrieval_recall_at_5 = Some(0.5);
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
+        assert!(reasons.iter().any(|r| r.contains("retrieval_recall_at_5")));
+    }
+
+    #[test]
+    fn fully_passing_evidence_has_no_gate_reasons() {
+        let reasons = gate_reasons(&passing_evidence(), &GateConfig::default());
         assert!(reasons.is_empty(), "{reasons:?}");
     }
 
     #[test]
-    fn a_candidate_that_regresses_accuracy_is_flagged() {
-        let active = passing_metrics();
-        let mut candidate = passing_metrics();
-        candidate.exact_semantic_accuracy = active.exact_semantic_accuracy - 0.2;
-        let reasons = regression_reasons(&candidate, &active);
+    fn per_family_slice_below_floor_with_sufficient_n_is_rejected_even_if_aggregate_passes() {
+        let mut evidence = passing_evidence();
+        // Aggregate is fine (see passing_metrics), but one family slice
+        // has plenty of N and low precision.
+        evidence.per_family = vec![
+            FamilySlice {
+                family_id: family(1),
+                n: 50,
+                correct: 30, // 60% — well under the 99% floor
+                precision: 0.6,
+            },
+            FamilySlice {
+                family_id: family(2),
+                n: 50,
+                correct: 50,
+                precision: 1.0,
+            },
+        ];
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
+        assert!(
+            reasons
+                .iter()
+                .any(|r| r.contains("family") && r.contains(family(1).as_str())),
+            "expected a per-family rejection reason for the bad slice, got {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn per_family_slice_below_floor_with_insufficient_n_is_exempt() {
+        let mut evidence = passing_evidence();
+        evidence.per_family = vec![FamilySlice {
+            family_id: family(1),
+            n: 3, // well under per_family_min_n (20)
+            correct: 0,
+            precision: 0.0,
+        }];
+        let reasons = gate_reasons(&evidence, &GateConfig::default());
+        assert!(
+            reasons.is_empty(),
+            "a tiny slice must not fail the gate on insufficient evidence: {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn a_candidate_that_regresses_accuracy_beyond_the_margin_is_flagged() {
+        let active = passing_evidence();
+        let mut candidate = passing_evidence();
+        candidate.aggregate.exact_semantic_accuracy =
+            active.aggregate.exact_semantic_accuracy - 0.2;
+        let reasons = regression_reasons(&candidate, &active, &GateConfig::default());
         assert!(reasons
             .iter()
             .any(|r| r.contains("exact_semantic_accuracy")));
     }
 
     #[test]
-    fn a_candidate_that_improves_never_regresses() {
-        let active = passing_metrics();
-        let mut candidate = passing_metrics();
-        candidate.exact_semantic_accuracy = active.exact_semantic_accuracy + 0.05;
-        candidate.wrong_valid_rate = active.wrong_valid_rate / 2.0;
-        let reasons = regression_reasons(&candidate, &active);
+    fn a_tiny_regression_within_the_non_inferiority_margin_is_not_flagged() {
+        let active = passing_evidence();
+        let mut candidate = passing_evidence();
+        candidate.aggregate.exact_semantic_accuracy =
+            active.aggregate.exact_semantic_accuracy - 0.001; // well within default margin 0.01
+        let reasons = regression_reasons(&candidate, &active, &GateConfig::default());
         assert!(reasons.is_empty(), "{reasons:?}");
+    }
+
+    #[test]
+    fn a_candidate_that_improves_never_regresses() {
+        let active = passing_evidence();
+        let mut candidate = passing_evidence();
+        candidate.aggregate.exact_semantic_accuracy =
+            active.aggregate.exact_semantic_accuracy + 0.05;
+        candidate.aggregate.wrong_valid_rate = active.aggregate.wrong_valid_rate / 2.0;
+        let reasons = regression_reasons(&candidate, &active, &GateConfig::default());
+        assert!(reasons.is_empty(), "{reasons:?}");
+    }
+
+    /// Spec §B12 acceptance: a candidate with GOOD (even improved)
+    /// generator accuracy but a retrieval-recall regression must still be
+    /// flagged — by the retrieval gate specifically, not folded into (or
+    /// hidden by) the generator-accuracy checks.
+    #[test]
+    fn good_generator_accuracy_does_not_mask_a_retrieval_recall_regression() {
+        let active = passing_evidence();
+        let mut candidate = passing_evidence();
+        candidate.aggregate.exact_semantic_accuracy =
+            active.aggregate.exact_semantic_accuracy + 0.03;
+        candidate.aggregate.oracle_retrieval_exact_accuracy =
+            active.aggregate.oracle_retrieval_exact_accuracy;
+        candidate.aggregate.retrieval_recall_at_5 = Some(0.5); // active is 0.98
+        let reasons = regression_reasons(&candidate, &active, &GateConfig::default());
+        assert!(
+            reasons.iter().any(|r| r.contains("retrieval_recall_at_5")),
+            "expected the retrieval gate to flag the regression independently: {reasons:?}"
+        );
+        assert!(
+            !reasons
+                .iter()
+                .any(|r| r.contains("exact_semantic_accuracy")),
+            "the (improved) generator-accuracy axis must not itself be flagged: {reasons:?}"
+        );
+    }
+
+    #[test]
+    fn wilson_bound_widens_as_n_shrinks() {
+        let wide = wilson_bound(0, 5, Z_95, true);
+        let tight = wilson_bound(0, 5000, Z_95, true);
+        assert!(
+            wide > tight,
+            "a smaller N must produce a wider (less confident) upper bound: {wide} vs {tight}"
+        );
+    }
+
+    #[test]
+    fn wilson_bound_handles_zero_n() {
+        assert_eq!(wilson_bound(0, 0, Z_95, true), 1.0);
+        assert_eq!(wilson_bound(0, 0, Z_95, false), 0.0);
     }
 }
