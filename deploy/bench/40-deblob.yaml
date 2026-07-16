@@ -28,10 +28,18 @@ spec:
               - matchExpressions:
                   - key: node-role.kubernetes.io/control-plane
                     operator: DoesNotExist
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
       containers:
         - name: deblob
-          image: ghcr.io/kamilandrzejrybacki-inc/deblob:bench
+          image: ghcr.io/kamilandrzejrybacki-inc/deblob:b3
           imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           args: ["--config", "/app/deblob.toml"]
           ports:
             - { name: mgmt, containerPort: 9615 }

@@ -27,7 +27,7 @@ spec:
                     operator: DoesNotExist
       containers:
         - name: bench
-          image: ghcr.io/kamilandrzejrybacki-inc/deblob:bench
+          image: ghcr.io/kamilandrzejrybacki-inc/deblob:b3
           imagePullPolicy: IfNotPresent
           command: ["/bin/sh", "-c"]
           env:
