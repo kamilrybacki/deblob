@@ -13,6 +13,7 @@
 
 pub mod cache;
 pub mod contract;
+pub mod feedback;
 pub mod http;
 pub mod prompt;
 
@@ -21,6 +22,7 @@ pub use contract::{
     InferenceBudget, InferenceDecision, InferenceError, InferenceOutcome, InferenceRequest,
     InferenceTelemetry, Novelty, Relation, SemanticInferencer,
 };
+pub use feedback::{LabelSource, TrainingExample};
 pub use http::{HttpInferencer, SlmHttpConfig};
 pub use prompt::{
     build_prompt, detect_injection, redact_field_name, CandidateProfileView, NumericBucket, Prompt,

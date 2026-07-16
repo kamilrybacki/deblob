@@ -7,6 +7,7 @@
 //! version allocation).
 
 pub mod evidence;
+pub mod feedback_store;
 pub mod health;
 pub mod index;
 pub mod lua;
@@ -14,6 +15,9 @@ pub mod registry;
 pub mod semantic;
 
 pub use evidence::{RedisEvidence, RedisEvidenceOpts};
+pub use feedback_store::{
+    FeedbackStore, RedisFeedbackStore, DEFAULT_FEEDBACK_STREAM_MAXLEN, FEEDBACK_STREAM_KEY,
+};
 pub use health::{HealthGate, HealthState, PersistenceHealth};
 pub use index::{bucket_key, bucket_member};
 pub use registry::{RedisOpts, RedisRegistry};
