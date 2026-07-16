@@ -17,10 +17,15 @@
 //! wiring on top of this module.
 
 pub mod corpus;
+pub mod generate;
 pub mod metrics;
 pub mod report;
 
 pub use corpus::{load_corpus, Category, EvalCase, EvalError, Expected, Partition};
+pub use generate::{
+    format_summary, generate_corpus, render_finetune_jsonl, write_corpus, GenerateConfig,
+    GeneratedCorpus, GenerationSummary,
+};
 pub use metrics::{
     compute_metrics, measure_candidate_order_sensitivity, measure_repeatability, regression_delta,
     run_eval, CallFailure, CaseResult, CategoryPrecision, EvalRun, Metrics, RegressionDelta,
