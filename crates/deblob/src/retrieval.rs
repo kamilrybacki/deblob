@@ -712,6 +712,13 @@ mod tests {
             self.calls.fetch_add(1, Ordering::SeqCst);
             Ok(self.families.clone())
         }
+        async fn family_version_schema(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+            _version: FamilyVersion,
+        ) -> Result<Option<SchemaId>, CoreError> {
+            unimplemented!("not exercised by retrieval tests")
+        }
     }
 
     /// A `Registry` fake that, unlike [`FakeRegistry`] above, actually
@@ -817,6 +824,13 @@ mod tests {
                 })
                 .map(|(_, r)| r.clone())
                 .collect())
+        }
+        async fn family_version_schema(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+            _version: FamilyVersion,
+        ) -> Result<Option<SchemaId>, CoreError> {
+            unimplemented!("not exercised by retrieval tests")
         }
     }
 

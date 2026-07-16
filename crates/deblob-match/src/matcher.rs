@@ -250,6 +250,13 @@ mod tests {
         ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
             unimplemented!("hot-path matcher must never run retrieval")
         }
+        async fn family_version_schema(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+            _version: deblob_core::id::FamilyVersion,
+        ) -> Result<Option<SchemaId>, CoreError> {
+            unimplemented!("hot-path matcher must never run retrieval")
+        }
     }
 
     // Silence "unused" on evidence-store-shaped items pulled in only so the

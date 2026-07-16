@@ -149,6 +149,25 @@ pub trait Registry: Send + Sync {
         bands: &[u32],
         depths: &[u32],
     ) -> Result<Vec<FamilyRef>, CoreError>;
+
+    /// The schema id published as `family_id`'s `version` (spec §6: family
+    /// versions are allocated 1.. via `HINCRBY` at `publish` time, and are
+    /// otherwise immutable) — `None` if that exact version was never
+    /// published, including a `family_id` that doesn't exist at all. Never
+    /// an error for a not-found version (mirrors [`Registry::
+    /// list_families_in_buckets`]'s "empty/absent is a valid answer, not a
+    /// failure" posture).
+    ///
+    /// P2-D Task 8 follow-up: lets a caller find a family's ADJACENT
+    /// version so `crate::semantic_drift::check_family_version_drift` (in
+    /// the `deblob` bin) can compare its active `sem_` against a
+    /// newly-annotated version's — the ONLY reason this method exists; nothing
+    /// else in this trait needed per-version lookup before.
+    async fn family_version_schema(
+        &self,
+        family_id: &FamilyId,
+        version: FamilyVersion,
+    ) -> Result<Option<SchemaId>, CoreError>;
 }
 
 #[async_trait]

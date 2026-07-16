@@ -12,7 +12,7 @@ use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use deblob_core::id::{RevisionId, SchemaId, SemanticId};
+use deblob_core::id::{FamilyVersion, RevisionId, SchemaId, SemanticId};
 use deblob_core::revision::{Etag, ReasonCode, Revision};
 use deblob_core::semantic::SemanticMetadata;
 use deblob_semantic::signature::{Score, Strength};
@@ -22,6 +22,7 @@ use deblob_semantic::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::semantic_drift;
 use crate::semantic_neighbors::{self, NeighborOutcome};
 
 use super::candidates::actor_from_headers;
@@ -255,6 +256,80 @@ pub async fn put_semantic(
     let was_appended = outcome.was_appended();
     let etag = outcome.etag();
     let revision = outcome.into_revision();
+
+    // P2-D Task 8 follow-up (A2): fire the Task 7 diagnostics for real, but
+    // ONLY on a genuine change (`was_appended`) — an idempotent replay
+    // (`was_appended == false`) changed nothing about the active `sem_` or
+    // the reverse index, so re-running either diagnostic would just
+    // increment the counters again for no new information. Both calls are
+    // READ-ONLY (see `crate::semantic_drift`'s module docs) and
+    // deliberately best-effort: a diagnostic failing to compute must never
+    // fail the annotation that already succeeded and was already returned
+    // to the script's atomic reply — this handler logs and continues.
+    if was_appended {
+        // (b) same-sem_/different-sch_: scan the reverse index for the
+        // sem_ this write just landed on.
+        if let Err(e) = semantic_drift::scan_semantic_collisions(
+            state.registry.as_ref(),
+            state.semantic.as_ref(),
+            &state.metrics,
+            &revision.sem_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                error = %e,
+                sem_id = %revision.sem_id.as_str(),
+                "semantic-collision scan failed (diagnostic-only, annotation already succeeded)"
+            );
+        }
+
+        // (a) semantic drift: only meaningful once the schema's family has
+        // an ADJACENT (version - 1) member to compare against — version 1
+        // has no prior version by definition.
+        if record.version.0 > 1 {
+            let prior_version = FamilyVersion(record.version.0 - 1);
+            match state
+                .registry
+                .family_version_schema(&record.family_id, prior_version)
+                .await
+            {
+                Ok(Some(prior_sch)) => {
+                    if let Err(e) = semantic_drift::check_family_version_drift(
+                        state.registry.as_ref(),
+                        state.semantic.as_ref(),
+                        &state.metrics,
+                        record.family_id.clone(),
+                        &prior_sch,
+                        prior_version,
+                        &id,
+                        record.version,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            family_id = %record.family_id.as_str(),
+                            "semantic-drift check failed (diagnostic-only, annotation already succeeded)"
+                        );
+                    }
+                }
+                Ok(None) => {
+                    // No adjacent version published (e.g. version 1 of a
+                    // family that skipped a number, or a schema that was
+                    // never actually published through a family at all) —
+                    // nothing to compare against, not an error.
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        family_id = %record.family_id.as_str(),
+                        "looking up the prior family version failed (diagnostic-only, annotation already succeeded)"
+                    );
+                }
+            }
+        }
+    }
 
     let body = DataEnvelope {
         data: SemanticView {

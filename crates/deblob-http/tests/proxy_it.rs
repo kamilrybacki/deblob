@@ -109,6 +109,14 @@ impl Registry for FakeRegistry {
     ) -> Result<Vec<FamilyRef>, CoreError> {
         panic!("not exercised by HotMatcher::classify")
     }
+
+    async fn family_version_schema(
+        &self,
+        _family_id: &FamilyId,
+        _version: FamilyVersion,
+    ) -> Result<Option<SchemaId>, CoreError> {
+        panic!("not exercised by HotMatcher::classify")
+    }
 }
 
 // Silence "never constructed"/"never called" warnings on the unused parts
@@ -379,6 +387,14 @@ impl Registry for DownRegistry {
         _bands: &[u32],
         _depths: &[u32],
     ) -> Result<Vec<FamilyRef>, CoreError> {
+        panic!("not exercised by HotMatcher::classify")
+    }
+
+    async fn family_version_schema(
+        &self,
+        _family_id: &FamilyId,
+        _version: FamilyVersion,
+    ) -> Result<Option<SchemaId>, CoreError> {
         panic!("not exercised by HotMatcher::classify")
     }
 }

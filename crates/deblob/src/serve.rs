@@ -29,7 +29,6 @@ use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, IngestToken, KafkaDisc
 use deblob_kafka::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 use deblob_kafka::{Relay, RelayCfg};
 use deblob_redis::{HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry};
-use deblob_semantic::Registries;
 use deblob_slm::{HttpInferencer, SemanticInferencer, SlmHttpConfig};
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -372,11 +371,14 @@ pub async fn serve(
         promoter,
         metrics: metrics.clone(),
         semantic,
-        // No registration endpoint exists yet for `canonical_field_id`/
-        // `canonical_event_type_id` (Task 2's `Registries` is deliberately
-        // injectable governance state, out of this task's scope) — always
-        // empty until a future task adds one.
-        semantic_registries: Arc::new(Registries::default()),
+        // P2-D Task 8 follow-up (A1): seeded from the TOML `[semantic]`
+        // section (`crate::config::SemanticConfig::to_registries`) — no
+        // registration ENDPOINT exists (an operator edits the config file
+        // and restarts), but the registries themselves are no longer
+        // permanently empty. Absent `[semantic]` still yields
+        // `Registries::default()` (both sets empty), so every strong-axis
+        // annotation 422s exactly as it did before this wiring.
+        semantic_registries: Arc::new(app_config.semantic.to_registries()),
     };
     let management_addr: SocketAddr =
         app_config

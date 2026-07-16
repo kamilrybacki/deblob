@@ -384,4 +384,29 @@ impl Registry for RedisRegistry {
         self.list_families_by_band_depth_bucketed(bands, depths)
             .await
     }
+
+    /// P2-D Task 8 follow-up: a single `HGET` on the family hash's
+    /// `v:<version>` field — the SAME field `crate::lua::PUBLISH_SCRIPT`
+    /// writes on a fresh publish (`HSET family_key 'v:' .. version,
+    /// schema_id`). `None` for a missing field OR a family hash that
+    /// doesn't exist at all — Redis's `HGET` on a missing key/field both
+    /// return `nil`, which `redis::AsyncCommands::hget` surfaces as `None`,
+    /// never an error.
+    async fn family_version_schema(
+        &self,
+        family_id: &FamilyId,
+        version: FamilyVersion,
+    ) -> Result<Option<SchemaId>, CoreError> {
+        let mut conn = self.conn();
+        let raw: Option<String> = conn
+            .hget(family_key(family_id), format!("v:{}", version.0))
+            .await
+            .map_err(redis_err)?;
+        raw.map(|s| {
+            SchemaId::parse(&s).map_err(|e| {
+                CoreError::RegistryUnavailable(format!("corrupt family version entry: {e:?}"))
+            })
+        })
+        .transpose()
+    }
 }

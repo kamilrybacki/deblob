@@ -108,6 +108,18 @@ impl Registry for FakeRegistry {
     ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
         unimplemented!("not exercised by the management API")
     }
+
+    async fn family_version_schema(
+        &self,
+        family_id: &deblob_core::id::FamilyId,
+        version: FamilyVersion,
+    ) -> Result<Option<SchemaId>, CoreError> {
+        Ok(self
+            .schemas
+            .iter()
+            .find(|s| &s.family_id == family_id && s.version == version)
+            .map(|s| s.schema_id.clone()))
+    }
 }
 
 /// In-memory `EvidenceStore` fake, keyed by `CandidateId`.
