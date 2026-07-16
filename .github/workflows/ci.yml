@@ -10,6 +10,15 @@ jobs:
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: bash scripts/lint-no-payload-logs.sh
+      # Covers the FULL workspace, including `deblob-semantic` (pure, no
+      # Docker: `digest_it.rs`/`signature_it.rs`) and every Docker-gated
+      # `deblob`/`deblob-redis` integration test — P2-D's `semantic_it.rs`,
+      # `semantic_drift_it.rs`, `semantic_neighbors_it.rs`, and the Task 8
+      # capstone `semantic_capstone_it.rs` all run here exactly like every
+      # pre-existing testcontainers-backed IT (`e2e_it.rs`, `relay_it.rs`,
+      # `chaos_it.rs`, ...): `ubuntu-latest` GH runners ship Docker already,
+      # so no extra `services:` block is needed, and no crate/test is
+      # excluded from `--workspace`.
       - run: cargo test --workspace
       # Explicit, isolated run of the eval harness (corpus loader + metrics
       # + the wiremock end-to-end self-test, deblob-p2ab Task 8). Already
