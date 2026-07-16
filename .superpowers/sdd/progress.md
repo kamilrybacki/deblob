@@ -29,4 +29,23 @@ Hermes similarity review deblob-p2d-02: FOLDED (deblob-p2d-02-hermes-similarity.
 Task 9: complete (commit 544db05, review ✅+Approved — PURE path-independent signature + exact weighted-Jaccard; all 8 invariants: determinism (BTreeMap byte-sort, no HashMap), COMPOUND-association (field-unit:<cfid> -> temp:USD/price:Cel != swapped, headline test), path-independence (rename->identical bytes score 1/1), typed length-prefixed encoding (":" collision test), §2 weights+min(count,4) cap, checked-u128 cross-mult ranking (no float), strength 4-tier + differing-event-cap-medium; 93 semantic, 317 workspace, clean)
   MINOR (final review): accumulation u64 checked-.expect() (overflow physically unreachable ~2e17 features); coverage denom = min-side field count (symmetric, order-agnostic at pure layer).
 Task 10: complete (bounded neighbor inverted index `deblob:sem-sig:<feature_hex>` in deblob-redis + `GET .../semantic-neighbors` API in deblob bin; SEM_APPEND_SCRIPT extended w/ atomic SREM/SADD posting swap round-tripped via `feature_keys_json` on the active pointer (no client-computed-old-key race); rebuild_semantic_index extended to rebuild postings byte-identically to incremental (real-Redis test); signature_candidates SUNION bounded at 20,000 -> TooBroad never truncated; neighbors() orchestrator (deblob::semantic_neighbors) scores/ranks via Task 9 similarity/strength, excludes self, no-anchor->empty+reason, diagnostic-only (before/after full-keyspace snapshot equality); include_historical documented as always-false (no auditor-scope infra exists, per brief's own guidance not to invent one); 15 deblob-redis semantic_it (incl 6 new Task 10) + 5 semantic_neighbors unit + 7 semantic_neighbors_it real-Redis HTTP, 404 workspace lib/bins, fmt/clippy -D warnings clean; deblob-redis now depends on deblob-semantic in prod (was dev-only) — narrow documented exception, only for feature-key derivation, never canonical/sem_ recompute; report .superpowers/sdd/task-10-report.md)
-Task 8: pending (capstone LAST after 10; ALSO seeds field-id/event-type registries from config — Task 6 follow-up)
+Task 8: complete (commits 57fed86 wiring + a56f125 capstone/runbook/CI + f05ec5f monoid-grammar fix; capstone e2e 467 tests green vs REAL Kafka+Redis via serve())
+  A1 DONE: [semantic] config section seeds field-id/event-type registries -> threaded into PUT /semantic validation (seeded validates, unregistered 422).
+  A2 DONE: check_family_version_drift wired post-promote/annotate + scan_semantic_collisions post-annotate -> drift/collision counters fire in prod, zero-mutation preserved.
+  CAPSTONE e2e: Cel vs [degF] identical structure -> distinct sem_, revisions, sch_ bytes unchanged, drift no-split, collision strength, diagnostic-only neighbors, all via real serve()/metrics.
+  SIGNIFICANT GAP FOUND+FIXED (f05ec5f): promoted schemas carry deblob-monoid-v1 canonical grammar but Task 4 path-enum only parsed deblob-canon-v1 -> every promoted schema 422'd on annotation. Fixed: canonical_field_paths_for dispatches by canonicalizer + a monoid-grammar walker (children/elem->Key/Wildcard); 6/6 promoted-annotation IT vs real Redis (existing+wildcard path annotate, absent 422s, canon-v1 unchanged, record unmutated). Runbook 'known gap' section replaced.
+  Remaining minor (final-review notes): drift compares only adjacent-lower family version; get_family/versions HTTP still 501 stubs (pre-existing P1).
+
+ALL 10 P2-D TASKS COMPLETE. Next: broad whole-branch review -> merge.
+
+## WHOLE-BRANCH REVIEW (opus) + merge
+Whole-branch review (6abb3dc..f05ec5f, 20 commits): READY except ONE merge-blocking cross-task defect —
+  f05ec5f fixed monoid path-enum in path.rs but semantic_drift.rs had its OWN canon-v1-only shape walker
+  -> drift/collision diagnostics silently no-op'd (swallowed MalformedShape) on promoted (monoid) schemas,
+  while runbook claimed they worked. All 8 constraints else ✅, no dep cycle, atomic, deterministic, diagnostic-only holds.
+FIX 3d940e9: semantic_drift.rs normalizes BOTH grammars into shared PathShape (typed_paths_for), canonicalizer
+  threaded through structural_relation/leaf_field_count/coverage/drift/collision; mixed-grammar pairs compare
+  post-normalization. New IT semantic_drift_monoid_promoted_it.rs (real Redis, 2 passed): collision + drift
+  findings FIRE on real Promoter::promote'd schemas, zero-mutation. Runbook corrected.
+MERGE GATE: build clean, fmt clean, clippy --workspace clean, all lib/bins pass, all test targets compile.
+  140 deblob, 348 workspace lib/bins. Docker IT (capstone/semantic/neighbors/monoid/drift) each run vs real Redis/Kafka.
