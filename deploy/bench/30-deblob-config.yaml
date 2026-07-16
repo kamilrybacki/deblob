@@ -1,0 +1,47 @@
+# Non-secret Deblob operational config for the benchmark. Secrets
+# (DEBLOB_API_TOKEN / DEBLOB_REDIS_URL / DEBLOB_KAFKA_BROKERS) are env-only,
+# supplied by the `deblob-secrets` Secret created at deploy time.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deblob-config
+  namespace: deblob-bench
+data:
+  deblob.toml: |
+    [kafka]
+    raw_topic = "events.raw"
+    tagged_topic = "events.tagged"
+    discovery_topic = "deblob.discovery"
+    quarantine_topic = "deblob.quarantine"
+    group_id = "deblob"
+    transactional_id = "deblob-relay-1"
+
+    [limits]
+    max_bytes = 1048576
+    max_depth = 32
+    max_fields_per_object = 1024
+
+    # Bench-tuned: short min_age so cold-lane candidates become promotable
+    # within a benchmark window (production default is 300000ms).
+    [promotion]
+    min_samples = 10
+    min_age_ms = 2000
+
+    [management]
+    addr = "0.0.0.0:9615"
+
+    [slm]
+    enabled = false
+
+    # Seed a small governance vocabulary so the P2-D annotation/neighbor
+    # scenarios can exercise the strong axes (canonical_field_id / event_type)
+    # instead of 422-ing.
+    [semantic]
+    canonical_field_ids = [
+      "cfid_temperature", "cfid_price", "cfid_user_id", "cfid_order_id",
+      "cfid_status", "cfid_timestamp", "cfid_amount", "cfid_currency",
+    ]
+    event_types = [
+      "event.user.created", "event.user.deleted", "event.order.placed",
+      "event.sensor.reading", "event.payment.captured",
+    ]

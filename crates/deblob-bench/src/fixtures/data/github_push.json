@@ -1,0 +1,48 @@
+{
+  "ref": "refs/heads/main",
+  "before": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+  "after": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+  "repository": {
+    "id": 918273645,
+    "name": "deblob",
+    "full_name": "kamil-rybacki/deblob",
+    "private": false,
+    "owner": {
+      "name": "kamil-rybacki",
+      "email": "owner@example.com"
+    },
+    "default_branch": "main"
+  },
+  "pusher": {
+    "name": "kamil-rybacki",
+    "email": "pusher@example.com"
+  },
+  "sender": {
+    "login": "kamil-rybacki",
+    "id": 4242424,
+    "type": "User"
+  },
+  "commits": [
+    {
+      "id": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+      "message": "fix(semantic): typed enum-value key",
+      "timestamp": "2026-07-14T18:20:00Z",
+      "author": {
+        "name": "kamil-rybacki",
+        "email": "author@example.com"
+      },
+      "added": ["crates/deblob-semantic/src/enum_key.rs"],
+      "removed": [],
+      "modified": ["crates/deblob-semantic/src/lib.rs"]
+    }
+  ],
+  "head_commit": {
+    "id": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+    "message": "fix(semantic): typed enum-value key",
+    "timestamp": "2026-07-14T18:20:00Z",
+    "author": {
+      "name": "kamil-rybacki",
+      "email": "author@example.com"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "specversion": "1.0",
+  "type": "com.homelab.sensors.reading",
+  "source": "/edge/lw-nas/sensors/temp01",
+  "id": "e3c4d5f6-0718-4920-a3b4-c5d6e7f8091a",
+  "time": "2026-07-16T10:25:00Z",
+  "datacontenttype": "application/json",
+  "data": {
+    "sensor_id": "temp01",
+    "temperature_c": 41.2,
+    "humidity_pct": 38.5,
+    "unit": "metric",
+    "location": {
+      "lat": 51.11,
+      "lon": 17.03
+    },
+    "tags": ["nas", "edge", "chassis"]
+  }
+}

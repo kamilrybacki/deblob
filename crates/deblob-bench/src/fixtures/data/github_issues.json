@@ -1,0 +1,34 @@
+{
+  "action": "labeled",
+  "issue": {
+    "id": 728192,
+    "number": 17,
+    "title": "P2-D neighbor query is O(n) over annotated schemas",
+    "user": {
+      "login": "kamil-rybacki",
+      "id": 4242424
+    },
+    "labels": [
+      { "name": "performance", "color": "d93f0b" },
+      { "name": "p2-d", "color": "0e8a16" }
+    ],
+    "state": "open",
+    "comments": 3,
+    "created_at": "2026-07-10T12:00:00Z",
+    "updated_at": "2026-07-15T08:30:00Z",
+    "body": "Need a benchmark before deciding whether to index it."
+  },
+  "label": {
+    "name": "p2-d",
+    "color": "0e8a16"
+  },
+  "repository": {
+    "id": 918273645,
+    "name": "deblob",
+    "full_name": "kamil-rybacki/deblob"
+  },
+  "sender": {
+    "login": "kamil-rybacki",
+    "id": 4242424
+  }
+}

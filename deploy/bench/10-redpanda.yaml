@@ -1,0 +1,68 @@
+# Single-broker Redpanda (Kafka-API compatible) for the benchmark.
+# Dev mode: no ZooKeeper/KRaft ceremony, ephemeral (emptyDir) — a bench
+# broker, not a durable store. Pinned to worker nodes (off the control plane).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redpanda
+  namespace: deblob-bench
+  labels: { app: redpanda }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: redpanda } }
+  template:
+    metadata:
+      labels: { app: redpanda }
+    spec:
+      # Keep the bench off the control-plane node (lw-c3); c1/c2 are workers.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      containers:
+        - name: redpanda
+          image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+          args:
+            - redpanda
+            - start
+            - --overprovisioned
+            - --smp=1
+            - --memory=2G
+            - --reserve-memory=0M
+            - --node-id=0
+            - --check=false
+            # advertise the in-cluster Service DNS so rdkafka clients dial back correctly
+            - --advertise-kafka-addr=internal://redpanda.deblob-bench.svc.cluster.local:9092
+            - --kafka-addr=internal://0.0.0.0:9092
+          ports:
+            - { name: kafka, containerPort: 9092 }
+            - { name: admin, containerPort: 9644 }
+          resources:
+            requests: { cpu: "500m", memory: "2Gi" }
+            limits: { cpu: "2", memory: "3Gi" }
+          readinessProbe:
+            tcpSocket: { port: 9092 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          volumeMounts:
+            - { name: data, mountPath: /var/lib/redpanda/data }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 4Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redpanda
+  namespace: deblob-bench
+  labels: { app: redpanda }
+spec:
+  clusterIP: None   # headless so the advertised svc DNS resolves to the pod
+  selector: { app: redpanda }
+  ports:
+    - { name: kafka, port: 9092, targetPort: 9092 }
+    - { name: admin, port: 9644, targetPort: 9644 }

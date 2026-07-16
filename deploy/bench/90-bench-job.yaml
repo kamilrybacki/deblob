@@ -1,0 +1,61 @@
+# Benchmark driver Job — runs the deblob-bench client IN-CLUSTER (on a worker)
+# so all load stays on c1/c2. Runs the self-contained scenarios as a sweep;
+# each `deblob-bench run` prints a JSON result line captured via `kubectl logs`.
+# The P2-D semantic/neighbor + cold-lane-promote scenarios (which need ids
+# discovered from a live run) are driven separately by the controller.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deblob-bench-run
+  namespace: deblob-bench
+spec:
+  backoffLimit: 2
+  completions: 1
+  template:
+    metadata:
+      labels: { app: deblob-bench-run }
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      containers:
+        - name: bench
+          image: ghcr.io/kamilandrzejrybacki-inc/deblob:b3
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c"]
+          env:
+            - name: DEBLOB_API_TOKEN
+              valueFrom:
+                secretKeyRef: { name: deblob-secrets, key: api_token }
+            - name: RUST_LOG
+              value: "warn,deblob_bench=info"
+          args:
+            - |
+              set -e
+              B=redpanda.deblob-bench.svc.cluster.local:9092
+              M=http://deblob.deblob-bench.svc.cluster.local:9615
+              run() { echo "===SCENARIO $*==="; /usr/local/bin/deblob-bench run --brokers "$B" --mgmt-url "$M" "$@"; echo "===END==="; }
+
+              # 1) hot-path throughput/latency across distinct-schema counts
+              for N in 10 100 1000 10000; do
+                run --scenario throughput --distinct-schemas $N --count 50000 --payload medium
+              done
+              # 2) payload-size sweep at a fixed schema count
+              for P in small large; do
+                run --scenario throughput --distinct-schemas 1000 --count 50000 --payload $P
+              done
+              # 3) malformed / quarantine cost
+              run --scenario malformed --distinct-schemas 500 --count 50000 --payload medium --malformed-pct 0.2
+              # 4) real-world corpora (GitHub/K8s/CloudEvents)
+              run --scenario real-world --count 50000
+              echo "===ALL DONE==="
+          resources:
+            requests: { cpu: "500m", memory: "256Mi" }
+            limits: { cpu: "3", memory: "1Gi" }

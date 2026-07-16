@@ -1,0 +1,27 @@
+[package]
+name = "deblob-bench"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Seeded synthetic + real-world JSON stream generation, an rdkafka producer/measurer, an mgmt-API prober, and a scenario runner + reporter for the Deblob k3s benchmark (additive, no product changes)."
+
+[[bin]]
+name = "deblob-bench"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+rand = "0.8"
+rand_chacha = "0.3"
+rdkafka = { version = "0.37", features = ["cmake-build", "tokio", "ssl"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+hdrhistogram = "7"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+deblob-core = { path = "../deblob-core" }
+deblob-fingerprint = { path = "../deblob-fingerprint" }

@@ -1,0 +1,27 @@
+# Namespace isolation: default-deny ingress, then allow ONLY intra-namespace
+# traffic. Without this, the unauthenticated bench Redis + Redpanda and the
+# (bearer-authed but still reachable) Deblob mgmt API are reachable from any
+# pod in the cluster. This confines the whole bench stack to its own namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: deblob-bench
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  # empty ingress = deny all ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: deblob-bench
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: deblob-bench

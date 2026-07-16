@@ -1,0 +1,8 @@
+# Ephemeral benchmark namespace. Teardown = `kubectl delete ns deblob-bench`.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deblob-bench
+  labels:
+    app.kubernetes.io/part-of: deblob-bench
+    purpose: benchmark

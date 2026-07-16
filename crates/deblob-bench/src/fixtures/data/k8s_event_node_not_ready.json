@@ -1,0 +1,26 @@
+{
+  "apiVersion": "v1",
+  "kind": "Event",
+  "metadata": {
+    "name": "lw-c3.17f2a3b4c5d6e7f9",
+    "namespace": "default",
+    "uid": "2b3c4d5e-6f70-8192-a3b4-c5d6e7f8091a",
+    "resourceVersion": "1048600",
+    "creationTimestamp": "2026-07-16T10:05:12Z"
+  },
+  "involvedObject": {
+    "kind": "Node",
+    "name": "lw-c3",
+    "uid": "3c4d5e6f-7081-92a3-b4c5-d6e7f8091a2b",
+    "apiVersion": "v1"
+  },
+  "reason": "NodeNotReady",
+  "message": "Node lw-c3 status is now: NodeNotReady",
+  "source": {
+    "component": "node-controller"
+  },
+  "firstTimestamp": "2026-07-16T10:05:12Z",
+  "lastTimestamp": "2026-07-16T10:06:42Z",
+  "count": 2,
+  "type": "Warning"
+}

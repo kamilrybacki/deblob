@@ -1,0 +1,38 @@
+# One-shot Job: create the Kafka topics with several partitions so the relay
+# can parallelise. Runs after Redpanda is reachable. Idempotent (create is a
+# no-op if the topic exists). Redpanda would auto-create single-partition
+# topics otherwise; this pins partition counts for throughput.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: topics-init
+  namespace: deblob-bench
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels: { app: topics-init }
+    spec:
+      restartPolicy: OnFailure
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      containers:
+        - name: rpk
+          image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              B=redpanda.deblob-bench.svc.cluster.local:9092
+              until rpk cluster info --brokers "$B" >/dev/null 2>&1; do
+                echo "waiting for redpanda..."; sleep 3; done
+              rpk topic create events.raw       --brokers "$B" -p 6 -r 1 || true
+              rpk topic create events.tagged    --brokers "$B" -p 6 -r 1 || true
+              rpk topic create deblob.discovery --brokers "$B" -p 3 -r 1 || true
+              rpk topic create deblob.quarantine --brokers "$B" -p 1 -r 1 || true
+              echo "topics ready:"; rpk topic list --brokers "$B"
