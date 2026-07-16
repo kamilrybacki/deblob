@@ -36,7 +36,7 @@ use rdkafka::client::ClientContext;
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{BaseConsumer, Consumer, ConsumerContext, Rebalance, StreamConsumer};
 use rdkafka::message::{Message, OwnedHeaders};
-use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
+use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord, Producer};
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::util::Timeout;
 use tokio::time::{sleep_until, Instant as TokioInstant};
@@ -326,15 +326,26 @@ enum TransactionBody {
     Fault,
 }
 
-/// Runs one full begin→produce(×N)→send_offsets→commit (or abort) cycle
-/// for a whole BATCH of records (batching spec §1-§2): begins one
-/// transaction, runs [`run_transaction_body`] for every record in
-/// `batch` (in accumulation order), and — iff every record produced
-/// cleanly — sends ONE `send_offsets_to_transaction` covering
-/// `MAX(offset)+1` for every `(topic, partition)` touched anywhere in the
-/// batch, then commits. Any record's produce error, or the offset-send
-/// itself failing, aborts the WHOLE transaction — no partial-batch commit,
-/// ever (batching spec §2 "Abort on any error").
+/// Runs one full begin→enqueue(×N)→await-all-deliveries→send_offsets→commit
+/// (or abort) cycle for a whole BATCH of records (batching spec §1-§2, and
+/// the produce-pipelining fix on top of it): begins one transaction, runs
+/// [`run_transaction_body`] for every record in `batch` (in accumulation
+/// order) to ENQUEUE its produce(s) — `run_transaction_body` never awaits a
+/// delivery itself, it only hands back the [`DeliveryFuture`]s it created —
+/// then, once every record in the batch has been enqueued, awaits every
+/// collected delivery ONCE, all together. Only after every delivery in the
+/// whole batch has confirmed does this send ONE `send_offsets_to_transaction`
+/// covering `MAX(offset)+1` for every `(topic, partition)` touched anywhere
+/// in the batch, then commits. Any record's enqueue error, any delivery's
+/// failure, or the offset-send itself failing, aborts the WHOLE transaction
+/// — no partial-batch commit, ever (batching spec §2 "Abort on any error").
+///
+/// This is what turns ~1000 sequential awaited broker round-trips per
+/// 500-record batch (the pre-fix bottleneck: `produce()` used to await each
+/// delivery inline) into ~1000 non-blocking local enqueues followed by ONE
+/// bounded await-all — the enqueues and their network round-trips overlap
+/// instead of serializing, matching the bench producer's `send_result` +
+/// batched-drain pattern.
 #[allow(clippy::too_many_arguments)]
 async fn process_batch(
     cfg: &RelayCfg,
@@ -352,6 +363,12 @@ async fn process_batch(
     // the offset commit must cover every one of them, not just the last
     // record processed.
     let mut max_offsets: BTreeMap<(String, i32), i64> = BTreeMap::new();
+
+    // Every DeliveryFuture enqueued across the whole batch (bounded by
+    // `max_batch_records` × produces-per-record — at most 2 per record,
+    // tagged/quarantine + optional discovery), awaited ONCE after the loop
+    // below instead of inline per record.
+    let mut deliveries: Vec<DeliveryFuture> = Vec::new();
 
     for record in batch {
         let PendingRecord {
@@ -378,16 +395,51 @@ async fn process_batch(
         .await;
 
         match body {
-            Ok(TransactionBody::Produced) => continue,
-            Ok(TransactionBody::Fault) => {
+            Ok((TransactionBody::Produced, mut record_deliveries)) => {
+                deliveries.append(&mut record_deliveries);
+                continue;
+            }
+            Ok((TransactionBody::Fault, _record_deliveries)) => {
                 // Simulated crash mid-batch (AfterDiscoveryProduce, chaos
                 // hook): stop processing the rest of the batch and leave
                 // the transaction open — the caller returns immediately
-                // without committing or aborting.
+                // without committing or aborting. Any deliveries already
+                // enqueued (including this record's discovery produce) are
+                // dropped here — they're already part of the still-open
+                // transaction on the broker regardless of whether this
+                // process ever awaits their local delivery future.
                 return Ok(ProcessOutcome::FaultInjected);
             }
             Err(err) => {
-                tracing::warn!(error = %err, "produce failed inside transaction, aborting batch");
+                tracing::warn!(error = %err, "enqueue failed inside transaction, aborting batch");
+                producer.abort_transaction(Timeout::After(Duration::from_secs(10)))?;
+                transaction_open.store(false, Ordering::SeqCst);
+                return Ok(ProcessOutcome::Aborted);
+            }
+        }
+    }
+
+    // Every record in the batch enqueued cleanly — now await every
+    // delivery for the WHOLE BATCH, once, in one pass. This is the actual
+    // pipelining: all the enqueues above ran without blocking on a broker
+    // round-trip, so their underlying network I/O already overlapped; this
+    // loop just collects the outcomes. ANY delivery failure aborts the
+    // whole batch — exactly once means no partial commit, ever.
+    for delivery in deliveries {
+        match delivery.await {
+            Ok(Ok(_partition_offset)) => {}
+            Ok(Err((err, _owned_msg))) => {
+                tracing::warn!(error = %err, "delivery failed inside transaction, aborting batch");
+                producer.abort_transaction(Timeout::After(Duration::from_secs(10)))?;
+                transaction_open.store(false, Ordering::SeqCst);
+                return Ok(ProcessOutcome::Aborted);
+            }
+            Err(_canceled) => {
+                // The producer was dropped before this delivery's report
+                // arrived — never expected in practice (the producer
+                // outlives `process_batch`) but must abort rather than
+                // silently treating a never-confirmed delivery as success.
+                tracing::warn!("delivery future canceled inside transaction, aborting batch");
                 producer.abort_transaction(Timeout::After(Duration::from_secs(10)))?;
                 transaction_open.store(false, Ordering::SeqCst);
                 return Ok(ProcessOutcome::Aborted);
@@ -396,8 +448,8 @@ async fn process_batch(
     }
 
     // Batching spec §1/§4: AfterProduceBeforeCommit now fires after the
-    // BATCH's produces (every record above completed), before the batch's
-    // send_offsets_to_transaction/commit_transaction.
+    // BATCH's produces AND their deliveries have ALL been awaited above,
+    // before the batch's send_offsets_to_transaction/commit_transaction.
     if cfg.fault == Some(FaultPoint::AfterProduceBeforeCommit) {
         return Ok(ProcessOutcome::FaultInjected);
     }
@@ -436,11 +488,17 @@ async fn process_batch(
     }
 }
 
-/// Classifies (or tombstone-passes-through) one record and produces its
-/// output(s) inside the already-open (batch) transaction. Never calls
-/// begin/commit/abort itself — that's `process_batch`'s job — so a fault
-/// injection here can cleanly signal "stop, leave the transaction open"
-/// without this function needing to know about transaction bookkeeping.
+/// Classifies (or tombstone-passes-through) one record and ENQUEUES its
+/// output(s) inside the already-open (batch) transaction, returning the
+/// [`DeliveryFuture`](s) it created WITHOUT awaiting them — `process_batch`
+/// collects every record's deliveries across the whole batch and awaits
+/// them all together, once, after the last record here has enqueued (the
+/// produce-pipelining fix: this used to `.await` each delivery inline,
+/// which serialized every record behind its own broker round-trip). Never
+/// calls begin/commit/abort itself — that's `process_batch`'s job — so a
+/// fault injection here can cleanly signal "stop, leave the transaction
+/// open" without this function needing to know about transaction
+/// bookkeeping.
 #[allow(clippy::too_many_arguments)]
 async fn run_transaction_body(
     cfg: &RelayCfg,
@@ -450,30 +508,28 @@ async fn run_transaction_body(
     key: Option<Vec<u8>>,
     payload: Option<Vec<u8>>,
     inbound_headers: OwnedHeaders,
-) -> Result<TransactionBody, RelayError> {
-    let queue_timeout = Timeout::After(Duration::from_secs(10));
-
+) -> Result<(TransactionBody, Vec<DeliveryFuture>), RelayError> {
     let Some(payload) = payload else {
         // Kafka tombstone: null value. NOT malformed — no parse attempted
         // at all (spec §3.2), pass through with the reserved tombstone
         // tag, preserving the key so compaction semantics hold.
         let out_headers = headers::with_tag(inbound_headers, &SchemaRef::Tombstone, cursor);
-        produce(
+        let delivery = produce(
             producer,
             &cfg.tagged_topic,
             Some(cursor.partition),
             key.as_deref(),
             None,
             out_headers,
-            queue_timeout,
-        )
-        .await?;
+        )?;
 
         // AfterProduceBeforeCommit is now checked once per BATCH in
-        // `process_batch`, after every record (including this tombstone)
-        // has been produced — not per record.
-        return Ok(TransactionBody::Produced);
+        // `process_batch`, after every record's deliveries (including this
+        // tombstone's) have been awaited — not per record.
+        return Ok((TransactionBody::Produced, vec![delivery]));
     };
+
+    let mut deliveries = Vec::with_capacity(2);
 
     let classification = matcher.classify(&payload, &cfg.limits).await;
 
@@ -491,7 +547,7 @@ async fn run_transaction_body(
             cursor: cursor.clone(),
         };
         let discovery_bytes = serde_json::to_vec(&discovery)?;
-        produce(
+        let delivery = produce(
             producer,
             &cfg.discovery_topic,
             // No source-partition mapping requirement for the discovery
@@ -502,12 +558,11 @@ async fn run_transaction_body(
             Some(cand_id.as_str().as_bytes()),
             Some(&discovery_bytes),
             OwnedHeaders::new(),
-            queue_timeout,
-        )
-        .await?;
+        )?;
+        deliveries.push(delivery);
 
         if cfg.fault == Some(FaultPoint::AfterDiscoveryProduce) {
-            return Ok(TransactionBody::Fault);
+            return Ok((TransactionBody::Fault, deliveries));
         }
     }
 
@@ -526,7 +581,7 @@ async fn run_transaction_body(
         }
     };
 
-    produce(
+    let delivery = produce(
         producer,
         target_topic,
         // Derived topic has the same partition count as the raw topic;
@@ -536,26 +591,43 @@ async fn run_transaction_body(
         key.as_deref(),
         Some(&payload),
         out_headers,
-        queue_timeout,
-    )
-    .await?;
+    )?;
+    deliveries.push(delivery);
 
     // AfterProduceBeforeCommit is now checked once per BATCH in
-    // `process_batch`, after every record has been produced — not per
-    // record.
-    Ok(TransactionBody::Produced)
+    // `process_batch`, after every record's deliveries have all been
+    // awaited — not per record.
+    Ok((TransactionBody::Produced, deliveries))
 }
 
-/// Produces one record as part of the currently-open transaction.
-async fn produce(
+/// Enqueues one record as part of the currently-open transaction via
+/// [`FutureProducer::send_result`] and returns its [`DeliveryFuture`]
+/// WITHOUT awaiting it. `send_result` enqueues onto the producer's local
+/// queue and returns immediately — it does NOT wait for the broker's
+/// delivery ack the way the old `FutureProducer::send` call this replaces
+/// did. Awaiting every delivery inline (the bug this fixes) serialized
+/// every produce inside a transaction behind its own network round-trip:
+/// a 500-record batch with up to 2 produces per record meant ~1000
+/// sequential awaited round-trips per transaction (~10s), even though
+/// batching had already amortised the commit itself. The caller
+/// ([`process_batch`], via [`run_transaction_body`]) collects every
+/// record's `DeliveryFuture` across the whole batch and awaits them all
+/// together, once, before `send_offsets_to_transaction`/commit — so the
+/// enqueues (and their underlying network I/O) overlap instead of
+/// serializing.
+///
+/// The immediate-enqueue error case (e.g. the local queue is full) is
+/// mapped to a [`RelayError`] here, exactly like the old inline delivery
+/// failure was — the caller's existing `Err(err)` arm aborts the whole
+/// batch, unchanged.
+fn produce(
     producer: &FutureProducer,
     topic: &str,
     partition: Option<i32>,
     key: Option<&[u8]>,
     payload: Option<&[u8]>,
     headers: OwnedHeaders,
-    queue_timeout: Timeout,
-) -> Result<(), RelayError> {
+) -> Result<DeliveryFuture, RelayError> {
     let mut record = FutureRecord::<[u8], [u8]>::to(topic).headers(headers);
     if let Some(p) = partition {
         record = record.partition(p);
@@ -567,10 +639,8 @@ async fn produce(
         record = record.payload(p);
     }
     producer
-        .send(record, queue_timeout)
-        .await
-        .map_err(|(err, _owned_msg)| RelayError::Kafka(err))?;
-    Ok(())
+        .send_result(record)
+        .map_err(|(err, _record)| RelayError::Kafka(err))
 }
 
 /// The consumer-side [`ClientConfig`] (pub(crate) so relay.rs's own unit
