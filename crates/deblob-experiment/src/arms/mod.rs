@@ -32,9 +32,10 @@ pub mod semantic;
 pub type ArmDecision = deblob_slm::InferenceDecision;
 
 /// Identifies which of the spec §1 arms produced a given
-/// [`ArmDecision`]/report row. `Cn` (continual-learning trajectory) is out
-/// of scope for this task — see the spec's §7/§8 acceptance items, which
-/// this task does not claim.
+/// [`ArmDecision`]/report row. `C { round }` (continual-learning
+/// trajectory, spec §7) is B1's model retrained over prequential rounds —
+/// the SAME `GatedArm`/gate every other arm reuses, wrapping whichever
+/// `SemanticInferencer` that round's gate-passing candidate produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ArmId {
@@ -51,16 +52,21 @@ pub enum ArmId {
     /// Deterministic top-1 substituted for the SLM, through the SAME trust
     /// gate — the redundancy ablation.
     B2,
+    /// B1's model after `round` prequential retrain-and-gate cycles (spec
+    /// §7). `round == 0` is `B_v0` — B1's original model, before any
+    /// continual-learning round has run.
+    C { round: u32 },
 }
 
 impl ArmId {
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            ArmId::A0 => "A0 (retrieval-only)",
-            ArmId::A1 => "A1 (fair deterministic policy)",
-            ArmId::B0 => "B0 (raw SLM, no gate)",
-            ArmId::B1 => "B1 (SLM + trust gate)",
-            ArmId::B2 => "B2 (det-top1 + trust gate, redundancy ablation)",
+            ArmId::A0 => "A0 (retrieval-only)".to_string(),
+            ArmId::A1 => "A1 (fair deterministic policy)".to_string(),
+            ArmId::B0 => "B0 (raw SLM, no gate)".to_string(),
+            ArmId::B1 => "B1 (SLM + trust gate)".to_string(),
+            ArmId::B2 => "B2 (det-top1 + trust gate, redundancy ablation)".to_string(),
+            ArmId::C { round } => format!("C{round} (B1 after {round} continual round(s))"),
         }
     }
 }

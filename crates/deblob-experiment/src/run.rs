@@ -65,9 +65,24 @@ pub struct ArmReport {
     pub accepted_external_risk: Option<f64>,
     pub false_merge_count: usize,
     pub false_merge_upper_bound_95: Option<f64>,
+    /// Spec §8 reporter wiring: which runtime/backend produced this row's
+    /// decisions, formatted as `"{backend}:{model_id}"` — reuses Task 3's
+    /// `deblob_slm::runtime::RuntimeInfo` (left as a bare adapter accessor
+    /// until now, per that task's own disclosed gap). `None` here because
+    /// this runner still drives every arm off a bare
+    /// `HeuristicMockInferencer` rather than a `ModelBundle` — the field
+    /// exists so a model-roster wiring can populate it without another
+    /// report-shape change; `continual::prequential::RoundRecord::runtime`
+    /// is the arm-C counterpart that IS populated today.
+    pub runtime: Option<String>,
 }
 
-fn arm_report(id: ArmId, decisions: &[ArmDecision], sidecars: &[GoldSidecar]) -> ArmReport {
+fn arm_report(
+    id: ArmId,
+    decisions: &[ArmDecision],
+    sidecars: &[GoldSidecar],
+    runtime: Option<String>,
+) -> ArmReport {
     let total = decisions.len();
     let mut accepted = 0usize;
     let mut accepted_wrong = 0usize;
@@ -99,6 +114,7 @@ fn arm_report(id: ArmId, decisions: &[ArmDecision], sidecars: &[GoldSidecar]) ->
         },
         false_merge_count: false_merge,
         false_merge_upper_bound_95: upper_bound_95(false_merge, accepted),
+        runtime,
     }
 }
 
@@ -209,12 +225,16 @@ pub fn run_experiment(cfg: &RunConfig) -> ExperimentReport {
         .collect();
     let b1_vs_a1 = compute_l4(&l4_views, cfg.seed, cfg.bootstrap_iterations);
 
+    // No `ModelBundle`/`RuntimeInfo` is wired into this runner yet (every
+    // arm here is a bare `HeuristicMockInferencer` or a deterministic
+    // heuristic, neither of which has a runtime to report) — see
+    // `ArmReport::runtime`'s docs.
     let headline = vec![
-        arm_report(ArmId::A0, &a0_decisions, &sidecars),
-        arm_report(ArmId::A1, &a1_decisions, &sidecars),
-        arm_report(ArmId::B0, &b0_decisions, &sidecars),
-        arm_report(ArmId::B1, &b1_decisions, &sidecars),
-        arm_report(ArmId::B2, &b2_decisions, &sidecars),
+        arm_report(ArmId::A0, &a0_decisions, &sidecars, None),
+        arm_report(ArmId::A1, &a1_decisions, &sidecars, None),
+        arm_report(ArmId::B0, &b0_decisions, &sidecars, None),
+        arm_report(ArmId::B1, &b1_decisions, &sidecars, None),
+        arm_report(ArmId::B2, &b2_decisions, &sidecars, None),
     ];
 
     ExperimentReport {

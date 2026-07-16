@@ -13,6 +13,7 @@ path = "src/main.rs"
 deblob-core = { path = "../deblob-core" }
 deblob = { path = "../deblob" }
 deblob-eval = { path = "../deblob-eval" }
+deblob-redis = { path = "../deblob-redis" }
 deblob-slm = { path = "../deblob-slm" }
 deblob-monoid = { path = "../deblob-monoid" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
@@ -25,7 +26,8 @@ uuid.workspace = true
 rand = "0.8"
 rand_chacha = "0.3"
 futures-executor = "0.3"
+tokio = { workspace = true, features = ["process"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 wiremock = "0.6"
+testcontainers-modules = { version = "0.11", features = ["redis"] }

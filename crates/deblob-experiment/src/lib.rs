@@ -21,6 +21,7 @@
 //! `deblob::shadow::evaluate_policy`.
 
 pub mod arms;
+pub mod continual;
 pub mod corpus;
 pub mod labels;
 pub mod metrics;

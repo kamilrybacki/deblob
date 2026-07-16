@@ -31,17 +31,18 @@ pub fn render_markdown(report: &ExperimentReport) -> String {
     ));
 
     s.push_str("## Headline: risk vs coverage, per arm\n\n");
-    s.push_str("| Arm | Coverage | Accepted N | Accepted external risk | False merges | Upper 95% bound |\n");
-    s.push_str("|---|---|---|---|---|---|\n");
+    s.push_str("| Arm | Coverage | Accepted N | Accepted external risk | False merges | Upper 95% bound | Runtime |\n");
+    s.push_str("|---|---|---|---|---|---|---|\n");
     for row in &report.headline {
         s.push_str(&format!(
-            "| {} | {} | {} | {} | {} | {} |\n",
+            "| {} | {} | {} | {} | {} | {} | {} |\n",
             row.id.label(),
             pct(row.accepted_coverage),
             row.accepted_count,
             pct_opt(row.accepted_external_risk),
             row.false_merge_count,
             pct_opt(row.false_merge_upper_bound_95),
+            row.runtime.as_deref().unwrap_or("n/a"),
         ));
     }
     s.push('\n');
