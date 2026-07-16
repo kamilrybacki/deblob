@@ -1,0 +1,112 @@
+# Ollama Deployment — serves Granite 3.1-MoE 1B + Qwen2.5 1.5B-Instruct over
+# the OpenAI-compat API (spec §5, `deblob_slm::adapters::ollama`'s
+# `DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434/v1"`). CPU-only (no
+# `nvidia.com/gpu` request — workers have none); pinned to worker nodes.
+#
+# Model-weight provisioning (spec §8's ask to document this): an
+# initContainer runs a throwaway `ollama serve` in the background just long
+# enough to `ollama pull` both tags into a shared `emptyDir`, then exits;
+# the main container starts the real, long-lived `ollama serve` pointed at
+# that already-populated `OLLAMA_MODELS` directory. No weights are baked
+# into any image — the init pull is the "simplest that fits the bench
+# pattern" option verified against the real Ollama library
+# (`ollama.com/library/granite3.1-moe:1b`, `.../qwen2.5:1.5b-instruct`) —
+# it needs a one-time internet egress, scoped by the `role: model-server`
+# label to `05-networkpolicy.yaml`'s `allow-model-weight-pull-egress` rule
+# only.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: deblob-experiment
+  labels: { app: ollama, role: model-server }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: ollama } }
+  template:
+    metadata:
+      labels: { app: ollama, role: model-server }
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        - name: pull-models
+          image: ollama/ollama:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              ollama serve &
+              SERVER_PID=$!
+              until ollama list >/dev/null 2>&1; do
+                echo "waiting for local ollama server..."; sleep 2
+              done
+              ollama pull granite3.1-moe:1b
+              ollama pull qwen2.5:1.5b-instruct
+              kill "$SERVER_PID"
+          env:
+            - { name: HOME, value: "/data" }
+            - { name: OLLAMA_MODELS, value: "/data/models" }
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits: { cpu: "2", memory: "3Gi" }
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          env:
+            - { name: HOME, value: "/data" }
+            - { name: OLLAMA_MODELS, value: "/data/models" }
+            - { name: OLLAMA_HOST, value: "0.0.0.0:11434" }
+            # No further internet needed: OLLAMA_MODELS already populated by
+            # the initContainer above.
+            - { name: OLLAMA_NOPRUNE, value: "1" }
+          ports:
+            - { name: http, containerPort: 11434 }
+          resources:
+            requests: { cpu: "1", memory: "3Gi" }
+            limits: { cpu: "3", memory: "6Gi" }
+          readinessProbe:
+            tcpSocket: { port: 11434 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 11434 }
+            initialDelaySeconds: 15
+            periodSeconds: 15
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 8Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama
+  namespace: deblob-experiment
+  labels: { app: ollama }
+spec:
+  selector: { app: ollama }
+  ports:
+    - { name: http, port: 11434, targetPort: 11434 }

@@ -1,0 +1,82 @@
+# Experiment driver Job — runs the `deblob-experiment` binary IN-CLUSTER
+# on a worker (spec §8: "experiment Job pinned to workers c1/c2"), mirroring
+# deploy/bench/90-bench-job.yaml's shape (one-shot Job, `restartPolicy:
+# Never`, worker affinity, ghcr image + pull secret).
+#
+# Today's binary (`crates/deblob-experiment/src/main.rs`) takes no CLI
+# flags and always runs `RunConfig::default()` (synthetic corpus + mock
+# inferencer), printing the Markdown report to stdout — real corpus/model
+# wiring is a later task (see 30-experiment-config.yaml's header). This
+# Job therefore captures that stdout into the report volume and archives
+# the (currently forward-declared) config alongside it, so the deploy
+# already has the right shape for when config-driven runs land — only the
+# container's `args` need to change, not this Job's structure.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: deblob-experiment-run
+  namespace: deblob-experiment
+spec:
+  backoffLimit: 2
+  completions: 1
+  template:
+    metadata:
+      labels: { app: deblob-experiment-run }
+    spec:
+      restartPolicy: Never
+      imagePullSecrets:
+        - name: ghcr-pull
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: experiment
+          # NEW tag: the Dockerfile's multi-stage build must add the
+          # `deblob-experiment` binary (see this task's Dockerfile diff)
+          # and CI must push this tag before the Job can run.
+          image: ghcr.io/kamilandrzejrybacki-inc/deblob:e1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -e
+              mkdir -p /reports
+              /usr/local/bin/deblob-experiment | tee /reports/experiment-report.md
+              cp /etc/deblob-experiment/experiment.toml /reports/experiment-config-snapshot.toml
+              echo "report written to /reports/experiment-report.md"
+          env:
+            # Forward-declared (see 30-experiment-config.yaml /
+            # 35-experiment-secret.example.yaml) — not consumed by
+            # today's binary, wired now so a config-loading change needs
+            # no manifest edit.
+            - name: HF_TOKEN
+              valueFrom:
+                secretKeyRef: { name: deblob-experiment-secrets, key: HF_TOKEN }
+            - name: FINE_TUNE_API_KEY
+              valueFrom:
+                secretKeyRef: { name: deblob-experiment-secrets, key: FINE_TUNE_API_KEY }
+            - name: RUST_LOG
+              value: "info,deblob_experiment=info"
+          resources:
+            requests: { cpu: "500m", memory: "512Mi" }
+            limits: { cpu: "2", memory: "1Gi" }
+          volumeMounts:
+            - { name: config, mountPath: /etc/deblob-experiment }
+            - { name: reports, mountPath: /reports }
+      volumes:
+        - name: config
+          configMap: { name: deblob-experiment-config }
+        - name: reports
+          emptyDir: { sizeLimit: 1Gi }

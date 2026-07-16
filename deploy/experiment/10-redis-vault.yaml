@@ -1,0 +1,73 @@
+# Reused verbatim from deploy/bench/20-redis-vault.yaml (spec §8: "Redis
+# vault (reuse the bench AOF redis manifest — the feedback store + model
+# registry need it)") — only the namespace changed. AOF everysec +
+# noeviction, as the Deblob vault requires (it refuses non-persistent Redis
+# without --unsafe-volatile). Ephemeral storage — wiped on teardown. Pinned
+# to worker nodes. No `role: model-server` label: this pod gets NO internet
+# egress (see 05-networkpolicy.yaml).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-vault-conf
+  namespace: deblob-experiment
+data:
+  redis.conf: |
+    appendonly yes
+    appendfsync everysec
+    maxmemory-policy noeviction
+    save ""
+    dir /data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-vault
+  namespace: deblob-experiment
+  labels: { app: redis-vault }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: redis-vault } }
+  template:
+    metadata:
+      labels: { app: redis-vault }
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          args: ["redis-server", "/etc/redis/redis.conf"]
+          ports:
+            - { name: redis, containerPort: 6379 }
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "2Gi" }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - { name: conf, mountPath: /etc/redis }
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: conf
+          configMap: { name: redis-vault-conf }
+        - name: data
+          emptyDir: { sizeLimit: 4Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-vault
+  namespace: deblob-experiment
+  labels: { app: redis-vault }
+spec:
+  selector: { app: redis-vault }
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }

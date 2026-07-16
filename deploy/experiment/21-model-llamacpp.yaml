@@ -1,0 +1,91 @@
+# llama.cpp server Deployment — serves FunctionGemma 270M (GGUF) over the
+# OpenAI-compat API (spec §5, `deblob_slm::adapters::llama_cpp`'s
+# `DEFAULT_LLAMA_CPP_BASE_URL = "http://localhost:8080/v1"`). CPU-only
+# (`server` image tag, not `server-cuda`); pinned to worker nodes.
+#
+# Model-weight provisioning: `llama-server`'s built-in `-hf` flag pulls the
+# GGUF straight from the Hugging Face Hub at startup into `$LLAMA_CACHE`
+# (verified repo: `lmstudio-community/functiongemma-270m-it-GGUF`, whose
+# only file is `functiongemma-270m-it-F16.gguf` — llama-server falls back to
+# a repo's sole file when its default `Q4_K_M` tag isn't present, per its
+# own `--hf-repo` docs) — no initContainer needed, no weights baked into
+# the image. `$LLAMA_CACHE` is a shared `emptyDir` so the pull survives
+# container restarts within the pod's lifetime. Needs the same one-time
+# internet egress as the Ollama Deployment — see `role: model-server` in
+# `05-networkpolicy.yaml`.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llama-cpp
+  namespace: deblob-experiment
+  labels: { app: llama-cpp, role: model-server }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: llama-cpp } }
+  template:
+    metadata:
+      labels: { app: llama-cpp, role: model-server }
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: llama-cpp
+          image: ghcr.io/ggml-org/llama.cpp:server
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          args:
+            - "-hf"
+            - "lmstudio-community/functiongemma-270m-it-GGUF"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8080"
+            - "-c"
+            - "4096"
+          env:
+            - { name: HOME, value: "/data" }
+            - { name: LLAMA_CACHE, value: "/data/cache" }
+          ports:
+            - { name: http, containerPort: 8080 }
+          resources:
+            requests: { cpu: "500m", memory: "1Gi" }
+            limits: { cpu: "2", memory: "2Gi" }
+          readinessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 12
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 4Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llama-cpp
+  namespace: deblob-experiment
+  labels: { app: llama-cpp }
+spec:
+  selector: { app: llama-cpp }
+  ports:
+    - { name: http, port: 8080, targetPort: 8080 }
