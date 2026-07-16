@@ -418,6 +418,13 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
             quarantine_topic: quarantine_topic.clone(),
             group_id: "e2e-group".to_string(),
             transactional_id: "e2e-relay-txn".to_string(),
+            // This test's stages depend on producing a small number of
+            // records and observing their tags before producing the next
+            // stage — the pre-batching per-record-transaction escape
+            // hatch (batching spec §3) keeps that behavior exact rather
+            // than depending on the linger timer's timing.
+            max_batch_records: 1,
+            max_batch_linger_ms: 100,
         },
         limits: LimitsConfig::default(),
         // Task 19 brief: promotion guards configured low enough for the

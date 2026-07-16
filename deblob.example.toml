@@ -16,6 +16,15 @@ discovery_topic = "deblob.discovery"
 quarantine_topic = "deblob.quarantine"
 group_id = "deblob"
 transactional_id = "deblob-relay-1"
+# Relay transaction batching (docs/superpowers/specs/2026-07-16-relay-batching.md):
+# commit ONE Kafka transaction per batch of up to `max_batch_records` records,
+# or whatever accumulated within `max_batch_linger_ms` — amortises the
+# per-commit latency across the batch (~100x throughput vs one transaction
+# per record). Both are optional; omitting them defaults to 500 / 100ms.
+# `max_batch_records = 1` reproduces the exact pre-batching per-record
+# behaviour.
+# max_batch_records = 500
+# max_batch_linger_ms = 100
 
 [limits]
 max_bytes = 1048576

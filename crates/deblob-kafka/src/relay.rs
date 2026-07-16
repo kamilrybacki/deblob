@@ -1,18 +1,26 @@
-//! The transactional relay (spec §3.1-3.2): consume the raw topic →
-//! classify via [`HotMatcher`] → strip/rewrite `deblob-*` headers →
-//! transactional produce (tagged/quarantine [+ discovery for provisional
-//! shapes]) → `send_offsets_to_transaction` → commit, ONE Kafka
-//! transaction per record.
+//! The transactional relay (spec §3.1-3.2, batching spec
+//! `docs/superpowers/specs/2026-07-16-relay-batching.md` §1-2): consume the
+//! raw topic → classify via [`HotMatcher`] → strip/rewrite `deblob-*`
+//! headers → transactional produce (tagged/quarantine [+ discovery for
+//! provisional shapes]) → `send_offsets_to_transaction` → commit, ONE Kafka
+//! transaction per BATCH of up to `max_batch_records` records (or whatever
+//! accumulated within `max_batch_linger_ms`) — amortising the per-commit
+//! latency across many records instead of paying it once per record.
 //!
-//! Exactly-once scope (spec §3.1): Kafka transactions cover
-//! consume→produce→offset within the Kafka path only. A crash between a
-//! successful produce and the commit leaves the transaction open on the
-//! broker; a `read_committed` downstream consumer sees none of it, and
-//! reprocessing the same source offset from a fresh relay (or after the
-//! transaction fences/times out) produces byte-identical output — the
+//! Exactly-once scope (spec §3.1, batching spec §2): Kafka transactions
+//! cover consume→produce→offset within the Kafka path only. A crash between
+//! the batch's last successful produce and its commit leaves the
+//! transaction open on the broker; a `read_committed` downstream consumer
+//! sees NONE of the batch's records, and reprocessing the same source
+//! offsets from a fresh relay (or after the transaction fences/times out)
+//! reproduces the whole batch byte-identically — the
 //! `deblob-schema-id`/`deblob-origin` headers are pure functions of the
 //! source record and its cursor, never a freshly minted id (spec §3.2).
+//! Batching changes only the GRANULARITY of the guarantee (per-batch
+//! instead of per-record), never the guarantee itself: a batch is committed
+//! or reprocessed as one atomic unit, never partially.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
@@ -31,27 +39,32 @@ use rdkafka::message::{Message, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::util::Timeout;
+use tokio::time::{sleep_until, Instant as TokioInstant};
 use tokio_util::sync::CancellationToken;
 
 use crate::headers;
 
-/// Where to inject a simulated crash inside the per-record
-/// produce→commit sequence (Task 17's chaos harness). `None` (the default)
-/// runs the normal consume → classify → produce → commit loop with no
-/// injected fault.
+/// Where to inject a simulated crash inside the per-batch
+/// produce→commit sequence (Task 17's chaos harness, extended for batching
+/// per `docs/superpowers/specs/2026-07-16-relay-batching.md` §4). `None`
+/// (the default) runs the normal consume → classify → produce → commit
+/// loop with no injected fault.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultPoint {
     /// After the discovery record has been produced (only reachable for a
-    /// `Provisional` classification), but before this record's own
+    /// `Provisional` classification), but before that SAME record's own
     /// tagged/quarantine output is produced — simulates a crash between the
-    /// two produces of the SAME transaction.
+    /// two produces of one record, mid-batch. Any records already produced
+    /// earlier in the batch, and this record's discovery produce, remain
+    /// part of the still-open (never committed) transaction.
     AfterDiscoveryProduce,
-    /// After every produce for this record has completed, but before
-    /// `send_offsets_to_transaction`/`commit_transaction` — simulates a
-    /// crash after the broker has buffered the produced records but before
-    /// the transaction (and therefore the consumer offset) is committed. A
-    /// `read_committed` consumer must see NONE of this transaction's
-    /// records.
+    /// After every produce for the WHOLE BATCH has completed, but before
+    /// `send_offsets_to_transaction`/`commit_transaction` for the batch —
+    /// simulates a crash after the broker has buffered every produced
+    /// record in the batch but before the transaction (and therefore the
+    /// consumer offsets) is committed. A `read_committed` consumer must see
+    /// NONE of this transaction's records — i.e. none of the batch's
+    /// records, not just the last one.
     AfterProduceBeforeCommit,
 }
 
@@ -65,6 +78,18 @@ pub struct RelayCfg {
     pub quarantine_topic: String,
     pub transactional_id: String,
     pub limits: Limits,
+    /// Flush the accumulated batch and commit ONE transaction once it
+    /// reaches this many records (batching spec §3). Clamped to at least 1
+    /// by [`Relay::run`] — `1` reproduces the exact pre-batching
+    /// per-record-transaction behaviour, a documented escape hatch.
+    pub max_batch_records: usize,
+    /// Flush the accumulated batch once this many milliseconds have
+    /// elapsed since the FIRST record was added to it, even if
+    /// `max_batch_records` hasn't been reached — bounds the added latency
+    /// of a partially-full batch (batching spec §3). The linger timer does
+    /// not start until the batch holds at least one record: [`Relay::run`]
+    /// blocks indefinitely for the first record of a new batch.
+    pub max_batch_linger_ms: u64,
     /// Chaos-test hook (Task 17); `None` in normal operation — every test
     /// in this crate except the fault-point plumbing itself runs with
     /// `None`.
@@ -164,8 +189,11 @@ pub struct Relay;
 
 impl Relay {
     /// Runs the relay loop until `shutdown` is cancelled or an
-    /// unrecoverable [`RelayError`] occurs. One Kafka transaction per
-    /// polled record (spec brief: "correctness over throughput for P1").
+    /// unrecoverable [`RelayError`] occurs. One Kafka transaction per BATCH
+    /// of up to `cfg.max_batch_records` records — or fewer, if
+    /// `cfg.max_batch_linger_ms` elapses first, or on shutdown (the
+    /// in-flight batch is flushed, then the loop exits) — amortising the
+    /// commit latency across the whole batch (batching spec §1).
     pub async fn run(
         cfg: RelayCfg,
         matcher: Arc<HotMatcher>,
@@ -185,39 +213,65 @@ impl Relay {
             consumer_client_config(&cfg).create_with_context(context)?;
         consumer.subscribe(&[cfg.raw_topic.as_str()])?;
 
+        // `0` would mean "never flush" — clamp to 1, which reproduces the
+        // exact pre-batching per-record-transaction behaviour (batching
+        // spec §3's documented escape hatch).
+        let max_batch_records = cfg.max_batch_records.max(1);
+        let linger = Duration::from_millis(cfg.max_batch_linger_ms);
+
         loop {
-            let msg = tokio::select! {
-                _ = shutdown.cancelled() => return Ok(()),
-                msg = consumer.recv() => msg?,
-            };
+            let mut batch: Vec<PendingRecord> = Vec::new();
+            // `None` until the first record lands — the linger timer must
+            // not start (and must not fire) before there is anything to
+            // flush (batching spec §1: "Block for the first record").
+            let mut deadline: Option<TokioInstant> = None;
 
-            let topic = msg.topic().to_string();
-            let partition = msg.partition();
-            let offset = msg.offset();
-            let key = msg.key().map(|k| k.to_vec());
-            let payload = msg.payload().map(|p| p.to_vec());
-            let inbound_headers = headers::strip_reserved(msg.headers());
-            // Release the borrow of `consumer` this message holds before
-            // we touch `consumer` again (group_metadata, next recv).
-            drop(msg);
+            while batch.len() < max_batch_records {
+                tokio::select! {
+                    _ = shutdown.cancelled() => break,
+                    _ = until_deadline(deadline) => break,
+                    msg = consumer.recv() => {
+                        let msg = msg?;
+                        let topic = msg.topic().to_string();
+                        let partition = msg.partition();
+                        let offset = msg.offset();
+                        let key = msg.key().map(|k| k.to_vec());
+                        let payload = msg.payload().map(|p| p.to_vec());
+                        let inbound_headers = headers::strip_reserved(msg.headers());
+                        // Release the borrow of `consumer` this message
+                        // holds before we touch `consumer` again
+                        // (group_metadata, next recv).
+                        drop(msg);
 
-            cfg.metrics.inc_relay_records();
-            let cursor = SourceCursor {
-                topic,
-                partition,
-                offset,
-            };
+                        cfg.metrics.inc_relay_records();
+                        if deadline.is_none() {
+                            deadline = Some(TokioInstant::now() + linger);
+                        }
+                        batch.push(PendingRecord {
+                            cursor: SourceCursor { topic, partition, offset },
+                            key,
+                            payload,
+                            headers: inbound_headers,
+                        });
+                    }
+                }
+            }
 
-            match process_record(
+            if batch.is_empty() {
+                // Only reachable via shutdown firing before any record was
+                // accumulated — nothing to flush.
+                return Ok(());
+            }
+
+            let shutting_down = shutdown.is_cancelled();
+
+            match process_batch(
                 &cfg,
                 &matcher,
                 &producer,
                 &transaction_open,
                 &consumer,
-                cursor,
-                key,
-                payload,
-                inbound_headers,
+                batch,
             )
             .await?
             {
@@ -228,12 +282,37 @@ impl Relay {
                     // immediately WITHOUT aborting or committing — the
                     // open transaction is simply abandoned, exactly like a
                     // real process crash. A `read_committed` consumer must
-                    // see none of it.
+                    // see none of the whole batch.
                     return Ok(());
                 }
             }
+
+            if shutting_down {
+                // The in-flight batch was flushed above; nothing more to
+                // accumulate.
+                return Ok(());
+            }
         }
     }
+}
+
+/// Resolves once `deadline` has passed; pends forever if `deadline` is
+/// `None` — the vehicle for "no linger timer until the batch holds at
+/// least one record" inside `tokio::select!`.
+async fn until_deadline(deadline: Option<TokioInstant>) {
+    match deadline {
+        Some(d) => sleep_until(d).await,
+        None => std::future::pending::<()>().await,
+    }
+}
+
+/// One record accumulated into a batch, holding everything needed to run
+/// [`run_transaction_body`] once the batch's transaction is open.
+struct PendingRecord {
+    cursor: SourceCursor,
+    key: Option<Vec<u8>>,
+    payload: Option<Vec<u8>>,
+    headers: OwnedHeaders,
 }
 
 enum ProcessOutcome {
@@ -247,69 +326,109 @@ enum TransactionBody {
     Fault,
 }
 
-/// Runs one full begin→produce→send_offsets→commit (or abort) cycle for a
-/// single polled record.
+/// Runs one full begin→produce(×N)→send_offsets→commit (or abort) cycle
+/// for a whole BATCH of records (batching spec §1-§2): begins one
+/// transaction, runs [`run_transaction_body`] for every record in
+/// `batch` (in accumulation order), and — iff every record produced
+/// cleanly — sends ONE `send_offsets_to_transaction` covering
+/// `MAX(offset)+1` for every `(topic, partition)` touched anywhere in the
+/// batch, then commits. Any record's produce error, or the offset-send
+/// itself failing, aborts the WHOLE transaction — no partial-batch commit,
+/// ever (batching spec §2 "Abort on any error").
 #[allow(clippy::too_many_arguments)]
-async fn process_record(
+async fn process_batch(
     cfg: &RelayCfg,
     matcher: &HotMatcher,
     producer: &FutureProducer,
     transaction_open: &AtomicBool,
     consumer: &StreamConsumer<RelayConsumerContext>,
-    cursor: SourceCursor,
-    key: Option<Vec<u8>>,
-    payload: Option<Vec<u8>>,
-    inbound_headers: OwnedHeaders,
+    batch: Vec<PendingRecord>,
 ) -> Result<ProcessOutcome, RelayError> {
     producer.begin_transaction()?;
     transaction_open.store(true, Ordering::SeqCst);
 
-    let body = run_transaction_body(
-        cfg,
-        matcher,
-        producer,
-        &cursor,
-        key,
-        payload,
-        inbound_headers,
-    )
-    .await;
+    // Per-partition MAX(offset) across the batch (batching spec §2): a
+    // batch may span multiple raw-topic partitions on one consumer, and
+    // the offset commit must cover every one of them, not just the last
+    // record processed.
+    let mut max_offsets: BTreeMap<(String, i32), i64> = BTreeMap::new();
 
-    match body {
-        Ok(TransactionBody::Fault) => Ok(ProcessOutcome::FaultInjected),
-        Ok(TransactionBody::Produced) => {
-            let group_metadata = consumer
-                .group_metadata()
-                .ok_or(RelayError::NoGroupMetadata)?;
-            let mut offsets = TopicPartitionList::new();
-            offsets.add_partition_offset(
-                &cursor.topic,
-                cursor.partition,
-                // The offset recorded is the NEXT message this consumer
-                // group should read — one past the record just processed.
-                Offset::Offset(cursor.offset + 1),
-            )?;
+    for record in batch {
+        let PendingRecord {
+            cursor,
+            key,
+            payload,
+            headers: inbound_headers,
+        } = record;
 
-            match producer.send_offsets_to_transaction(
-                &offsets,
-                &group_metadata,
-                Timeout::After(Duration::from_secs(10)),
-            ) {
-                Ok(()) => {
-                    producer.commit_transaction(Timeout::After(Duration::from_secs(30)))?;
-                    transaction_open.store(false, Ordering::SeqCst);
-                    Ok(ProcessOutcome::Committed)
-                }
-                Err(err) => {
-                    tracing::warn!(error = %err, "send_offsets_to_transaction failed, aborting");
-                    producer.abort_transaction(Timeout::After(Duration::from_secs(10)))?;
-                    transaction_open.store(false, Ordering::SeqCst);
-                    Ok(ProcessOutcome::Aborted)
-                }
+        max_offsets
+            .entry((cursor.topic.clone(), cursor.partition))
+            .and_modify(|max| *max = (*max).max(cursor.offset))
+            .or_insert(cursor.offset);
+
+        let body = run_transaction_body(
+            cfg,
+            matcher,
+            producer,
+            &cursor,
+            key,
+            payload,
+            inbound_headers,
+        )
+        .await;
+
+        match body {
+            Ok(TransactionBody::Produced) => continue,
+            Ok(TransactionBody::Fault) => {
+                // Simulated crash mid-batch (AfterDiscoveryProduce, chaos
+                // hook): stop processing the rest of the batch and leave
+                // the transaction open — the caller returns immediately
+                // without committing or aborting.
+                return Ok(ProcessOutcome::FaultInjected);
+            }
+            Err(err) => {
+                tracing::warn!(error = %err, "produce failed inside transaction, aborting batch");
+                producer.abort_transaction(Timeout::After(Duration::from_secs(10)))?;
+                transaction_open.store(false, Ordering::SeqCst);
+                return Ok(ProcessOutcome::Aborted);
             }
         }
+    }
+
+    // Batching spec §1/§4: AfterProduceBeforeCommit now fires after the
+    // BATCH's produces (every record above completed), before the batch's
+    // send_offsets_to_transaction/commit_transaction.
+    if cfg.fault == Some(FaultPoint::AfterProduceBeforeCommit) {
+        return Ok(ProcessOutcome::FaultInjected);
+    }
+
+    let group_metadata = consumer
+        .group_metadata()
+        .ok_or(RelayError::NoGroupMetadata)?;
+    let mut offsets = TopicPartitionList::new();
+    for ((topic, partition), max_offset) in &max_offsets {
+        offsets.add_partition_offset(
+            topic,
+            *partition,
+            // The offset recorded is the NEXT message this consumer group
+            // should read — one past the highest offset processed on this
+            // partition anywhere in the batch.
+            Offset::Offset(max_offset + 1),
+        )?;
+    }
+
+    match producer.send_offsets_to_transaction(
+        &offsets,
+        &group_metadata,
+        Timeout::After(Duration::from_secs(10)),
+    ) {
+        Ok(()) => {
+            producer.commit_transaction(Timeout::After(Duration::from_secs(30)))?;
+            transaction_open.store(false, Ordering::SeqCst);
+            Ok(ProcessOutcome::Committed)
+        }
         Err(err) => {
-            tracing::warn!(error = %err, "produce failed inside transaction, aborting");
+            tracing::warn!(error = %err, "send_offsets_to_transaction failed, aborting");
             producer.abort_transaction(Timeout::After(Duration::from_secs(10)))?;
             transaction_open.store(false, Ordering::SeqCst);
             Ok(ProcessOutcome::Aborted)
@@ -318,8 +437,8 @@ async fn process_record(
 }
 
 /// Classifies (or tombstone-passes-through) one record and produces its
-/// output(s) inside the already-open transaction. Never calls
-/// begin/commit/abort itself — that's `process_record`'s job — so a fault
+/// output(s) inside the already-open (batch) transaction. Never calls
+/// begin/commit/abort itself — that's `process_batch`'s job — so a fault
 /// injection here can cleanly signal "stop, leave the transaction open"
 /// without this function needing to know about transaction bookkeeping.
 #[allow(clippy::too_many_arguments)]
@@ -350,10 +469,9 @@ async fn run_transaction_body(
         )
         .await?;
 
-        if cfg.fault == Some(FaultPoint::AfterProduceBeforeCommit) {
-            return Ok(TransactionBody::Fault);
-        }
-
+        // AfterProduceBeforeCommit is now checked once per BATCH in
+        // `process_batch`, after every record (including this tombstone)
+        // has been produced — not per record.
         return Ok(TransactionBody::Produced);
     };
 
@@ -422,10 +540,9 @@ async fn run_transaction_body(
     )
     .await?;
 
-    if cfg.fault == Some(FaultPoint::AfterProduceBeforeCommit) {
-        return Ok(TransactionBody::Fault);
-    }
-
+    // AfterProduceBeforeCommit is now checked once per BATCH in
+    // `process_batch`, after every record has been produced — not per
+    // record.
     Ok(TransactionBody::Produced)
 }
 
@@ -522,6 +639,8 @@ mod tests {
             quarantine_topic: "quarantine".to_string(),
             transactional_id: "deblob-relay-test-txn".to_string(),
             limits: Limits::default(),
+            max_batch_records: 500,
+            max_batch_linger_ms: 100,
             fault: None,
             metrics: Metrics::new(),
             sasl: None,

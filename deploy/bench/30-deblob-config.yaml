@@ -15,6 +15,13 @@ data:
     quarantine_topic = "deblob.quarantine"
     group_id = "deblob"
     transactional_id = "deblob-relay-1"
+    # Relay transaction batching (docs/superpowers/specs/2026-07-16-relay-batching.md):
+    # one Kafka transaction per batch instead of per record (~100x
+    # throughput). Defaults (500 records / 100ms linger) apply if omitted;
+    # set explicitly here so the benchmark's throughput numbers reflect the
+    # documented defaults even if they change later.
+    max_batch_records = 500
+    max_batch_linger_ms = 100
 
     [limits]
     max_bytes = 1048576

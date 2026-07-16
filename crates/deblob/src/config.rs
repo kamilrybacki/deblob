@@ -63,6 +63,33 @@ pub struct KafkaConfig {
     pub quarantine_topic: String,
     pub group_id: String,
     pub transactional_id: String,
+    /// Relay transaction batching (`docs/superpowers/specs/2026-07-16-relay-batching.md`
+    /// §3): flush and commit ONE Kafka transaction once the batch reaches
+    /// this many records. Defaults to
+    /// [`default_max_batch_records`] (500) — batching is ON by default,
+    /// the whole point of the change. `1` reproduces the exact
+    /// pre-batching per-record-transaction behaviour, a documented escape
+    /// hatch. Absent from a TOML file entirely still parses (the serde
+    /// default), so every pre-batching config file keeps working.
+    #[serde(default = "default_max_batch_records")]
+    pub max_batch_records: usize,
+    /// Relay transaction batching (spec §3): flush the accumulated batch
+    /// once this many milliseconds have elapsed since its first record,
+    /// even if `max_batch_records` hasn't been reached — bounds the added
+    /// latency of a partially-full batch. Defaults to
+    /// [`default_max_batch_linger_ms`] (100ms).
+    #[serde(default = "default_max_batch_linger_ms")]
+    pub max_batch_linger_ms: u64,
+}
+
+/// Batching spec §3: "max_batch_records: usize (default 500)".
+fn default_max_batch_records() -> usize {
+    500
+}
+
+/// Batching spec §3: "max_batch_linger_ms: u64 (default 100)".
+fn default_max_batch_linger_ms() -> u64 {
+    100
 }
 
 /// Bounds enforced by the bounded parser (spec §4). Mirrors the subset of
@@ -627,6 +654,10 @@ mod tests {
         assert_eq!(config.kafka.quarantine_topic, "deblob.quarantine");
         assert_eq!(config.kafka.group_id, "deblob");
         assert_eq!(config.kafka.transactional_id, "deblob-relay-1");
+        // The example TOML leaves batching commented out — defaults apply
+        // (batching spec §3: 500 records / 100ms linger).
+        assert_eq!(config.kafka.max_batch_records, 500);
+        assert_eq!(config.kafka.max_batch_linger_ms, 100);
 
         assert_eq!(config.limits.max_bytes, 1_048_576);
         assert_eq!(config.limits.max_depth, 32);
@@ -672,6 +703,11 @@ mod tests {
         assert_eq!(config.management.addr, "127.0.0.1:9615");
         assert_eq!(config.promotion.min_samples, 10);
         assert_eq!(config.limits.max_bytes, 1_048_576);
+        // [kafka] present but WITHOUT the batching keys — serde defaults
+        // fill them in (batching spec §3: existing configs must still
+        // parse).
+        assert_eq!(config.kafka.max_batch_records, 500);
+        assert_eq!(config.kafka.max_batch_linger_ms, 100);
 
         // No `[slm]` section at all — the shadow lane must default to
         // disabled, same as every other pre-Task-5b config.
@@ -681,6 +717,42 @@ mod tests {
         assert_eq!(config.slm.sweep_interval_ms, 30000);
         assert_eq!(config.slm.min_samples, 5);
         assert_eq!(config.slm.min_window_ms, 60000);
+    }
+
+    #[test]
+    fn kafka_section_parses_explicit_batching_values() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+            max_batch_records = 1000
+            max_batch_linger_ms = 250
+        "#;
+        let config = Config::parse_toml(toml).expect("explicit batching keys must parse");
+        assert_eq!(config.kafka.max_batch_records, 1000);
+        assert_eq!(config.kafka.max_batch_linger_ms, 250);
+    }
+
+    /// Batching spec §3: "max_batch_records = 1 reproduces the exact
+    /// current per-record behaviour (a documented escape hatch)".
+    #[test]
+    fn kafka_section_max_batch_records_one_is_a_valid_escape_hatch() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+            max_batch_records = 1
+        "#;
+        let config = Config::parse_toml(toml).expect("max_batch_records = 1 must parse");
+        assert_eq!(config.kafka.max_batch_records, 1);
     }
 
     #[test]
