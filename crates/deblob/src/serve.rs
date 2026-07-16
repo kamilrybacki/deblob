@@ -409,6 +409,8 @@ pub async fn serve(
         quarantine_topic: app_config.kafka.quarantine_topic.clone(),
         transactional_id: app_config.kafka.transactional_id.clone(),
         limits: app_config.limits.to_limits(),
+        max_batch_records: app_config.kafka.max_batch_records,
+        max_batch_linger_ms: app_config.kafka.max_batch_linger_ms,
         fault: None,
         metrics: metrics.clone(),
         sasl: secrets.kafka_sasl.clone(),

@@ -516,6 +516,11 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
             quarantine_topic: quarantine_topic.clone(),
             group_id: "capstone-group".to_string(),
             transactional_id: "capstone-relay-txn".to_string(),
+            // Pre-batching per-record-transaction escape hatch (batching
+            // spec §3) — this test isn't about batching mechanics, keep
+            // its existing produce/observe timing exact.
+            max_batch_records: 1,
+            max_batch_linger_ms: 100,
         },
         limits: LimitsConfig::default(),
         promotion: PromotionConfig::default(),
