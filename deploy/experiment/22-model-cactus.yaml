@@ -69,6 +69,7 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
           command: ["cactus"]
           args: ["serve", "Cactus-Compute/needle", "--host", "0.0.0.0", "--port", "8081"]
           env:

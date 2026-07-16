@@ -47,6 +47,7 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
           args:
             - "-hf"
             - "lmstudio-community/functiongemma-270m-it-GGUF"

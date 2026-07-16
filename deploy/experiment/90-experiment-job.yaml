@@ -48,6 +48,7 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
             capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
           command: ["/bin/sh", "-c"]
           args:
             - |

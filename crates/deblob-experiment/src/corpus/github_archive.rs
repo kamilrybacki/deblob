@@ -11,10 +11,23 @@
 //! — never from `event_type`/`repo_full_name`/`org_login`/`created_at`/`id`,
 //! which live only on [`GithubEvent`] and the [`deblob_eval::EvalCase::name`]/
 //! `expected` fields `split_case` strips into the evaluator-only
-//! `GoldSidecar`. A GitHub event's `payload` never itself contains the
-//! literal event-type string (e.g. `PushEvent`'s payload has no `type`
-//! field at all) or a repo/org identifier, so there is no field within
-//! `payload` that would need redacting on top of that exclusion.
+//! `GoldSidecar`. That exclusion alone is NOT sufficient: real gharchive
+//! `PullRequestEvent`/`IssuesEvent`/etc. payloads routinely embed
+//! label-revealing data of their own — `html_url`/`url` fields and other
+//! nested repo paths that name the org/repo (and sometimes the event kind)
+//! directly. Spec §6b calls this out explicitly ("strip label-revealing
+//! URLs"), but this loader does NOT walk `payload` stripping such URLs.
+//! Instead, leak protection here comes from [`profile_from_json`]'s
+//! structural profiling: a [`deblob_slm::CandidateProfileView`] captures
+//! `payload`'s shape (field names, types, nesting) via
+//! `generalized_fingerprint`, never its string *values* — so a leaked
+//! `html_url` value is present in the source `GithubEvent` but is never
+//! copied into the candidate/retrieved profiles or the rendered prompt in
+//! the first place. Field-name redaction (`super`'s `require_str`/profile
+//! helpers) covers the schema side; structural-shape-only profiling covers
+//! the payload-value side. See this module's tests for a pinned regression
+//! guarding exactly this: a fixture payload embedding a repo-path URL,
+//! asserted absent from the ingested `InferenceInput` and rendered prompt.
 
 use deblob_eval::{EvalCase, Expected, Partition};
 use deblob_slm::CandidateProfileView;
@@ -346,6 +359,93 @@ mod tests {
         // resolvable against a small, well-separated pool.
         assert_eq!(push_case.category, Category::KnownExact);
         assert_eq!(pr_case.category, Category::KnownExact);
+    }
+
+    /// Pins the file-header claim (see this module's doc comment): a real
+    /// gharchive `payload` CAN embed label-revealing URLs and repo/org
+    /// identifiers of its own (`html_url`/`url` fields naming the org+repo
+    /// directly) — the old comment's premise that no such field exists was
+    /// wrong. What actually protects against the leak is structural
+    /// profiling (`profile_from_json` captures shape, not string values),
+    /// not the absence of the data. This fixture's `PullRequestEvent`
+    /// payload carries exactly that kind of field; after `split_case`,
+    /// neither the embedded URL nor the org/repo name it names may appear
+    /// in the serialized `InferenceInput` or the rendered prompt.
+    #[test]
+    fn payload_embedded_repo_url_and_identifiers_do_not_leak_via_structural_profiling() {
+        let json = r#"[
+            {
+                "id": "9999999999",
+                "type": "PullRequestEvent",
+                "repo": {"name": "some-org/some-repo"},
+                "org": {"login": "some-org"},
+                "created_at": "2015-02-01T00:00:00Z",
+                "payload": {
+                    "action": "opened",
+                    "number": 1,
+                    "pull_request": {
+                        "id": 42424242,
+                        "number": 1,
+                        "state": "open",
+                        "title": "Leak-guard regression fixture",
+                        "html_url": "https://github.com/some-org/some-repo/pull/1",
+                        "url": "https://api.github.com/repos/some-org/some-repo/pulls/1",
+                        "user": {"login": "some-org-bot", "id": 1},
+                        "body": "Exercises the structural-profiling leak guard.",
+                        "created_at": "2015-02-01T00:00:00Z",
+                        "updated_at": "2015-02-01T00:00:00Z",
+                        "head": {"ref": "feature", "sha": "aa11bb22cc33dd44ee55ff6600112233aabbccdd"},
+                        "base": {"ref": "main", "sha": "112233445566778899aabbccddeeff001122334"},
+                        "merged": false,
+                        "mergeable": null,
+                        "comments": 0,
+                        "additions": 1,
+                        "deletions": 1,
+                        "changed_files": 1
+                    }
+                }
+            }
+        ]"#;
+
+        let events = parse_fixture(json).expect("inline fixture should parse");
+        let corpus = ingest(&events, 3).expect("ingest should succeed on a single-event corpus");
+        let case = corpus
+            .cases
+            .first()
+            .expect("exactly one case for the single fixture event");
+
+        let (input, _sidecar) = crate::labels::split_case(case);
+        let serialized = serde_json::to_string(&input).unwrap();
+
+        let html_url = "https://github.com/some-org/some-repo/pull/1";
+        let api_url = "https://api.github.com/repos/some-org/some-repo/pulls/1";
+
+        assert!(
+            !serialized.contains(html_url),
+            "payload's html_url leaked into InferenceInput: {serialized}"
+        );
+        assert!(
+            !serialized.contains(api_url),
+            "payload's api url leaked into InferenceInput: {serialized}"
+        );
+        assert!(
+            !serialized.contains("some-org"),
+            "org/repo identifier leaked into InferenceInput: {serialized}"
+        );
+        assert!(
+            !serialized.contains("some-repo"),
+            "repo identifier leaked into InferenceInput: {serialized}"
+        );
+        assert!(
+            !input.prompt.contains(html_url) && !input.prompt.contains(api_url),
+            "payload's embedded URL leaked into the rendered prompt: {}",
+            input.prompt
+        );
+        assert!(
+            !input.prompt.contains("some-org") && !input.prompt.contains("some-repo"),
+            "org/repo identifier leaked into the rendered prompt: {}",
+            input.prompt
+        );
     }
 
     #[test]
