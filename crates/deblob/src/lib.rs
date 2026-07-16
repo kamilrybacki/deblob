@@ -28,5 +28,6 @@ pub mod semantic_neighbors;
 pub mod semantic_store;
 pub mod serve;
 pub mod shadow;
+pub mod trusted;
 
 pub use deblob_match::{matcher, metrics};
