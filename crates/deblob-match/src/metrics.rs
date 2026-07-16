@@ -23,6 +23,15 @@
 //! latency, distinct from the registry-call-only
 //! `registry_operation_duration_seconds`).
 //!
+//! P2-D Task 7 additions (`deblob-p2d-hermes-review.md` §5, `deblob::
+//! semantic_drift`): `deblob_semantic_drift_total` (no labels — one family
+//! gaining a structurally-compatible version whose active `sem_` changed)
+//! and `deblob_semantic_collision_total{strength}` (bounded `strength` ∈
+//! `strong`/`medium`/`weak` — one `sem_` shared by ≥2 `sch_`s). Both are
+//! PROPOSAL-ONLY diagnostic counters: nothing in `deblob::semantic_drift`
+//! ever aliases, merges, or mutates a family/schema/`sem_` off the back of
+//! either signal — see that module's docs.
+//!
 //! This crate's own code (the hot-path matcher and the cold lane) only
 //! ever emits a subset of the canonical set directly; `deblob_relay_
 //! records_total` and `deblob_relay_transactions_total{result}` are
@@ -77,6 +86,12 @@ const QUARANTINE_REASONS: [&str; 8] = [
 /// `deblob_registry_operation_duration_seconds`.
 const REGISTRY_OPERATIONS: [&str; 1] = ["resolve_structural"];
 
+/// Bounded `strength` label values for `deblob_semantic_collision_total`
+/// (P2-D Task 7, `deblob-p2d-hermes-review.md` §5) — the annotation-coverage
+/// classification `deblob::semantic_drift::CollisionStrength` produces.
+/// Never a `sem_`/`sch_` id, family id, or vocabulary code.
+const COLLISION_STRENGTHS: [&str; 3] = ["strong", "medium", "weak"];
+
 /// `fate` label for one classification outcome. Never derived from the
 /// carried id — only the discriminant.
 pub(crate) fn fate_label(schema_ref: &SchemaRef) -> &'static str {
@@ -124,6 +139,13 @@ pub struct Metrics {
     relay_records_total: Counter,
     relay_transactions_total: CounterVec,
     cold_lane_lag_records: Gauge,
+
+    /// P2-D Task 7: `deblob_semantic_drift_total` — no labels by design
+    /// (the drift record's `family_id`/`sch_`/`sem_` fields carry the
+    /// detail; the metric itself is just "how often does this fire").
+    semantic_drift_total: Counter,
+    /// P2-D Task 7: `deblob_semantic_collision_total{strength}`.
+    semantic_collision_total: CounterVec,
 }
 
 impl Metrics {
@@ -219,6 +241,25 @@ impl Metrics {
         ))
         .expect("valid metric opts");
 
+        let semantic_drift_total = Counter::with_opts(Opts::new(
+            "deblob_semantic_drift_total",
+            "Total semantic-drift diagnostics fired: a family gained a \
+             structurally-compatible version whose active sem_ changed. \
+             Proposal-only — never splits a family.",
+        ))
+        .expect("valid metric opts");
+
+        let semantic_collision_total = CounterVec::new(
+            Opts::new(
+                "deblob_semantic_collision_total",
+                "Total same-sem_/different-sch_ diagnostics fired, by \
+                 annotation-coverage strength. Proposal-only — never \
+                 aliases or merges a family.",
+            ),
+            &["strength"],
+        )
+        .expect("valid metric opts");
+
         for metric in [
             Box::new(messages_total.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(schema_matches_total.clone()),
@@ -231,6 +272,8 @@ impl Metrics {
             Box::new(relay_records_total.clone()),
             Box::new(relay_transactions_total.clone()),
             Box::new(cold_lane_lag_records.clone()),
+            Box::new(semantic_drift_total.clone()),
+            Box::new(semantic_collision_total.clone()),
         ] {
             registry.register(metric).expect("unique metric name");
         }
@@ -249,6 +292,9 @@ impl Metrics {
         for operation in REGISTRY_OPERATIONS {
             registry_operation_duration_seconds.with_label_values(&[operation]);
         }
+        for strength in COLLISION_STRENGTHS {
+            semantic_collision_total.with_label_values(&[strength]);
+        }
 
         Arc::new(Self {
             registry,
@@ -263,6 +309,8 @@ impl Metrics {
             relay_records_total,
             relay_transactions_total,
             cold_lane_lag_records,
+            semantic_drift_total,
+            semantic_collision_total,
         })
     }
 
@@ -361,6 +409,23 @@ impl Metrics {
     #[allow(dead_code)]
     pub(crate) fn set_cold_lane_lag(&self, records: f64) {
         self.cold_lane_lag_records.set(records);
+    }
+
+    /// Increments `deblob_semantic_drift_total` — call once per
+    /// `deblob::semantic_drift::SemanticDrift` fired (P2-D Task 7). `pub`:
+    /// cross-crate caller, same reason as `inc_candidates_active`.
+    pub fn record_semantic_drift(&self) {
+        self.semantic_drift_total.inc();
+    }
+
+    /// Increments `deblob_semantic_collision_total{strength}` — call once
+    /// per same-`sem_`/different-`sch_` finding classified (P2-D Task 7),
+    /// `strength` one of `"strong"`/`"medium"`/`"weak"`
+    /// (`CollisionStrength::as_str`). `pub`: cross-crate caller.
+    pub fn record_semantic_collision(&self, strength: &str) {
+        self.semantic_collision_total
+            .with_label_values(&[strength])
+            .inc();
     }
 }
 
@@ -501,6 +566,73 @@ mod tests {
         assert!(
             test_support::label_names_of(&families, "deblob_cache_hits_total").is_empty(),
             "cache_hits_total must carry no labels at all"
+        );
+    }
+
+    #[test]
+    fn registers_the_p2d_task7_semantic_diagnostic_surface() {
+        let metrics = Metrics::new();
+        let text = metrics.gather_text().unwrap();
+        for name in [
+            "deblob_semantic_drift_total",
+            "deblob_semantic_collision_total",
+        ] {
+            assert!(text.contains(name), "missing metric {name} in:\n{text}");
+        }
+    }
+
+    #[test]
+    fn semantic_collision_total_label_set_is_bounded_to_strength_only() {
+        // Same drift-guard shape as `no_id_labels_...` above: this metric
+        // must never grow a sem_/sch_/family-id label.
+        let metrics = Metrics::new();
+        let families = metrics.registry.gather();
+        assert_eq!(
+            test_support::label_names_of(&families, "deblob_semantic_collision_total"),
+            vec!["strength".to_string()]
+        );
+        assert!(
+            test_support::label_names_of(&families, "deblob_semantic_drift_total").is_empty(),
+            "semantic_drift_total must carry no labels at all"
+        );
+    }
+
+    #[test]
+    fn record_semantic_drift_and_collision_increment_expected_series() {
+        let metrics = Metrics::new();
+        metrics.record_semantic_drift();
+        metrics.record_semantic_collision("strong");
+        metrics.record_semantic_collision("strong");
+        metrics.record_semantic_collision("weak");
+
+        let families = metrics.registry.gather();
+        assert_eq!(
+            test_support::value_of(&families, "deblob_semantic_drift_total", None),
+            1.0
+        );
+        assert_eq!(
+            test_support::value_of(
+                &families,
+                "deblob_semantic_collision_total",
+                Some(("strength", "strong"))
+            ),
+            2.0
+        );
+        assert_eq!(
+            test_support::value_of(
+                &families,
+                "deblob_semantic_collision_total",
+                Some(("strength", "weak"))
+            ),
+            1.0
+        );
+        assert_eq!(
+            test_support::value_of(
+                &families,
+                "deblob_semantic_collision_total",
+                Some(("strength", "medium"))
+            ),
+            0.0
         );
     }
 

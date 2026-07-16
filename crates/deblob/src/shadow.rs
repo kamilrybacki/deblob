@@ -1077,6 +1077,13 @@ mod tests {
         ) -> Result<Vec<FamilyRef>, CoreError> {
             Ok(self.families.clone())
         }
+        async fn family_version_schema(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+            _version: deblob_core::id::FamilyVersion,
+        ) -> Result<Option<SchemaId>, CoreError> {
+            unimplemented!("not exercised by shadow-lane tests")
+        }
     }
 
     #[derive(Default)]

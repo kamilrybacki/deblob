@@ -45,6 +45,13 @@ pub struct Config {
     /// same "off unless explicitly opted in" contract as `[slm]`.
     #[serde(default)]
     pub http_proxy: HttpProxyConfig,
+    /// `[semantic]` — governance-registered `canonical_field_id`/
+    /// `canonical_event_type_id` vocabularies (P2-D Task 8 follow-up A1).
+    /// Absent from a TOML file entirely defaults to
+    /// [`SemanticConfig::default`] (both lists empty) — every strong-axis
+    /// annotation then still `422`s, exactly Task 6's original behavior.
+    #[serde(default)]
+    pub semantic: SemanticConfig,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -334,6 +341,53 @@ impl Default for HttpProxyConfig {
     }
 }
 
+/// `[semantic]` — governance-registered `canonical_field_id`/
+/// `canonical_event_type_id` vocabularies (P2-D Task 8 follow-up A1,
+/// `docs/superpowers/plans/deblob-p2d-hermes-review.md` §2/§7): the two
+/// lists an operator maintains so `PUT /api/v1/schemas/{id}/semantic` can
+/// validate the "strong axes" (`canonical_field_id`/`canonical_event_type_id`
+/// — governance-registered, unlike the baked UCUM/ISO4217/namespace/
+/// meaning-vocabulary tables `deblob_semantic::vocab` ships with) against
+/// something other than an always-empty set. Task 6 wired the API surface
+/// but left `ApiState.semantic_registries` permanently
+/// `Registries::default()` (empty) with no registration endpoint — this
+/// section, plus [`SemanticConfig::to_registries`] and `serve()`'s use of
+/// it, is what actually seeds it. NOT secrets: these are plain, versioned,
+/// reviewable governance identifiers (no credential, no connection string),
+/// same posture as `[promotion]`'s numeric thresholds — env-only secrets
+/// stay exclusively in [`Secrets`].
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SemanticConfig {
+    /// Registered `canonical_field_id` values (e.g. `"cfid_temperature_ambient"`).
+    /// An annotation naming any OTHER field id still `422`s.
+    #[serde(default)]
+    pub canonical_field_ids: Vec<String>,
+    /// Registered `canonical_event_type_id` values (e.g. `"order.created"`).
+    /// An annotation naming any OTHER event type still `422`s.
+    #[serde(default)]
+    pub event_types: Vec<String>,
+}
+
+impl SemanticConfig {
+    /// Builds the injectable [`deblob_semantic::Registries`]
+    /// `serve()` threads into `ApiState.semantic_registries` — a pure,
+    /// no-I/O transform (unit-testable without Redis/HTTP), mirroring
+    /// [`LimitsConfig::to_limits`]/[`PromotionConfig::to_policy`]'s own
+    /// "`Config` field -> domain type" pattern. Duplicate entries collapse
+    /// (the registries are sets); order is never significant.
+    pub fn to_registries(&self) -> deblob_semantic::Registries {
+        let mut registries = deblob_semantic::Registries::default();
+        for id in &self.canonical_field_ids {
+            registries.field_ids.register(id.clone());
+        }
+        for id in &self.event_types {
+            registries.event_type_ids.register(id.clone());
+        }
+        registries
+    }
+}
+
 /// Errors loading/parsing the TOML file or validating startup secrets.
 /// Never carries a secret VALUE — [`ConfigError::MissingEnvVar`] names only
 /// the variable, and [`std::fmt::Display`]/[`std::fmt::Debug`] on every
@@ -591,6 +645,9 @@ mod tests {
         assert_eq!(config.slm.sweep_interval_ms, 30000);
         assert_eq!(config.slm.min_samples, 5);
         assert_eq!(config.slm.min_window_ms, 60000);
+
+        assert!(config.semantic.canonical_field_ids.is_empty());
+        assert!(config.semantic.event_types.is_empty());
     }
 
     #[test]
@@ -1000,6 +1057,93 @@ mod tests {
         let secrets = validate_secrets(&env_disabled, false, false)
             .expect("require_auth=false must not require DEBLOB_HTTP_INGEST_TOKEN");
         assert!(secrets.http_ingest_token.is_none());
+    }
+
+    /// A TOML with `[semantic]` parses into `Config` with both lists
+    /// populated; a TOML WITHOUT the section at all defaults to both lists
+    /// empty (same "absent means the safe default" contract as `[slm]`/
+    /// `[http_proxy]`); `deny_unknown_fields` rejects a typo'd key.
+    #[test]
+    fn config_parses_semantic_section() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [semantic]
+            canonical_field_ids = ["cfid_temperature_ambient", "cfid_order_total"]
+            event_types = ["order.created"]
+        "#;
+        let config = Config::parse_toml(toml).expect("[semantic] section must parse");
+        assert_eq!(
+            config.semantic.canonical_field_ids,
+            vec![
+                "cfid_temperature_ambient".to_string(),
+                "cfid_order_total".to_string()
+            ]
+        );
+        assert_eq!(
+            config.semantic.event_types,
+            vec!["order.created".to_string()]
+        );
+
+        let minimal = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+        "#;
+        let config = Config::parse_toml(minimal).expect("config without [semantic] must parse");
+        assert!(config.semantic.canonical_field_ids.is_empty());
+        assert!(config.semantic.event_types.is_empty());
+
+        let typo = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [semantic]
+            canonical_field_ids = []
+            unregistered_typo_field = true
+        "#;
+        let err = Config::parse_toml(typo).expect_err("a typo'd field must be rejected");
+        assert!(matches!(err, ConfigError::Parse(_)));
+    }
+
+    /// [`SemanticConfig::to_registries`] is the pure `Config` -> domain-type
+    /// transform `serve()` calls — this proves the seeding itself, without
+    /// Redis/HTTP: every listed id is registered, and an id NOT listed is
+    /// still rejected.
+    #[test]
+    fn semantic_config_to_registries_seeds_configured_ids_only() {
+        let semantic = SemanticConfig {
+            canonical_field_ids: vec!["cfid_temperature_ambient".to_string()],
+            event_types: vec!["order.created".to_string()],
+        };
+        let registries = semantic.to_registries();
+
+        assert!(registries.field_ids.contains("cfid_temperature_ambient"));
+        assert!(!registries.field_ids.contains("cfid_unregistered"));
+        assert!(registries.event_type_ids.contains("order.created"));
+        assert!(!registries.event_type_ids.contains("order.unregistered"));
+
+        // The documented default (no [semantic] section) seeds nothing —
+        // every strong-axis annotation still 422s, Task 6's original
+        // behavior.
+        let empty = SemanticConfig::default().to_registries();
+        assert!(!empty.field_ids.contains("cfid_temperature_ambient"));
+        assert!(!empty.event_type_ids.contains("order.created"));
     }
 
     #[test]

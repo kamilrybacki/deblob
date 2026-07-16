@@ -26,7 +26,15 @@ pub const ORIGIN_HEADER: &str = "deblob-origin";
 /// The canonical quarantine-reason header key (bounded reason code only).
 pub const QUARANTINE_REASON_HEADER: &str = "deblob-quarantine-reason";
 
-/// True if `key` starts with `deblob-`, case-insensitive.
+/// True if `key` starts with `deblob-`, case-insensitive. This is a
+/// PREFIX match, not an allowlist of specific known keys — it therefore
+/// already covers every reserved sub-namespace by construction, including
+/// P2-D Task 6's `deblob-semantic-*` (a producer-supplied semantic-axis
+/// hint, e.g. a forged `deblob-semantic-unit` header, must never reach
+/// storage or influence the `sem_` governance API): no separate constant or
+/// check was needed to "extend" the strip to that namespace, since any
+/// `deblob-`-prefixed key was already reserved before Task 6 existed. See
+/// `strip_reserved_drops_deblob_semantic_hint_headers` below for the proof.
 pub fn is_reserved(key: &str) -> bool {
     key.len() >= RESERVED_PREFIX.len()
         && key.as_bytes()[..RESERVED_PREFIX.len()].eq_ignore_ascii_case(RESERVED_PREFIX.as_bytes())
@@ -180,6 +188,26 @@ mod tests {
     fn strip_reserved_of_none_is_empty() {
         let stripped = strip_reserved(None);
         assert_eq!(stripped.count(), 0);
+    }
+
+    /// P2-D Task 6: a producer-supplied `deblob-semantic-*` hint (spoofing
+    /// an axis of the semantic-governance API, e.g. trying to smuggle a
+    /// forged `unit`/`canonical_field_id` in via the ingest path rather
+    /// than the authenticated `PUT .../semantic` endpoint) must be stripped
+    /// before a record is re-produced, exactly like every other reserved
+    /// header — it must never reach storage.
+    #[test]
+    fn strip_reserved_drops_deblob_semantic_hint_headers() {
+        let inbound = owned(&[
+            ("deblob-semantic-unit", b"Cel"),
+            ("DEBLOB-SEMANTIC-CANONICAL-FIELD-ID", b"temperature.ambient"),
+            ("deblob-semantic-event-type", b"user.created"),
+            ("content-type", b"application/json"),
+        ]);
+
+        let stripped = strip_reserved(Some(inbound.as_borrowed()));
+
+        assert_eq!(keys_of(&stripped), vec!["content-type".to_string()]);
     }
 
     #[test]

@@ -1,6 +1,10 @@
 //! Port traits for registry, evidence store, and schema matching. Spec §6.
 
-use crate::{error::CoreError, id::*};
+use crate::{
+    error::CoreError,
+    id::*,
+    semantic::{PrivacyClass, SemanticMetadata},
+};
 use async_trait::async_trait;
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -11,6 +15,24 @@ pub struct SchemaRecord {
     pub canonical: String,     // canonical shape JSON
     pub canonicalizer: String, // "deblob-canon-v1"
     pub provenance: serde_json::Value,
+    /// Controlled semantic metadata for this schema's fields (P2-D). `None`
+    /// means no semantic annotations were ever supplied — distinct from an
+    /// annotated-but-empty map. `#[serde(default)]` so pre-P2-D serialized
+    /// records (which lack this field entirely) still deserialize.
+    #[serde(default)]
+    pub semantic: Option<SemanticMetadata>,
+    /// The `sem_` identity computed from `semantic` (Task 3 — not computed
+    /// by this task). `#[serde(default)]` for the same back-compat reason.
+    #[serde(default)]
+    pub semantic_fingerprint: Option<SemanticId>,
+    /// Data-sensitivity classification. Governance metadata (Hermes review
+    /// §1/§3): deliberately SEPARATE from `semantic`/`semantic_fingerprint`
+    /// — it never enters the `sem_` digest preimage, since privacy
+    /// classification can change (jurisdiction/tenant/policy-version)
+    /// without the field's meaning changing. `#[serde(default)]` for the
+    /// same back-compat reason as the other two.
+    #[serde(default)]
+    pub privacy_class: Option<PrivacyClass>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -127,6 +149,25 @@ pub trait Registry: Send + Sync {
         bands: &[u32],
         depths: &[u32],
     ) -> Result<Vec<FamilyRef>, CoreError>;
+
+    /// The schema id published as `family_id`'s `version` (spec §6: family
+    /// versions are allocated 1.. via `HINCRBY` at `publish` time, and are
+    /// otherwise immutable) — `None` if that exact version was never
+    /// published, including a `family_id` that doesn't exist at all. Never
+    /// an error for a not-found version (mirrors [`Registry::
+    /// list_families_in_buckets`]'s "empty/absent is a valid answer, not a
+    /// failure" posture).
+    ///
+    /// P2-D Task 8 follow-up: lets a caller find a family's ADJACENT
+    /// version so `crate::semantic_drift::check_family_version_drift` (in
+    /// the `deblob` bin) can compare its active `sem_` against a
+    /// newly-annotated version's — the ONLY reason this method exists; nothing
+    /// else in this trait needed per-version lookup before.
+    async fn family_version_schema(
+        &self,
+        family_id: &FamilyId,
+        version: FamilyVersion,
+    ) -> Result<Option<SchemaId>, CoreError>;
 }
 
 #[async_trait]
@@ -185,4 +226,33 @@ pub trait SchemaMatcher: Send + Sync {
         bucket_key: &str,
         fingerprint_digest: &[u8; 32],
     ) -> crate::id::SchemaRef;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Pre-P2-D serialized `SchemaRecord` JSON (lacking `semantic`,
+    /// `semantic_fingerprint`, AND `privacy_class` entirely) must still
+    /// deserialize, yielding `None` for all three — every one of them is
+    /// `#[serde(default)]` precisely so old records in storage keep loading
+    /// after this ships.
+    #[test]
+    fn schema_record_deserializes_pre_p2d_json_with_none_semantics() {
+        let schema_id = SchemaId::from_digest(&[7u8; 32]);
+        let family_id = FamilyId::new_v7();
+        let json = serde_json::json!({
+            "schema_id": schema_id.as_str(),
+            "family_id": family_id.as_str(),
+            "version": 1,
+            "canonical": "{}",
+            "canonicalizer": "deblob-canon-v1",
+            "provenance": {},
+        });
+
+        let record: SchemaRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(record.semantic, None);
+        assert_eq!(record.semantic_fingerprint, None);
+        assert_eq!(record.privacy_class, None);
+    }
 }

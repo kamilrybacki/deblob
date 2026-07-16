@@ -73,3 +73,15 @@ min_window_ms = 60000
 # upstream_timeout_ms = 10000
 # discovery_enqueue_timeout_ms = 500
 # require_auth = false
+
+# [semantic] — governance-registered canonical_field_id/canonical_event_type_id
+# vocabularies (P2-D Task 8 follow-up). Absent entirely (or present with both
+# lists empty, the default) means every semantic annotation naming a
+# canonical_field_id/event_type still 422s, exactly Task 6's original
+# behavior — nothing here is required for the rest of deblob to function.
+# The baked UCUM/ISO4217/namespace/meaning-code vocabularies do NOT go here;
+# only these two per-operator governance sets do. See
+# docs/semantic-runbook.md for how to register one.
+[semantic]
+canonical_field_ids = []
+event_types = []

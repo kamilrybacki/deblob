@@ -1,7 +1,7 @@
 //! Redis-backed `Registry`: the permanent schema vault (spec §6).
 
 use crate::health::HealthGate;
-use crate::lua::PUBLISH_SCRIPT;
+use crate::lua::{PUBLISH_SCRIPT, SEM_APPEND_SCRIPT};
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{FamilyRef, Registry, SchemaRecord};
@@ -34,6 +34,10 @@ pub struct RedisRegistry {
     /// the process (Task 19 fix, spec §10).
     conn: redis::aio::ConnectionManager,
     publish_script: Script,
+    /// The atomic semantic-revision-append transition (Task 5, Hermes
+    /// review §4) — see `crate::lua::SEM_APPEND_SCRIPT` and
+    /// `crate::semantic` for the storage methods that invoke it.
+    pub(crate) sem_append_script: Script,
     /// Runtime persistence health gate (Task 10, spec §6). `None` for
     /// registries built without one (the default, and every existing
     /// caller/test) — publishing then behaves exactly as before this task,
@@ -65,7 +69,12 @@ fn published_key(id: &SchemaId) -> String {
     format!("deblob:published:{}", id.as_str())
 }
 
-const AUDIT_KEY: &str = "deblob:audit:log";
+/// Shared audit stream key. Reused by `crate::semantic`'s
+/// `append_revision` (Task 5) — semantic-revision audit events land on the
+/// SAME stream `publish` already writes to, rather than a second stream, so
+/// an operator reviewing "everything that changed" doesn't have to know to
+/// check two places.
+pub(crate) const AUDIT_KEY: &str = "deblob:audit:log";
 
 pub(crate) fn redis_err(e: redis::RedisError) -> CoreError {
     CoreError::RegistryUnavailable(e.to_string())
@@ -139,6 +148,7 @@ impl RedisRegistry {
         Ok(Self {
             conn,
             publish_script: Script::new(PUBLISH_SCRIPT),
+            sem_append_script: Script::new(SEM_APPEND_SCRIPT),
             health_gate: None,
         })
     }
@@ -163,6 +173,14 @@ impl RedisRegistry {
     /// state.
     pub(crate) fn conn(&self) -> redis::aio::ConnectionManager {
         self.conn.clone()
+    }
+
+    /// Cheap accessor for `crate::semantic`'s write path, which must gate
+    /// `append_revision` behind the same runtime persistence `HealthGate`
+    /// `publish` already checks (spec §6, Task 10) — see `publish`'s own
+    /// use of this same field for the rationale.
+    pub(crate) fn health_gate(&self) -> Option<&HealthGate> {
+        self.health_gate.as_ref()
     }
 }
 
@@ -365,5 +383,30 @@ impl Registry for RedisRegistry {
     ) -> Result<Vec<FamilyRef>, CoreError> {
         self.list_families_by_band_depth_bucketed(bands, depths)
             .await
+    }
+
+    /// P2-D Task 8 follow-up: a single `HGET` on the family hash's
+    /// `v:<version>` field — the SAME field `crate::lua::PUBLISH_SCRIPT`
+    /// writes on a fresh publish (`HSET family_key 'v:' .. version,
+    /// schema_id`). `None` for a missing field OR a family hash that
+    /// doesn't exist at all — Redis's `HGET` on a missing key/field both
+    /// return `nil`, which `redis::AsyncCommands::hget` surfaces as `None`,
+    /// never an error.
+    async fn family_version_schema(
+        &self,
+        family_id: &FamilyId,
+        version: FamilyVersion,
+    ) -> Result<Option<SchemaId>, CoreError> {
+        let mut conn = self.conn();
+        let raw: Option<String> = conn
+            .hget(family_key(family_id), format!("v:{}", version.0))
+            .await
+            .map_err(redis_err)?;
+        raw.map(|s| {
+            SchemaId::parse(&s).map_err(|e| {
+                CoreError::RegistryUnavailable(format!("corrupt family version entry: {e:?}"))
+            })
+        })
+        .transpose()
     }
 }

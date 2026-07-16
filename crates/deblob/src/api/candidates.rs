@@ -23,7 +23,10 @@ const DEFAULT_LIMIT: usize = 50;
 const ACTOR_HEADER: &str = "x-deblob-actor";
 const DEFAULT_ACTOR: &str = "api";
 
-fn actor_from_headers(headers: &axum::http::HeaderMap) -> String {
+/// `pub(crate)`: reused by `super::semantic`'s `put_semantic` handler
+/// (Task 6), which needs the exact same actor-from-header behavior
+/// `promote` uses — mirrored, not reinvented, per the brief.
+pub(crate) fn actor_from_headers(headers: &axum::http::HeaderMap) -> String {
     headers
         .get(ACTOR_HEADER)
         .and_then(|v| v.to_str().ok())

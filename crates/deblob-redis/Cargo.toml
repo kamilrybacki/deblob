@@ -8,6 +8,16 @@ rust-version.workspace = true
 [dependencies]
 deblob-core = { path = "../deblob-core" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
+# P2-D Task 10: `crate::semantic::append_revision`/`rebuild_semantic_index`
+# compute a schema's signature (`deblob_semantic::signature::
+# semantic_signature`) purely to derive the bounded inverted-index posting
+# keys (`deblob:sem-sig:<feature_hex>`) — never to recompute `canonical`/
+# `sem_` bytes, which stay the caller's job. This is a deliberate, narrow
+# exception to this crate's prior "storage only, never canonicalization"
+# posture (see `crate::semantic`'s module docs) so the postings swap can be
+# computed once, in Rust, and passed into the SAME atomic Lua transition
+# that moves the active pointer — never recomputed inside Lua itself.
+deblob-semantic = { path = "../deblob-semantic" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

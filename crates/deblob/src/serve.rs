@@ -41,6 +41,7 @@ use crate::matcher::HotMatcher;
 use crate::metrics::Metrics;
 use crate::policy::{Promoter as ConcretePromoter, PromotionPolicy};
 use crate::promote::Promoter as PromoterTrait;
+use crate::semantic_store::SemanticStore;
 use crate::shadow::{
     run_shadow_sweep, ModelMeta, RedisShadowLog, ShadowClassifier, ShadowConfig, ShadowLog,
 };
@@ -304,11 +305,20 @@ pub async fn serve(
     // --- Redis: registry (permanent schema vault) + evidence (candidate
     // lifecycle), both persistence-gated at connect time (spec §6). ---
     let health = HealthGate::new();
-    let registry = RedisRegistry::connect(&secrets.redis_url, redis_opts)
-        .await
-        .map_err(AppError::Redis)?
-        .with_health_gate(health.clone());
-    let registry: Arc<dyn Registry> = Arc::new(registry);
+    // Wrapped in `Arc<RedisRegistry>` first (rather than eagerly upcast to
+    // `Arc<dyn Registry>`) so the SAME concrete instance — one connection,
+    // one health gate — backs BOTH the structural `Registry` trait object
+    // and the semantic-governance `SemanticStore` trait object (Task 6)
+    // below via two independent unsized coercions, instead of connecting
+    // twice.
+    let redis_registry = Arc::new(
+        RedisRegistry::connect(&secrets.redis_url, redis_opts)
+            .await
+            .map_err(AppError::Redis)?
+            .with_health_gate(health.clone()),
+    );
+    let registry: Arc<dyn Registry> = redis_registry.clone();
+    let semantic: Arc<dyn SemanticStore> = redis_registry.clone();
 
     let evidence =
         RedisEvidence::connect(&secrets.redis_url, RedisEvidenceOpts::default(), redis_opts)
@@ -360,6 +370,15 @@ pub async fn serve(
         token: SecretToken::new(&secrets.api_token),
         promoter,
         metrics: metrics.clone(),
+        semantic,
+        // P2-D Task 8 follow-up (A1): seeded from the TOML `[semantic]`
+        // section (`crate::config::SemanticConfig::to_registries`) — no
+        // registration ENDPOINT exists (an operator edits the config file
+        // and restarts), but the registries themselves are no longer
+        // permanently empty. Absent `[semantic]` still yields
+        // `Registries::default()` (both sets empty), so every strong-axis
+        // annotation 422s exactly as it did before this wiring.
+        semantic_registries: Arc::new(app_config.semantic.to_registries()),
     };
     let management_addr: SocketAddr =
         app_config

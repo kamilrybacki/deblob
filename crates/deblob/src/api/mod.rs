@@ -9,6 +9,7 @@
 pub mod auth;
 pub mod candidates;
 pub mod schemas;
+pub mod semantic;
 
 use std::sync::Arc;
 
@@ -19,12 +20,14 @@ use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
 use deblob_core::ports::{EvidenceStore, Registry};
 use deblob_redis::health::HealthGate;
+use deblob_semantic::Registries;
 use serde::Serialize;
 
 pub use auth::SecretToken;
 
 use crate::metrics::Metrics;
 use crate::promote::Promoter;
+use crate::semantic_store::SemanticStore;
 
 /// Shared state for every management-API handler.
 #[derive(Clone)]
@@ -35,6 +38,16 @@ pub struct ApiState {
     pub token: SecretToken,
     pub promoter: Arc<dyn Promoter>,
     pub metrics: Arc<Metrics>,
+    /// Append-only semantic-revision store (P2-D Task 5/6). `Arc`-wrapped
+    /// like every other injected dependency here — see
+    /// `crate::semantic_store::SemanticStore`.
+    pub semantic: Arc<dyn SemanticStore>,
+    /// Governance-registered `canonical_field_id`/`canonical_event_type_id`
+    /// vocabularies (Task 2's `Registries`, deliberately empty by default —
+    /// no registration endpoint exists yet; see `deblob_semantic::vocab`).
+    /// `Arc`-wrapped so cloning `ApiState` per-request never deep-copies the
+    /// underlying `BTreeSet`s.
+    pub semantic_registries: Arc<Registries>,
 }
 
 /// Standard error envelope, spec §8: `{"error":{"code","message","details"}}`.
@@ -71,6 +84,15 @@ impl ApiError {
 
     pub fn unauthorized(message: impl Into<String>) -> Self {
         Self::new(StatusCode::UNAUTHORIZED, "unauthorized", message)
+    }
+
+    /// Task 6: a well-formed request that is rejected because required
+    /// caller-supplied context is missing (e.g. `reason`/`reason_code` on a
+    /// real semantic-assertion change) or malformed (e.g. an unparseable
+    /// `If-Match` header) — distinct from `unprocessable` (`422`, an
+    /// unknown/invalid controlled vocabulary token or path).
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self::new(StatusCode::BAD_REQUEST, "bad_request", message)
     }
 
     pub fn not_found(message: impl Into<String>) -> Self {
@@ -114,6 +136,26 @@ impl ApiError {
             }
             CoreError::PolicyRejected(_) => Self::unprocessable(err.to_string()),
             CoreError::RegistryUnavailable(_) => Self::unavailable(err.to_string()),
+        }
+    }
+
+    /// Maps `deblob_core::revision::SemError` (Task 5's append-only
+    /// semantic-revision store) onto the HTTP contract in the brief's §4:
+    /// `MissingReason` → `400` (a REAL change attempted with no/empty
+    /// `reason` — decided atomically by `SEM_APPEND_SCRIPT` itself, inside
+    /// `api::semantic::put_semantic`'s single `append_revision` call, never
+    /// by a separate Rust-side pre-check); `EtagConflict` → `409`
+    /// (stale/missing `If-Match` on a real change); `StoreUnavailable`/
+    /// `Corrupt` → `503`, a downstream-availability/data-integrity problem,
+    /// never a caller mistake.
+    pub fn from_sem(err: deblob_core::revision::SemError) -> Self {
+        use deblob_core::revision::SemError;
+        match &err {
+            SemError::MissingReason => Self::bad_request(err.to_string()),
+            SemError::EtagConflict { .. } => Self::conflict(err.to_string()),
+            SemError::StoreUnavailable(_) | SemError::Corrupt(_) => {
+                Self::unavailable(err.to_string())
+            }
         }
     }
 }
@@ -207,6 +249,19 @@ pub fn router(state: ApiState) -> Router {
     let authenticated = Router::new()
         .route("/schemas", get(schemas::list_schemas))
         .route("/schemas/{sch_id}", get(schemas::get_schema))
+        .route(
+            "/schemas/{sch_id}/semantic",
+            get(semantic::get_semantic).put(semantic::put_semantic),
+        )
+        .route(
+            "/schemas/{sch_id}/semantic/revisions",
+            get(semantic::get_semantic_revisions),
+        )
+        .route(
+            "/schemas/{sch_id}/semantic-neighbors",
+            get(semantic::get_semantic_neighbors),
+        )
+        .route("/semantic/{sem_id}", get(semantic::get_schemas_by_semantic))
         .route("/families/{fam_id}", get(schemas::get_family))
         .route(
             "/families/{fam_id}/versions",

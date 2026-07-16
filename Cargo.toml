@@ -10,6 +10,7 @@ members = [
     "crates/deblob-match",
     "crates/deblob-monoid",
     "crates/deblob-redis",
+    "crates/deblob-semantic",
     "crates/deblob-slm",
 ]
 exclude = ["crates/deblob-fingerprint/fuzz"]
@@ -25,6 +26,7 @@ serde_json = { version = "1", features = ["arbitrary_precision"] }
 thiserror = "2"
 sha2 = "0.10"
 data-encoding = "2"
+unicode-normalization = "0.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tracing = "0.1"

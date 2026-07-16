@@ -141,6 +141,9 @@ impl PromoterTrait for Promoter {
             canonical: profile.generalized_canonical_json(),
             canonicalizer: GENERALIZER.to_string(),
             provenance,
+            semantic: None,
+            semantic_fingerprint: None,
+            privacy_class: None,
         };
 
         let bucket = bucket_key(&generalized_shape_summary(&profile));
@@ -365,6 +368,13 @@ mod tests {
             _bands: &[u32],
             _depths: &[u32],
         ) -> Result<Vec<deblob_core::ports::FamilyRef>, CoreError> {
+            unimplemented!("not exercised by promoter tests")
+        }
+        async fn family_version_schema(
+            &self,
+            _family_id: &FamilyId,
+            _version: FamilyVersion,
+        ) -> Result<Option<SchemaId>, CoreError> {
             unimplemented!("not exercised by promoter tests")
         }
     }

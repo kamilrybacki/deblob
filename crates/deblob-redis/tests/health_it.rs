@@ -23,6 +23,9 @@ fn sample_record() -> SchemaRecord {
         canonical: r#"{"t":"obj","f":{"id":{"t":"str"}}}"#.to_string(),
         canonicalizer: "deblob-canon-v1".to_string(),
         provenance: serde_json::json!({"source": "health_it"}),
+        semantic: None,
+        semantic_fingerprint: None,
+        privacy_class: None,
     }
 }
 

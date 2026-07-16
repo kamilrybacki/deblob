@@ -37,7 +37,7 @@ use std::time::Duration;
 
 use deblob::config::{
     Config, HttpProxyConfig, KafkaConfig, LimitsConfig, ManagementConfig, PromotionConfig, Secrets,
-    SlmConfig,
+    SemanticConfig, SlmConfig,
 };
 use deblob::promote::{FamilyChoice, PromoteRequest};
 use deblob::serve::serve;
@@ -443,6 +443,10 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
         // `KafkaDiscoverySink`/listener at all, so this e2e test's
         // behavior is unaffected by the HTTP proxy's existence.
         http_proxy: HttpProxyConfig::default(),
+        // P2-D Task 8 follow-up (A1): out of scope for this P1 pipeline
+        // test — both lists empty means `serve()` seeds an empty
+        // `Registries`, unchanged from every pre-A1 test.
+        semantic: SemanticConfig::default(),
     };
     let secrets = Secrets {
         api_token: API_TOKEN.to_string(),

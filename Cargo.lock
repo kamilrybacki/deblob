@@ -568,6 +568,7 @@ dependencies = [
  "deblob-match",
  "deblob-monoid",
  "deblob-redis",
+ "deblob-semantic",
  "deblob-slm",
  "governor",
  "http-body-util",
@@ -710,12 +711,26 @@ dependencies = [
  "data-encoding",
  "deblob-core",
  "deblob-fingerprint",
+ "deblob-semantic",
  "redis",
  "serde",
  "serde_json",
  "sha2",
  "testcontainers-modules",
  "tokio",
+]
+
+[[package]]
+name = "deblob-semantic"
+version = "0.1.0"
+dependencies = [
+ "deblob-core",
+ "deblob-fingerprint",
+ "deblob-monoid",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.18",
+ "unicode-normalization",
 ]
 
 [[package]]
