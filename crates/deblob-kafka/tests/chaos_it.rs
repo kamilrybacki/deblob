@@ -207,12 +207,45 @@ async fn create_topics(brokers: &str, names: &[&str], partitions: i32) {
     }
 }
 
+/// Batching spec §3's documented production defaults — used by every
+/// existing scenario in this file that isn't specifically exercising batch
+/// SIZE (they only care about crash-consistency/rebalance/exactly-once,
+/// which batching spec §2 says must hold at ANY granularity, so running
+/// them against the real default batch size is the most faithful
+/// re-validation of "the chaos suite still passes with batching on").
+const DEFAULT_MAX_BATCH_RECORDS: usize = 500;
+const DEFAULT_MAX_BATCH_LINGER_MS: u64 = 100;
+
 fn relay_cfg(
     brokers: &str,
     t: &TestTopics,
     group_id: &str,
     txn_id: &str,
     fault: Option<FaultPoint>,
+) -> RelayCfg {
+    relay_cfg_with_batch(
+        brokers,
+        t,
+        group_id,
+        txn_id,
+        fault,
+        DEFAULT_MAX_BATCH_RECORDS,
+        DEFAULT_MAX_BATCH_LINGER_MS,
+    )
+}
+
+/// Same as [`relay_cfg`] but with explicit batch-size/linger control, for
+/// scenarios that need to guarantee (not just permit) multiple records
+/// landing in ONE batch/transaction.
+#[allow(clippy::too_many_arguments)]
+fn relay_cfg_with_batch(
+    brokers: &str,
+    t: &TestTopics,
+    group_id: &str,
+    txn_id: &str,
+    fault: Option<FaultPoint>,
+    max_batch_records: usize,
+    max_batch_linger_ms: u64,
 ) -> RelayCfg {
     RelayCfg {
         brokers: brokers.to_string(),
@@ -223,6 +256,8 @@ fn relay_cfg(
         quarantine_topic: t.quarantine.clone(),
         transactional_id: txn_id.to_string(),
         limits: Limits::default(),
+        max_batch_records,
+        max_batch_linger_ms,
         fault,
         metrics: Metrics::new(),
         sasl: None,
@@ -272,6 +307,25 @@ async fn try_recv_owned(consumer: &StreamConsumer, timeout: Duration) -> Option<
         Ok(Err(err)) => panic!("kafka error while polling: {err}"),
         Err(_) => None,
     }
+}
+
+/// Reads one counter's value out of a [`Metrics::gather_text`] Prometheus
+/// text-exposition dump by exact line-prefix match, e.g.
+/// `"deblob_relay_transactions_total{result=\"committed\"} "`. `0.0` if the
+/// line isn't present at all — a `CounterVec` label combination that was
+/// never incremented simply doesn't render (unlike a bare `Counter`, which
+/// always renders starting at 0), so "absent" and "present with value 0"
+/// are the same fact for this test suite's purposes.
+fn metric_counter_value(text: &str, line_prefix: &str) -> f64 {
+    for line in text.lines() {
+        if let Some(rest) = line.strip_prefix(line_prefix) {
+            return rest
+                .trim()
+                .parse::<f64>()
+                .unwrap_or_else(|e| panic!("metric value {rest:?} is not a float: {e}"));
+        }
+    }
+    0.0
 }
 
 fn header_map(headers: Option<&OwnedHeaders>) -> HashMap<String, Option<Vec<u8>>> {
@@ -470,11 +524,20 @@ async fn kill_between_produce_and_commit_reprocess_exactly_once() {
     let expected_origins: HashSet<String> = expected.into_iter().collect();
     assert_eq!(expected_origins.len(), 4, "4 distinct source offsets");
 
-    // Relay A: fault on the FIRST record it happens to read (order across
-    // the 2 partitions is not guaranteed) — simulates a crash mid-batch.
-    // `Relay::run` returns as soon as the fault fires, so the other 3
-    // records were never even consumed (no offset committed for them
-    // either).
+    // Relay A: AfterProduceBeforeCommit now fires once PER BATCH, after
+    // EVERY record accumulated into that batch has been transactionally
+    // produced (batching spec §1/§4) — not per record. All 4 raw records
+    // are already on the broker before relay A even subscribes, so they
+    // are very likely to land in one accumulated batch, but the test's
+    // exactly-once claim does not depend on that: `Relay::run` returns
+    // immediately once the fault fires, BEFORE ever accumulating a second
+    // batch, so no offset is ever committed for any of the 4 records
+    // regardless of how the accumulation happened to split them —
+    // whichever were read sit inside the still-open, never-committed
+    // transaction; any not yet read were simply never touched by relay A.
+    // Either way nothing is visible under read_committed and nothing is
+    // offset-committed, so a fresh relay resuming from the untouched
+    // initial offset reprocesses all 4 records exactly once.
     let shutdown_a = CancellationToken::new();
     let handle_a = tokio::spawn(Relay::run(
         relay_cfg(
@@ -554,7 +617,10 @@ async fn drain_by_origin(
 ) -> HashMap<String, HashMap<String, Option<Vec<u8>>>> {
     let consumer = committed_consumer(brokers, group_id, topic);
     let mut out = HashMap::new();
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    // 90s: generous headroom for consumer-group join + batch-linger +
+    // transaction-commit latency under load (Docker/CI contention with
+    // several testcontainers-backed suites running back to back).
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
     while out.len() < count {
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         assert!(
@@ -563,7 +629,13 @@ async fn drain_by_origin(
             out.len(),
             out.keys().collect::<Vec<_>>()
         );
-        let msg = recv_owned(&consumer, remaining.min(Duration::from_secs(15))).await;
+        // Deliberately NOT capped to some smaller sub-window: `recv_owned`
+        // panics immediately on its OWN timeout rather than retrying, so
+        // artificially truncating this wait (e.g. to 15s) would let one
+        // slow-but-still-within-the-60s-budget message panic the whole
+        // drain even though the overall deadline still has time left. The
+        // `assert!` above is the only timeout check that should ever fire.
+        let msg = recv_owned(&consumer, remaining).await;
         let headers = header_map(msg.headers());
         let origin = String::from_utf8(
             headers
@@ -744,4 +816,120 @@ async fn rebalance_mid_stream_no_loss_no_dup() {
             "record {o} must not be duplicated across the rebalance, got {count} deliveries"
         );
     }
+}
+
+// ---------------------------------------------------------------------
+// Test 5 (batching spec §1-§3, the throughput claim itself): a batch
+// spanning MULTIPLE raw-topic partitions commits as exactly ONE Kafka
+// transaction, and that single `send_offsets_to_transaction` call covers
+// EVERY partition touched — not just the last record processed. Proven by
+// starving a fresh relay in the SAME consumer group: if any partition's
+// offset had been omitted (the naive "last record's offset only" bug
+// batching spec §2 explicitly guards against), that partition would have
+// no committed offset, `auto.offset.reset=earliest` would kick in, and the
+// fresh relay would read those records again.
+// ---------------------------------------------------------------------
+#[tokio::test]
+async fn batch_spanning_multiple_partitions_commits_in_one_transaction_with_full_offset_coverage() {
+    let kafka = start_kafka().await;
+    let brokers = broker_addr(&kafka).await;
+    let t = topics("batch5");
+    let partitions = 4i32;
+    create_topics(
+        &brokers,
+        &[&t.raw, &t.tagged, &t.discovery, &t.quarantine],
+        partitions,
+    )
+    .await;
+
+    let producer = raw_producer(&brokers);
+    let records_per_partition = 2i64;
+    let mut expected_origins = HashSet::new();
+    for p in 0..partitions {
+        for i in 0..records_per_partition {
+            let payload = format!(r#"{{"batch5_p":{p},"n":{i}}}"#).into_bytes();
+            produce_raw(&producer, &t.raw, p, &payload).await;
+            expected_origins.insert(origin(&t.raw, p, i));
+        }
+    }
+    let total = expected_origins.len();
+    assert_eq!(
+        total,
+        (partitions as usize) * (records_per_partition as usize)
+    );
+
+    // `max_batch_records` comfortably covers every record produced above,
+    // and every one of them is already on the broker before relay A even
+    // subscribes — so, given a generous linger, all `total` records land
+    // in ONE accumulated batch, deterministically.
+    let cfg_a = relay_cfg_with_batch(
+        &brokers,
+        &t,
+        "batch5-group",
+        "batch5-txn-a",
+        None,
+        total * 2,
+        // Generous linger margin under CI/Docker load — the assertions
+        // below don't depend on how fast the batch fills, only that all
+        // `total` records land in ONE batch before the deadline fires.
+        2_000,
+    );
+    let metrics_a = cfg_a.metrics.clone();
+
+    let shutdown_a = CancellationToken::new();
+    let handle_a = tokio::spawn(Relay::run(cfg_a, matcher(), shutdown_a.clone()));
+
+    let delivered = drain_by_origin(&brokers, "batch5-verify", &t.tagged, total).await;
+    stop_checked(shutdown_a, handle_a, "relay A (batch5)").await;
+
+    assert_eq!(
+        delivered.keys().cloned().collect::<HashSet<_>>(),
+        expected_origins,
+        "every record across every partition must be delivered exactly once"
+    );
+
+    // Exactly ONE committed transaction for the whole batch — the
+    // throughput claim this spec exists to prove (transactions << records).
+    let text_a = metrics_a.gather_text().expect("gather metrics text");
+    assert_eq!(
+        metric_counter_value(
+            &text_a,
+            "deblob_relay_transactions_total{result=\"committed\"} "
+        ),
+        1.0,
+        "the whole batch must commit as exactly ONE transaction:\n{text_a}"
+    );
+    assert_eq!(
+        metric_counter_value(
+            &text_a,
+            "deblob_relay_transactions_total{result=\"aborted\"} "
+        ),
+        0.0,
+        "no aborts expected on the clean path:\n{text_a}"
+    );
+    assert_eq!(
+        metric_counter_value(&text_a, "deblob_relay_records_total "),
+        total as f64,
+        "one record increment per record read, {total} records read overall:\n{text_a}"
+    );
+
+    // Full per-partition offset coverage proof: a FRESH relay in the SAME
+    // consumer group, with nothing new produced, must see NOTHING — every
+    // one of the `partitions` partitions' offsets was committed by the
+    // single send_offsets_to_transaction call above, not just the last
+    // record's partition.
+    let cfg_b = relay_cfg(&brokers, &t, "batch5-group", "batch5-txn-b", None);
+    let metrics_b = cfg_b.metrics.clone();
+    let shutdown_b = CancellationToken::new();
+    let handle_b = tokio::spawn(Relay::run(cfg_b, matcher(), shutdown_b.clone()));
+    tokio::time::sleep(Duration::from_secs(3)).await;
+    stop_checked(shutdown_b, handle_b, "relay B (batch5, starved)").await;
+
+    let text_b = metrics_b.gather_text().expect("gather metrics text");
+    assert_eq!(
+        metric_counter_value(&text_b, "deblob_relay_records_total "),
+        0.0,
+        "a fresh relay in the same group must read NOTHING if every partition's \
+         offset was correctly committed by the batch above:\n{text_b}"
+    );
 }

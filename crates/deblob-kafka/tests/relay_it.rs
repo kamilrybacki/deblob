@@ -195,6 +195,14 @@ fn relay_cfg(brokers: &str, t: &TestTopics, group_id: &str, txn_id: &str) -> Rel
         quarantine_topic: t.quarantine.clone(),
         transactional_id: txn_id.to_string(),
         limits: Limits::default(),
+        // Batching spec (`docs/superpowers/specs/2026-07-16-relay-batching.md`)
+        // §3's production defaults — these behavior tests care about
+        // per-record OUTCOMES (headers, partitioning, quarantine,
+        // tombstones, replay determinism), not batch granularity, so
+        // running them against the real default batch size is the most
+        // faithful re-validation that batching didn't change any of that.
+        max_batch_records: 500,
+        max_batch_linger_ms: 100,
         fault: None,
         metrics: Metrics::new(),
         sasl: None,
