@@ -76,15 +76,42 @@ data:
     policy_requires_rank_one = true
 
     [continual.training_job]
-    # Arm-C fine-tune backend (spec §7/§8): REMOTE ONLY, default = HF
-    # Jobs. `HfJobsBackend::submit`/`poll` shell out to the `hf` CLI from
-    # THIS Job's own pod (a worker) — the worker only submits/polls; HF's
-    # infrastructure does the actual training. No GPU is ever requested
-    # in this namespace (spec §9: "no real GPU training inside the
-    # cluster").
-    backend = "hfjobs"
-    hf_token_secret_ref = "experiment/hf-token"  # HF Jobs `--secrets` name reference, NOT the raw token
-    output_repo = "kamilandrzejrybacki-inc/deblob-experiment-checkpoints"
-    hardware_flavor = "cpu-basic"
+    # Arm-C fine-tune backend (spec §7/§8): REMOTE ONLY. **Modal is the
+    # CHOSEN backend** — T4 GPUs + the ~$30/mo free credit make it the
+    # cheapest REAL-training path (see docs/experiment-setup-checklist.md
+    # §3). `ModalBackend::submit`/`poll`
+    # (crates/deblob-experiment/src/continual/training_job/modal.rs) talk
+    # to `deploy/experiment/modal/trainer.py`'s deployed web endpoint over
+    # plain HTTP+JSON from THIS Job's own pod (a worker) — the worker only
+    # submits/polls; Modal's infrastructure does the actual T4 training.
+    # No GPU is ever requested in THIS namespace (spec §9: "no real GPU
+    # training inside the cluster"). `backend = "hfjobs"` still works
+    # (config-swap only, `HfJobsBackend` unchanged) if Modal isn't set up.
+    backend = "modal"
+
+    # --- Modal (chosen) ---
+    # `endpoint_base` is the trainer app's OWN web-endpoint URL (printed by
+    # `modal deploy deploy/experiment/modal/trainer.py`), e.g.
+    # "https://<workspace>--deblob-experiment-trainer-web.modal.run".
+    modal_endpoint_base = "REPLACE_ME_https://<workspace>--deblob-experiment-trainer-web.modal.run"
+    # MUST match `deploy/experiment/modal/trainer.py`'s `APP_NAME` — audit
+    # trail only, not read by `ModalBackend` for anything but logging.
+    modal_app_name = "deblob-experiment-trainer"
+    # Caching knobs (spend-cap note: Modal cold starts are billed) — pin
+    # the trainer image tag/digest and the persistent Volume name caching
+    # base-model weights, so a run reuses both instead of rebuilding/
+    # re-downloading every round. `modal_cached_volume_name` MUST match
+    # trainer.py's `BASE_MODEL_CACHE_VOLUME_NAME` literal.
+    modal_cached_image_tag = "deblob-experiment-trainer:v1"
+    modal_cached_volume_name = "deblob-base-models"
+    # Modal's ~$30/mo FREE starter credit is the spend cap in practice;
+    # this ceiling is the SAME kind of hard guard `validate_budget`
+    # enforces before every submit (both at the hook level and, again,
+    # inside `ModalBackend::submit` itself — see its module docs).
     max_usd_ceiling = 5.00
     max_runtime_minutes = 60
+
+    # --- HF Jobs (kept working, config-swap fallback — see hf_jobs.rs) ---
+    # hf_token_secret_ref = "experiment/hf-token"  # HF Jobs `--secrets` name reference, NOT the raw token
+    # output_repo = "kamilandrzejrybacki-inc/deblob-experiment-checkpoints"
+    # hardware_flavor = "cpu-basic"

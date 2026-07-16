@@ -23,6 +23,6 @@ pub use datasets::PrequentialConfig;
 pub use prequential::{FrozenTrajectory, PrequentialError, PrequentialRunner, RoundRecord};
 pub use training_job::{
     Budget, BudgetPolicy, FakeBackend, FixedJobParams, HfJobsBackend, HfJobsConfig, JobHandle,
-    JobStatus, LoraParams, TrainingBackend, TrainingBackendError, TrainingBackendFineTuneHook,
-    TrainingJobSpec, TrainingMethod,
+    JobStatus, LoraParams, ModalBackend, ModalConfig, ModalCredentials, TrainingBackend,
+    TrainingBackendError, TrainingBackendFineTuneHook, TrainingJobSpec, TrainingMethod,
 };
