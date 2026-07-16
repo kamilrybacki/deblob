@@ -1,0 +1,24 @@
+{
+  "specversion": "1.0",
+  "type": "com.homelab.orders.created",
+  "source": "/orders/service",
+  "id": "c1a2b3d4-e5f6-4708-9192-a3b4c5d6e7f8",
+  "time": "2026-07-16T10:15:00Z",
+  "datacontenttype": "application/json",
+  "subject": "order/ORD-100482",
+  "data": {
+    "order_id": "ORD-100482",
+    "customer_id": "CUST-9931",
+    "currency": "USD",
+    "items": [
+      { "sku": "SKU-001", "qty": 2, "price": 19.99 },
+      { "sku": "SKU-045", "qty": 1, "price": 49.5 }
+    ],
+    "total": 89.48,
+    "shipping_address": {
+      "line1": "123 Homelab Way",
+      "city": "Springfield",
+      "postal_code": "00000"
+    }
+  }
+}

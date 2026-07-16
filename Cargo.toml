@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/deblob",
+    "crates/deblob-bench",
     "crates/deblob-core",
     "crates/deblob-eval",
     "crates/deblob-fingerprint",

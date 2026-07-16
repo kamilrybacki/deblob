@@ -1,0 +1,29 @@
+{
+  "apiVersion": "v1",
+  "kind": "Event",
+  "metadata": {
+    "name": "deblob-relay-6c9d8b7a5.17f2a3b4c5d6e800",
+    "namespace": "deblob-bench",
+    "uid": "4d5e6f70-8192-a3b4-c5d6-e7f8091a2b3c",
+    "resourceVersion": "1048703",
+    "creationTimestamp": "2026-07-16T10:08:30Z"
+  },
+  "involvedObject": {
+    "kind": "Pod",
+    "namespace": "deblob-bench",
+    "name": "deblob-relay-6c9d8b7a5-xk2mp",
+    "uid": "5e6f7081-92a3-b4c5-d6e7-f8091a2b3c4d",
+    "apiVersion": "v1",
+    "fieldPath": "spec.containers{deblob}"
+  },
+  "reason": "Failed",
+  "message": "Failed to pull image \"ghcr.io/kamil-rybacki/deblob:0.1.0\": rpc error: code = Unknown desc = Error response from daemon: unauthorized",
+  "source": {
+    "component": "kubelet",
+    "host": "lw-c1"
+  },
+  "firstTimestamp": "2026-07-16T10:08:30Z",
+  "lastTimestamp": "2026-07-16T10:11:00Z",
+  "count": 5,
+  "type": "Warning"
+}

@@ -1,0 +1,20 @@
+{
+  "specversion": "1.0",
+  "type": "com.homelab.users.signup",
+  "source": "/auth/service",
+  "id": "d2b3c4e5-f607-4819-92a3-b4c5d6e7f809",
+  "time": "2026-07-16T10:20:00Z",
+  "datacontenttype": "application/json",
+  "subject": "user/USR-55021",
+  "data": {
+    "user_id": "USR-55021",
+    "email": "new.user@example.com",
+    "plan": "free",
+    "referrer": "organic",
+    "marketing_opt_in": false,
+    "signup_source": {
+      "channel": "web",
+      "campaign": null
+    }
+  }
+}
