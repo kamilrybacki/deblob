@@ -52,18 +52,34 @@ COPY crates ./crates
 
 # --locked: fail the build rather than silently re-resolve
 # dependencies if Cargo.lock and Cargo.toml ever drift apart.
-RUN cargo build --release --locked --package deblob
+# Build both the server binary (`deblob`) and the benchmark client
+# (`deblob-bench`) — one image serves the Deblob Deployment (ENTRYPOINT
+# deblob) and the in-cluster benchmark Job (command deblob-bench).
+RUN cargo build --release --locked --package deblob --package deblob-bench
 
 ########################################
 # Runtime
 ########################################
-# distroless's cc-debian12 base ships glibc + libgcc (rdkafka/openssl are
-# dynamically linked) but no shell, package manager, or other attack
-# surface beyond that. The :nonroot tag also pre-creates and switches to
-# a non-root uid/gid (65532), so no separate `useradd` step is needed.
-FROM gcr.io/distroless/cc-debian12:nonroot
+# bookworm-slim runtime. rdkafka dynamically links zlib/openssl/sasl/lz4/zstd
+# (the `ssl` + compression features) — distroless cc ships only glibc+libgcc,
+# so the binary failed at load with `libz.so.1: cannot open shared object`.
+# slim + the runtime shared libs is the robust fix; a dedicated non-root user
+# keeps the container from running as root.
+FROM debian:bookworm-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libssl3 \
+        zlib1g \
+        libsasl2-2 \
+        liblz4-1 \
+        libzstd1 \
+        ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd -g 65532 nonroot \
+    && useradd -u 65532 -g 65532 -M -s /usr/sbin/nologin nonroot
 
 COPY --from=builder /build/target/release/deblob /usr/local/bin/deblob
+COPY --from=builder /build/target/release/deblob-bench /usr/local/bin/deblob-bench
 
 WORKDIR /app
 
