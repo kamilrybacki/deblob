@@ -17,8 +17,10 @@
 ########################################
 # Builder
 ########################################
-# rust-version in Cargo.toml's [workspace.package] pins MSRV to 1.80.
-FROM rust:1.80-bookworm AS builder
+# A transitive dependency (cpufeatures 0.3.x, via sha2/rdkafka) requires
+# Cargo's `edition2024` feature, stabilized in Rust 1.85 — so the builder
+# toolchain must be >= 1.85 even though the workspace's own MSRV is older.
+FROM rust:1.86-bookworm AS builder
 
 # rdkafka is built with the `cmake-build` + `ssl` features (see
 # crates/deblob-kafka/Cargo.toml and crates/deblob/Cargo.toml), which
