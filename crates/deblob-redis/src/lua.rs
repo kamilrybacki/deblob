@@ -9,14 +9,24 @@
 //!   4. bucket key            deblob:index:<fieldband>:<depth>:<reqhash8>
 //!   5. audit stream key      deblob:audit:log
 //!   6. published-marker key  deblob:published:<sch_id>
-//!   - variant bucket keys (KEYS[7..6+N], Task 14 fix): one structural-index
+//!   7. schema-index key      deblob:schemas  (SET, fix1) — the maintained
+//!      listing index `GET /api/v1/schemas` pages over. Every publish call
+//!      (fresh or idempotent republish) `SADD`s the schema id here, so
+//!      `RedisRegistry::list_schemas` can `SSCAN` this one small SET
+//!      (O(schemas)) instead of `SCAN`ning the entire `deblob:*` keyspace
+//!      (O(keyspace)) looking for sparse `deblob:schema:*` keys — the bug
+//!      that produced empty pages with a non-zero cursor even when schemas
+//!      existed, because a keyspace `SCAN COUNT` batch could easily contain
+//!      zero schema keys among the thousands of candidate/evidence/index/
+//!      semantic keys sharing the same `deblob:` prefix space.
+//!   - variant bucket keys (KEYS[8..7+N], Task 14 fix): one structural-index
 //!     SET key per observed CONCRETE shape recorded against the promoted
 //!     candidate (`EvidenceStore::get_variants`), possibly a DIFFERENT
 //!     bucket than KEYS[4]: an observed variant with more/fewer top-level
 //!     fields than the candidate's generalized profile can band into a
-//!     different `ShapeSummary` bucket. `N` is derived from `#KEYS - 6`, so
-//!     `N == 0` (no extra KEYS beyond the fixed six) is a valid, no-op call
-//!     — a candidate promoted with no recorded variants must not fail.
+//!     different `ShapeSummary` bucket. `N` is derived from `#KEYS - 7`, so
+//!     `N == 0` (no extra KEYS beyond the fixed seven) is a valid, no-op
+//!     call — a candidate promoted with no recorded variants must not fail.
 //!
 //! `KEYS[4]` (Task 8) is the real per-bucket structural-index SET this
 //! schema belongs to, computed by the caller from its `ShapeSummary`. It is
@@ -84,6 +94,7 @@ local alias_key = KEYS[3]
 local index_key = KEYS[4]
 local audit_key = KEYS[5]
 local published_key = KEYS[6]
+local schema_index_key = KEYS[7]
 
 local schema_json = ARGV[1]
 local canonical = ARGV[2]
@@ -140,8 +151,15 @@ end
 
 redis.call('SADD', index_key, bucket_member)
 
+-- fix1: maintain the schemas-listing index unconditionally (fresh publish
+-- AND idempotent republish alike — SADD is a no-op on a member that's
+-- already present), atomically alongside every other write this script
+-- makes, so `list_schemas` never has to derive it separately and can never
+-- observe a schema record without a corresponding listing-index entry.
+redis.call('SADD', schema_index_key, schema_id)
+
 -- Task 14 fix: index every observed CONCRETE shape recorded against this
--- candidate, into ITS OWN bucket (KEYS[7..], one per variant, possibly
+-- candidate, into ITS OWN bucket (KEYS[8..], one per variant, possibly
 -- distinct from index_key), so a hot-path lookup of any previously
 -- observed shape resolves to schema_id — not just the schema's own
 -- generalized digest. Unconditional (not gated behind `not
@@ -151,9 +169,9 @@ redis.call('SADD', index_key, bucket_member)
 -- refreshed to the fullest set of variants any publish call has supplied,
 -- so `rebuild_index` can restore all of them later purely from this hash.
 redis.call('HSET', schema_key, 'variants', variants_json)
-local variant_count = #KEYS - 6
+local variant_count = #KEYS - 7
 for i = 1, variant_count do
-  local variant_bucket_key = KEYS[6 + i]
+  local variant_bucket_key = KEYS[7 + i]
   local variant_member = ARGV[10 + i]
   redis.call('SADD', variant_bucket_key, variant_member)
 end

@@ -266,3 +266,46 @@ async fn rebuild_index_restores_variant_resolution() {
         "resolve_structural must find the concrete-shape variant again after rebuild_index"
     );
 }
+
+/// Test D (fix1): a real promoted schema — published by `Promoter::promote`
+/// through the actual production `deblob-monoid` generalization path, so
+/// its `canonicalizer` is `deblob_monoid::GENERALIZER` ("deblob-monoid-v1"),
+/// never the raw "deblob-canon-v1" tag a directly-ingested concrete message
+/// gets — must show up in `Registry::list_schemas`, the same call
+/// `GET /api/v1/schemas` makes. Before fix1, `list_schemas` scanned the
+/// whole `deblob:*` keyspace for `deblob:schema:*` keys and could return an
+/// empty page with a non-zero cursor even though this schema existed.
+#[tokio::test]
+async fn promoted_monoid_schema_appears_in_list_schemas() {
+    let (_url, registry, evidence, _node) = setup().await;
+    let lane = ColdLane::new(evidence.clone());
+
+    let payload: &[u8] = br#"{"a":1,"b":"x"}"#;
+    let cand_id = cand_id_of(payload);
+    lane.ingest(cand_id.clone(), &node_of(payload), meta("hot-path-sim"))
+        .await
+        .unwrap();
+
+    let promoter = Promoter::with_policy(registry.clone(), evidence.clone(), no_guard_policy());
+    let schema = promoter
+        .promote(&cand_id, promote_request(), "tester")
+        .await
+        .unwrap();
+    assert_eq!(
+        schema.canonicalizer,
+        deblob_monoid::GENERALIZER,
+        "sanity: a promoted schema is generalized via the monoid canonicalizer"
+    );
+
+    let (data, next) = registry.list_schemas(None, 50).await.unwrap();
+    assert!(
+        data.iter()
+            .any(|r| r.schema_id == schema.schema_id
+                && r.canonicalizer == deblob_monoid::GENERALIZER),
+        "the promoted (monoid-canonicalizer) schema must appear in list_schemas, got: {data:?}"
+    );
+    assert!(
+        next.is_none(),
+        "a single-schema vault must not carry a next_cursor past the only page"
+    );
+}

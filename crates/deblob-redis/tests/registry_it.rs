@@ -372,6 +372,186 @@ async fn get_family_unknown_returns_none_not_error() {
 }
 
 #[tokio::test]
+async fn list_schemas_returns_all_published_schemas() {
+    // fix1 baseline: publish 3 schemas, list_schemas must return exactly
+    // those 3 (in however many pages), never fewer, never an empty page
+    // with data still outstanding.
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut published = Vec::new();
+    for i in 0..3u8 {
+        let rec = record_with([100 + i; 32], FamilyId::new_v7());
+        let cand = CandidateId::from_digest(&[110 + i; 32]);
+        reg.publish(
+            rec.clone(),
+            &cand,
+            &format!("bucket:list:{i}"),
+            &[],
+            "kamil",
+            "publish",
+        )
+        .await
+        .unwrap();
+        published.push(rec.schema_id);
+    }
+
+    let (data, next) = reg.list_schemas(None, 50).await.unwrap();
+    assert_eq!(
+        data.len(),
+        3,
+        "a single page with limit=50 must return all 3 published schemas, got: {data:?}"
+    );
+    assert!(
+        next.is_none(),
+        "a page that returns every schema must not carry a next_cursor"
+    );
+
+    let mut got: Vec<String> = data
+        .iter()
+        .map(|r| r.schema_id.as_str().to_string())
+        .collect();
+    got.sort();
+    let mut expected: Vec<String> = published.iter().map(|id| id.as_str().to_string()).collect();
+    expected.sort();
+    assert_eq!(got, expected);
+}
+
+#[tokio::test]
+async fn list_schemas_never_returns_empty_page_amid_sparse_keyspace() {
+    // fix1 regression test, pinned against the exact live-reproduced
+    // defect: `list_schemas` used to `SCAN MATCH "deblob:schema:*"` over
+    // the WHOLE keyspace, so a `SCAN COUNT` batch could land entirely on
+    // unrelated `deblob:*` keys (candidates/evidence/index/semantic, all
+    // sharing the same prefix space) and return `{"data":[],"next_cursor":
+    // "<nonzero>"}` even though schemas existed. Publish 3 schemas, then
+    // sprinkle hundreds of decoy `deblob:*` keys of OTHER kinds around
+    // them, and page through with a small (limit=1) COUNT hint: every
+    // non-final page must be non-empty.
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut published = Vec::new();
+    for i in 0..3u8 {
+        let rec = record_with([120 + i; 32], FamilyId::new_v7());
+        let cand = CandidateId::from_digest(&[130 + i; 32]);
+        reg.publish(
+            rec.clone(),
+            &cand,
+            &format!("bucket:sparse:{i}"),
+            &[],
+            "kamil",
+            "publish",
+        )
+        .await
+        .unwrap();
+        published.push(rec.schema_id);
+    }
+
+    // Sprinkle decoys of other `deblob:*` key kinds — the same shape the
+    // live defect report described (semantic-neighbor postings, evidence,
+    // etc.) — so schema keys are a tiny minority of the whole keyspace.
+    let client = redis::Client::open(url.as_str()).unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    for i in 0..500u32 {
+        let _: () = conn
+            .set(format!("deblob:sem-sig:{i:04}"), "decoy")
+            .await
+            .unwrap();
+    }
+
+    let mut collected = Vec::new();
+    let mut cursor = None;
+    loop {
+        let (data, next) = reg.list_schemas(cursor.clone(), 1).await.unwrap();
+        assert!(
+            !data.is_empty() || next.is_none(),
+            "an empty page must only ever occur once nothing is left to page (next={next:?})"
+        );
+        collected.extend(data.into_iter().map(|r| r.schema_id));
+        if next.is_none() {
+            break;
+        }
+        cursor = next;
+    }
+
+    let mut got: Vec<String> = collected.iter().map(|id| id.as_str().to_string()).collect();
+    got.sort();
+    let mut expected: Vec<String> = published.iter().map(|id| id.as_str().to_string()).collect();
+    expected.sort();
+    assert_eq!(
+        got, expected,
+        "list_schemas must return exactly the published schemas across pages, decoys never counted"
+    );
+}
+
+#[tokio::test]
+async fn list_schemas_includes_promoted_monoid_schema() {
+    // A promoted schema is published with canonicalizer "deblob-monoid-v1"
+    // (`deblob_monoid::GENERALIZER`, exercised end-to-end via the real
+    // Promoter in `crates/deblob/tests/promote_resolve_it.rs`) rather than
+    // the raw "deblob-canon-v1" tag — `publish`/`list_schemas` must not
+    // care which; fix1's schemas-listing index is populated
+    // unconditionally by the same Lua script regardless of canonicalizer.
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let mut promoted = sample_record();
+    promoted.canonicalizer = "deblob-monoid-v1".to_string();
+    let cand = CandidateId::from_digest(&[80u8; 32]);
+    reg.publish(
+        promoted.clone(),
+        &cand,
+        "bucket:promoted:1",
+        &[],
+        "kamil",
+        "promote",
+    )
+    .await
+    .unwrap();
+
+    let (data, _) = reg.list_schemas(None, 50).await.unwrap();
+    assert!(
+        data.iter()
+            .any(|r| r.schema_id == promoted.schema_id && r.canonicalizer == "deblob-monoid-v1"),
+        "the promoted (monoid-canonicalizer) schema must appear in the listing, got: {data:?}"
+    );
+}
+
+#[tokio::test]
 async fn refuses_volatile_redis_without_flag() {
     // container has no AOF → connect with allow_volatile: false must error
     let node = Redis::default().start().await.unwrap();
