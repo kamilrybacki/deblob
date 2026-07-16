@@ -35,7 +35,7 @@
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use deblob_eval::{compute_metrics, load_corpus, report, run_eval, EvalCase, Metrics};
 use deblob_slm::{HttpInferencer, SlmHttpConfig};
 
@@ -46,9 +46,18 @@ const ENV_API_TOKEN: &str = "DEBLOB_SLM_API_TOKEN";
 /// Deblob offline eval harness — scores a configured `SemanticInferencer`
 /// endpoint against the golden corpus. See `docs/eval-runbook.md` for the
 /// full operator procedure (which model to target first and why).
+///
+/// With no subcommand, runs the eval-scoring flow below (unchanged CLI
+/// shape). `deblob-eval generate ...` (spec:
+/// `docs/superpowers/specs/2026-07-16-slm-corpus-generator.md`) instead
+/// runs the synthetic ground-truth corpus generator — see
+/// [`Command::Generate`].
 #[derive(Debug, Parser)]
 #[command(name = "deblob-eval", version, about)]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+
     /// Directory containing golden corpus `*.json` case files. Run this
     /// binary from `crates/deblob-eval/` (where the default `corpus/`
     /// directory lives), or pass an explicit path.
@@ -83,6 +92,85 @@ struct Cli {
     /// Max concurrent in-flight calls to the endpoint.
     #[arg(long, default_value_t = 4)]
     max_concurrency: usize,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Generate a deterministic, ground-truth-labeled synthetic corpus
+    /// (spec: `docs/superpowers/specs/2026-07-16-slm-corpus-generator.md`)
+    /// — expands the eval and produces fine-tune training data. NO LLM in
+    /// the loop; every label comes from a known deterministic
+    /// transformation.
+    Generate(GenerateArgs),
+}
+
+#[derive(Debug, Parser)]
+struct GenerateArgs {
+    /// Directory to write generated `EvalCase` JSON files into (created if
+    /// missing).
+    #[arg(long)]
+    out: PathBuf,
+
+    /// Number of distinct base family schemas to generate.
+    #[arg(long, default_value_t = 20)]
+    families: usize,
+
+    /// Number of variant cases to generate per family.
+    #[arg(long = "variants-per-family", default_value_t = 8)]
+    variants_per_family: usize,
+
+    /// RNG seed — same seed always produces byte-identical output.
+    #[arg(long, default_value_t = 1)]
+    seed: u64,
+
+    /// Optional path to also write the fine-tune JSONL export (spec §4):
+    /// one `{case_name, partition, prompt, gold_tool_call}` line per case.
+    #[arg(long = "finetune-jsonl")]
+    finetune_jsonl: Option<PathBuf>,
+}
+
+/// Runs `deblob-eval generate`: builds the synthetic corpus, writes it to
+/// `args.out`, prints the case-mix + partition summary (spec §6), and
+/// optionally writes the fine-tune JSONL export.
+fn run_generate(args: &GenerateArgs) -> ExitCode {
+    let cfg = deblob_eval::GenerateConfig {
+        families: args.families,
+        variants_per_family: args.variants_per_family,
+        seed: args.seed,
+    };
+    let generated = deblob_eval::generate_corpus(&cfg);
+
+    if let Err(err) = deblob_eval::write_corpus(&args.out, &generated.cases) {
+        eprintln!(
+            "failed to write generated corpus to {}: {err}",
+            args.out.display()
+        );
+        return ExitCode::FAILURE;
+    }
+    println!(
+        "wrote {} generated case(s) to {}\n",
+        generated.cases.len(),
+        args.out.display()
+    );
+    println!("{}", deblob_eval::format_summary(&generated.summary));
+
+    if let Some(path) = &args.finetune_jsonl {
+        let jsonl = deblob_eval::render_finetune_jsonl(&generated.cases);
+        if let Err(err) = std::fs::write(path, jsonl) {
+            eprintln!(
+                "failed to write fine-tune JSONL to {}: {err}",
+                path.display()
+            );
+            return ExitCode::FAILURE;
+        }
+        println!(
+            "wrote fine-tune JSONL ({} lines) to {}",
+            generated.cases.len(),
+            path.display()
+        );
+    }
+
+    ExitCode::SUCCESS
 }
 
 /// The resolved endpoint configuration this binary will run against.
@@ -207,6 +295,10 @@ async fn eval_at_k(inferencer: &HttpInferencer, corpus: &[EvalCase], k: u32) -> 
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
+    if let Some(Command::Generate(args)) = &cli.command {
+        return run_generate(args);
+    }
+
     let corpus = match load_corpus(&cli.corpus) {
         Ok(cases) => cases,
         Err(err) => {
@@ -301,6 +393,7 @@ mod tests {
 
     fn base_cli() -> Cli {
         Cli {
+            command: None,
             corpus: PathBuf::from("corpus"),
             base_url: None,
             model: None,
@@ -371,7 +464,7 @@ mod tests {
         // pass one via. This test documents that invariant and would fail
         // to compile (not just fail at runtime) if a field were added.
         let cli = base_cli();
-        let _ = cli; // Cli has: corpus, base_url, model, k, json_out, timeout_ms, max_concurrency.
+        let _ = cli; // Cli has: command, corpus, base_url, model, k, json_out, timeout_ms, max_concurrency.
     }
 
     // -- k_values ----------------------------------------------------------

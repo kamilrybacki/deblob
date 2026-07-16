@@ -11,12 +11,16 @@ path = "src/main.rs"
 
 [dependencies]
 deblob-core = { path = "../deblob-core" }
+deblob-fingerprint = { path = "../deblob-fingerprint" }
+deblob-monoid = { path = "../deblob-monoid" }
 deblob-slm = { path = "../deblob-slm" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 clap = { version = "4", features = ["derive"] }
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+rand = "0.8"
+rand_chacha = "0.3"
 
 [dev-dependencies]
 async-trait.workspace = true
