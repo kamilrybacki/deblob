@@ -368,6 +368,22 @@ end
 local new_etag = cur_etag + 1
 local previous_revision_id = cur_revision_id or ''
 
+-- Task 10 fix (atomicity hardening): decode BOTH feature-key lists here,
+-- before the first write below. Redis Lua has no rollback on a runtime
+-- error, so a malformed JSON caught only after HSETs/SADDs had already run
+-- would leave an "advance without swap" partial state (pointer/revision
+-- moved, postings not swapped). `new_feature_keys_json` is always
+-- `serde_json`-serialized in Rust immediately before this call, and
+-- `old_feature_keys_json` is only ever written by this same script, so a
+-- decode failure here is not reachable in normal operation -- but parsing
+-- everything that can fail up front, before any write, is what makes the
+-- all-or-nothing guarantee actually hold rather than merely appear to.
+local old_features = {}
+if old_feature_keys_json then
+  old_features = cjson.decode(old_feature_keys_json)
+end
+local new_features = cjson.decode(new_feature_keys_json)
+
 redis.call('HSET', revision_key,
   'revision_id', new_revision_id,
   'sch_id', sch_id,
@@ -401,12 +417,8 @@ redis.call('SADD', new_index_key, sch_id)
 -- pointer move above. `old_features` comes from what THIS SAME active hash
 -- said its own feature list was, immediately before this call overwrote its
 -- revision_id/sem_id/etag fields (read at the very top of the script, well
--- before any write) -- never recomputed, never client-supplied.
-local old_features = {}
-if old_feature_keys_json then
-  old_features = cjson.decode(old_feature_keys_json)
-end
-local new_features = cjson.decode(new_feature_keys_json)
+-- before any write) -- never recomputed, never client-supplied. Both lists
+-- were already decoded above, before the first write.
 for _, hex in ipairs(old_features) do
   redis.call('SREM', 'deblob:sem-sig:' .. hex, sch_id)
 end

@@ -883,6 +883,52 @@ async fn signature_candidates_returns_too_broad_when_union_exceeds_bound() {
 }
 
 #[tokio::test]
+async fn signature_candidates_accepts_union_of_exactly_the_bound() {
+    let (_node, reg, url) = connect().await;
+    let client = redis::Client::open(url.as_str()).unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+
+    // Pins the `>` (not `>=`) boundary in `signature_candidates`
+    // (`crates/deblob-redis/src/semantic.rs`): a union of EXACTLY
+    // `MAX_SIGNATURE_CANDIDATES` members must be ACCEPTED (real candidates
+    // returned), complementing the test above (`MAX_SIGNATURE_CANDIDATES +
+    // 1` -> `TooBroad`). Unlike that test, this one hits the `Bounded`
+    // return path, which parses every union member as a `SchemaId` before
+    // returning, so the synthetic members here must be real, distinct,
+    // valid `sch_` ids -- not arbitrary strings.
+    let feature_hex = "ddeeff";
+    let key = format!("deblob:sem-sig:{feature_hex}");
+    let members: Vec<String> = (0..MAX_SIGNATURE_CANDIDATES as u32)
+        .map(|i| {
+            let mut digest = [0u8; 32];
+            digest[0..4].copy_from_slice(&i.to_be_bytes());
+            SchemaId::from_digest(&digest).as_str().to_string()
+        })
+        .collect();
+    assert_eq!(members.len(), MAX_SIGNATURE_CANDIDATES);
+    for chunk in members.chunks(5000) {
+        let _: () = conn.sadd(&key, chunk).await.unwrap();
+    }
+
+    let result = reg
+        .signature_candidates(&[feature_hex.to_string()])
+        .await
+        .unwrap();
+    match result {
+        SignatureCandidates::Bounded(ids) => {
+            assert_eq!(
+                ids.len(),
+                MAX_SIGNATURE_CANDIDATES,
+                "a union of exactly the bound must return every candidate, not truncate"
+            );
+        }
+        SignatureCandidates::TooBroad => {
+            panic!("a union of exactly MAX_SIGNATURE_CANDIDATES members must not be TooBroad")
+        }
+    }
+}
+
+#[tokio::test]
 async fn unannotated_schema_contributes_no_postings() {
     let (_node, reg, url) = connect().await;
     let _sch_id = publish_schema(&reg, br#"{"never_annotated":1}"#, 17).await;
