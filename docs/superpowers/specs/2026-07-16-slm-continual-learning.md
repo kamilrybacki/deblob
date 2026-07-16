@@ -55,3 +55,27 @@ As the active model's held-out metrics improve on a slice (family/source), the t
 - `FeedbackStore` (real Redis) appends + exports family-partitioned JSONL with NO raw values.
 - `ModelRegistry`: a candidate that FAILS the gate (e.g. any false-merge, or worse than active) is NOT promoted; one that passes + improves IS; rollback restores the prior active — all audited, proven vs real Redis.
 - The loop is orchestratable end-to-end with the fine-tune step stubbed (a fake hook returning a model artifact), proving the data→eval→gate→promote pipeline without real training.
+
+---
+
+## Amendments from joint research `jr-slm-cl-161812` (authoritative — apply all)
+
+Folded from the Claude×Hermes joint research (`docs/joint-research-jr-slm-cl-161812.md`).
+
+### A. Capture + store (feedback.rs, feedback_store)
+1. **Learnable redaction (was a defect).** A bare hash is un-learnable. `TrainingExample` must carry the redacted VALUE SHAPE the model needs to learn argument extraction: per-field structural type, nullability, numeric range/bucket, string length/format class, enum cardinality, canonicalized placeholder — NOT raw values, and NOT only a hash. Reuse the PII-safe redaction that already produces `RedactedFieldStat`; store those, not a digest.
+2. **Rejection semantics.** `TrustedProposalRejected` must carry a `rejection_reason` (enum: `WrongFamily`, `ShouldBeNewCandidate`, `ShouldAbstain`, `PolicyDenial`, `RetrievalMiss`, `Other`) and an optional `corrected_target`. **Only `WrongFamily`/`ShouldBeNewCandidate`/`ShouldAbstain` become generator-negative training data.** `PolicyDenial` and `RetrievalMiss` are NOT the generator being wrong → exclude from generator training (log them as retrieval/policy signal instead). A rejection with no corrected target + no clear generator-fault reason is NOT emitted as SFT/DPO data.
+3. **Weight as ablatable config.** `weight` (incl. the hard-negative 3.0) is NOT hard-coded — it is a config parameter, and the export caps any single family's / rejection-source's contribution (so a burst of correlated rejections can't dominate). Default documented as "unvalidated — ablate."
+4. **Feedback provenance + anti-poisoning.** Each `TrainingExample` records `actor`, `source_trust_level`, `tool_schema_version`, `dedup_cluster`. The store deduplicates by cluster and supports rate-limit/quarantine of an anomalous source. Export EXCLUDES quarantined sources. NEVER let a single actor/family trigger retrain+promote (enforced downstream in the orchestrator gate).
+5. **Split hygiene + system-of-record.** Redis is the capture queue/index, NOT the training system of record. `export_jsonl` writes an IMMUTABLE, content-addressed snapshot (manifest + checksum) intended for NAS/MinIO. Split by source/time/near-dup-cluster/family (a paraphrase/synthetic sibling never crosses train/test). A permanent `never_trained_safety_suite` partition is reserved and never sampled into training.
+
+### B. Registry + gate + orchestration (model_registry.rs, retrain.rs)
+6. **Statistical gate.** The go-live gate is not "zero failures" alone: require a minimum test-N, per-FAMILY precision floors, confidence intervals, and a non-inferiority margin vs the active model. `false_merge` hard-gate stays, but expressed with an upper confidence bound given N (document that a defensible threshold depends on traffic/family distribution).
+7. **Separation of duties.** The fine-tune hook + `register_candidate` produce a Candidate ONLY. Evaluation writes gate EVIDENCE to the candidate. Moving the `champion`/active alias is a SEPARATE `promote()` controller action requiring the evidence bundle + (config) an explicit approval flag — the training path can never self-promote.
+8. **Composite artifact bundle.** A `ModelVersion` versions the WHOLE inference bundle: weights digest + tokenizer + prompt-template version + runtime + quantization + retrieval/index version + grammar + catalog. Rollback restores the whole bundle. The gate evaluates the QUANTIZED artifact, recorded separately from the training checkpoint.
+9. **Retrain from a stable base.** `RetrainPlan` trains each candidate from a reproducible base snapshot (recorded in `trained_from`), NOT by recursively mutating the latest adapter. Provide a **replay set** to the fine-tune hook: strata = immutable-golden, historical-replay, recent-correction, rare/adversarial, no-call.
+10. **Active-learning curation.** Before export, `RetrainPlan` curates: prioritize informative examples (near the decision boundary / where feedback contradicted the model / underserved families), cap redundant easy positives. Report the curated mix.
+11. **Live-shadow canary.** Gated promotion has TWO stages: `pass_offline_gate` → the candidate becomes `ShadowCandidate` (runs in the existing shadow lane on real traffic, gathering live eval for a hold period) → only then can `promote()` move it to `Active`. An offline pass alone never becomes full active.
+12. **Retrieval gated independently.** Track + gate retrieval recall@k SEPARATELY from generator accuracy (if gold ∉ top-k, generator tuning can't fix it). Report end-to-end AND oracle-retrieval metrics.
+
+Acceptance additions: a `PolicyDenial` rejection is NOT emitted as generator-negative data (test); a `TrainingExample` carries learnable value-shape not a bare hash (test); the gate rejects a candidate that passes aggregate but regresses a per-family slice below the floor with sufficient N (test); the training path cannot self-promote (separation-of-duties test); a quarantined source is excluded from export (test).
