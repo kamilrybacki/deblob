@@ -310,6 +310,20 @@ pub struct RedactedFieldStat {
     /// `true` if a truncated (bound-limited) array was ever observed at
     /// this field.
     pub array_partial_seen: bool,
+    /// A deterministic, non-reversible VALUE-SHAPE placeholder for this
+    /// field — e.g. `"<string>"`, `"<number:positive>"`,
+    /// `"nullable:<string>"` — built ONLY from the other (already-redacted)
+    /// fields on this struct (`types`, `nullable`, `numeric_buckets`).
+    /// Never derived from, and never able to reconstruct, a raw observed
+    /// value (spec `2026-07-16-slm-continual-learning.md` amendment A1:
+    /// "a bare hash is un-learnable" — this is the substitute a
+    /// downstream training/curation pipeline can splice into a
+    /// reconstructed argument-extraction target). See
+    /// [`canonicalize_placeholder`]. `#[serde(default)]` so a
+    /// [`RedactedFieldStat`] serialized before this field existed (e.g.
+    /// the `deblob-eval` golden corpus fixtures) still deserializes.
+    #[serde(default)]
+    pub canonicalized_placeholder: String,
 }
 
 /// Redacted, monoid-statistics-only view of a candidate cluster — the
@@ -362,22 +376,82 @@ impl CandidateProfileView {
     }
 }
 
+/// Builds [`RedactedFieldStat::canonicalized_placeholder`] from already-
+/// redacted stats only (never a raw value — none is available this far
+/// downstream; see this module's docs). Picks the dominant observed type
+/// (object > array > number > string > bool > null, matching
+/// `Node`'s own precedence) and, for a number, refines the placeholder
+/// with the coarse sign bucket already computed in `numeric_buckets` —
+/// itself never the number. Prefixes `"nullable:"` when the field was
+/// ever observed as `null` alongside another type (a field observed as
+/// ONLY `null` is already `"<null>"` and is not double-prefixed).
+/// Deterministic: the same stats always produce the same placeholder.
+fn canonicalize_placeholder(
+    types: &TypeCounts,
+    nullable: bool,
+    numeric_buckets: &[NumericBucket],
+) -> String {
+    let base = if types.object > 0 {
+        "<object>".to_string()
+    } else if types.array > 0 {
+        "<array>".to_string()
+    } else if types.number > 0 {
+        if numeric_buckets.is_empty() {
+            "<number>".to_string()
+        } else if numeric_buckets == [NumericBucket::Zero] {
+            "<number:zero>".to_string()
+        } else if numeric_buckets == [NumericBucket::Negative] {
+            "<number:negative>".to_string()
+        } else if numeric_buckets.iter().all(|b| {
+            matches!(
+                b,
+                NumericBucket::Zero
+                    | NumericBucket::SmallPositive
+                    | NumericBucket::MediumPositive
+                    | NumericBucket::LargePositive
+            )
+        }) {
+            "<number:positive>".to_string()
+        } else {
+            "<number:mixed>".to_string()
+        }
+    } else if types.string > 0 {
+        "<string>".to_string()
+    } else if types.bool > 0 {
+        "<bool>".to_string()
+    } else if types.null > 0 {
+        "<null>".to_string()
+    } else {
+        "<empty>".to_string()
+    };
+    if nullable && base != "<null>" {
+        format!("nullable:{base}")
+    } else {
+        base
+    }
+}
+
 fn push_field_stat(
     node: &FieldNode,
     path: Vec<RedactedName>,
     depth: u32,
     out: &mut Vec<RedactedFieldStat>,
 ) {
+    let nullable = node.types.null > 0 || node.explicit_null > 0;
+    let numeric_buckets = numeric_buckets_from_monoid(&node.numeric_buckets);
+    let canonicalized_placeholder =
+        canonicalize_placeholder(&node.types, nullable, &numeric_buckets);
     out.push(RedactedFieldStat {
         path,
         depth,
         present: node.present,
         explicit_null: node.explicit_null,
         types: node.types.clone(),
-        nullable: node.types.null > 0 || node.explicit_null > 0,
-        numeric_buckets: numeric_buckets_from_monoid(&node.numeric_buckets),
+        nullable,
+        numeric_buckets,
         array_empty_seen: node.array_empty_seen,
         array_partial_seen: node.array_partial_seen,
+        canonicalized_placeholder,
     });
 }
 
@@ -756,6 +830,69 @@ mod tests {
         assert!(detect_injection("user\u{202E}di_desu"));
         // Latin 'a' mixed with a Cyrillic lookalike 'а' (U+0430).
         assert!(detect_injection("p\u{0430}ssword"));
+    }
+
+    // -- Amendment A1: learnable value-shape (canonicalized placeholder) ----
+
+    #[test]
+    fn canonicalized_placeholder_reflects_dominant_type_and_numeric_sign() {
+        let payload = r#"{"name":"x","count":5,"balance":-3,"tags":["a"],"meta":{"k":1},"flag":true,"gone":null}"#;
+        let profile = profile_from_json(payload);
+        let view = CandidateProfileView::from_profile(&profile);
+
+        let placeholder_for = |field_name: &str| -> String {
+            view.fields
+                .iter()
+                .find(|f| f.path.last().unwrap().escaped == format!("\"{field_name}\""))
+                .unwrap_or_else(|| panic!("field {field_name} present"))
+                .canonicalized_placeholder
+                .clone()
+        };
+
+        assert_eq!(placeholder_for("name"), "<string>");
+        assert_eq!(placeholder_for("count"), "<number:positive>");
+        assert_eq!(placeholder_for("balance"), "<number:negative>");
+        assert_eq!(placeholder_for("tags"), "<array>");
+        assert_eq!(placeholder_for("meta"), "<object>");
+        assert_eq!(placeholder_for("flag"), "<bool>");
+        assert_eq!(placeholder_for("gone"), "<null>");
+    }
+
+    #[test]
+    fn canonicalized_placeholder_prefixes_nullable_when_another_type_also_seen() {
+        // Two observations at the same field position: one string, one
+        // explicit null -> nullable AND string-typed.
+        let a = profile_from_json(r#"{"maybe":"present"}"#);
+        let b = profile_from_json(r#"{"maybe":null}"#);
+        let merged = deblob_monoid::Profile::merge(&a, &b);
+        let view = CandidateProfileView::from_profile(&merged);
+
+        let field = view
+            .fields
+            .iter()
+            .find(|f| f.path.last().unwrap().escaped == "\"maybe\"")
+            .expect("maybe field present");
+        assert!(field.nullable);
+        assert_eq!(field.canonicalized_placeholder, "nullable:<string>");
+    }
+
+    #[test]
+    fn canonicalized_placeholder_is_never_the_raw_value_and_is_deterministic() {
+        let payload = r#"{"card":4111111111111111,"email":"attacker@evil.example"}"#;
+        let profile = profile_from_json(payload);
+        let view_a = CandidateProfileView::from_profile(&profile);
+        let view_b = CandidateProfileView::from_profile(&profile);
+
+        for field in &view_a.fields {
+            assert!(!field.canonicalized_placeholder.contains("4111111111111111"));
+            assert!(!field
+                .canonicalized_placeholder
+                .contains("attacker@evil.example"));
+        }
+        assert_eq!(
+            view_a, view_b,
+            "placeholder derivation must be deterministic"
+        );
     }
 
     #[test]

@@ -18,6 +18,15 @@ deblob-fingerprint = { path = "../deblob-fingerprint" }
 # computed once, in Rust, and passed into the SAME atomic Lua transition
 # that moves the active pointer — never recomputed inside Lua itself.
 deblob-semantic = { path = "../deblob-semantic" }
+# SLM continual-learning loop (spec:
+# docs/superpowers/specs/2026-07-16-slm-continual-learning.md §2):
+# `crate::feedback_store::RedisFeedbackStore` stores/exports
+# `deblob_slm::feedback::TrainingExample` and renders its JSONL export via
+# the SAME PII-safe `deblob_slm::build_prompt` the shadow lane uses. This is
+# a leaf dependency direction (`deblob-slm` depends on `deblob-core` only,
+# never on `deblob-redis`), so it introduces no cycle with `deblob` (which
+# depends on both `deblob-redis` and `deblob-slm` already).
+deblob-slm = { path = "../deblob-slm" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true
