@@ -166,7 +166,10 @@ the reverse index for its landed `sem_` (collision) and, if the schema's
 family has an adjacent lower version, compares active `sem_`s (drift) —
 `crates/deblob/src/api/semantic.rs::put_semantic`. Both calls are read-only
 best-effort: a failure to COMPUTE a diagnostic is logged and never fails
-the annotation write that already succeeded.
+the annotation write that already succeeded. **Both now actually compute on
+every schema, promoted or not** — see [Fixed: drift/collision diagnostics
+now support both canonicalizer grammars](#fixed-driftcollision-diagnostics-now-support-both-canonicalizer-grammars)
+below for the incident this closed.
 
 ## `semantic-neighbors`: diagnostic-only similarity search
 
@@ -217,7 +220,7 @@ field carrying the same meaning. Response:
   revisions are **not queryable** through this endpoint at all, regardless
   of what the caller passes.
 
-## Fixed: annotation now supports both canonicalizer grammars
+## Fixed: path-enumeration/annotation-write now supports both canonicalizer grammars
 
 **Originally discovered by the Task 8 capstone** (`crates/deblob/tests/
 semantic_capstone_it.rs`'s module doc comment has the full incident
@@ -262,6 +265,58 @@ semantic_monoid_promoted_it.rs`; `crates/deblob/tests/
 semantic_capstone_it.rs` still hand-publishes plain-canonicalizer fixture
 schemas (an intentional, orthogonal test-isolation choice for that suite,
 not a workaround for this gap anymore).
+
+## Fixed: drift/collision diagnostics now support both canonicalizer grammars
+
+**Found by the whole-branch review of `p2d-semantic-fingerprint`** (a
+cross-task defect the Task 8 follow-up above did not itself close) and
+fixed alongside it (`crates/deblob/src/semantic_drift.rs`).
+
+The Task 8 follow-up fixed PATH ENUMERATION/validation on the annotation
+WRITE path (`deblob_semantic::path::canonical_field_paths_for`, described
+above) but left `crate::semantic_drift`'s own shape walker — the one behind
+`structural_relation`, `leaf_field_count`, and the leaf-annotation-coverage
+computation inside `classify_semantic_collision` — hard-coded to the plain
+`"deblob-canon-v1"` grammar. `Promoter::promote` ALWAYS stores a promoted
+`SchemaRecord` with `canonicalizer: "deblob-monoid-v1"`, so every time
+`put_semantic` fired `scan_semantic_collisions`/`check_family_version_drift`
+on a promoted schema, walking its `canonical` string as `deblob-canon-v1`
+hit `ShapeWalkError::MalformedShape` — swallowed by `put_semantic`'s
+best-effort `tracing::warn!` (by design, so a diagnostic failure never fails
+the annotation write itself). Net effect: **neither diagnostic ever
+actually computed for a genuinely promoted schema** — the drift/collision
+integration tests stayed green only because they exercised
+`deblob-canon-v1` fixtures (`semantic_drift_it.rs`) or single-version
+monoid schemas that never crossed the `len() >= 2` / `version > 1` guards
+that would have exposed the gap (`semantic_monoid_promoted_it.rs`).
+
+The fix mirrors `deblob_semantic::path`'s dispatch shape but goes further:
+`semantic_drift.rs` needs the per-path TYPE too (leaf-vs-container, plus
+the type/type-union at that path), which `deblob_semantic::path` never
+tracks. `typed_paths_for(canonicalizer, canonical)` normalizes EITHER
+grammar into one internal representation (`PathShape`: a leaf/container
+flag plus a type-tag set, using `deblob-canon-v1`'s own six-tag vocabulary
+as the shared target so a canon-v1 path and a monoid-v1 path compare equal
+whenever they describe the same type) before `structural_relation` ever
+looks at it — so a MIXED pair (one schema canon-v1, the other monoid-v1,
+which a real vault can genuinely hold at once) classifies exactly like a
+same-grammar pair, never a hard error. `detect_semantic_drift` and
+`classify_semantic_collision` now take each side's own `canonicalizer`
+explicitly; `check_family_version_drift`/`scan_semantic_collisions` thread
+`SchemaRecord::canonicalizer` through from the records they already fetch.
+An unrecognized `canonicalizer` is still `ShapeWalkError::
+UnknownCanonicalizer` — never silently treated as compatible.
+
+**Practical effect:** annotating two promoted schemas onto the same `sem_`
+now produces a real `strong`/`medium` collision finding (previously: no
+finding, ever), and a promoted family reaching version 2 with a changed
+active `sem_` now increments `deblob_semantic_drift_total` (previously: the
+counter could never fire for a promoted family at all). Proven against real
+promoted schemas over real Redis in `crates/deblob/tests/
+semantic_drift_monoid_promoted_it.rs`, which also re-asserts the existing
+zero-mutation invariant (full `deblob:schema:*`/`deblob:family:*`/
+`deblob:sem-active:*`/`deblob:sem-index:*`/`deblob:sem-rev:*`/
+`deblob:alias:*` key snapshot, byte-identical before/after).
 
 ## Deferred to P3/P4 gates
 
