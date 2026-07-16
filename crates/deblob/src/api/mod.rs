@@ -257,6 +257,10 @@ pub fn router(state: ApiState) -> Router {
             "/schemas/{sch_id}/semantic/revisions",
             get(semantic::get_semantic_revisions),
         )
+        .route(
+            "/schemas/{sch_id}/semantic-neighbors",
+            get(semantic::get_semantic_neighbors),
+        )
         .route("/semantic/{sem_id}", get(semantic::get_schemas_by_semantic))
         .route("/families/{fam_id}", get(schemas::get_family))
         .route(

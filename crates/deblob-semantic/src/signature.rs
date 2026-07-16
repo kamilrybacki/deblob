@@ -256,6 +256,33 @@ impl SemanticSignature {
     pub fn event_type(&self) -> Option<&str> {
         self.event_type.as_deref()
     }
+
+    /// Sorted lowercase-hex-encoded feature keys — Task 10's bounded
+    /// inverted-index posting keys (`deblob:sem-sig:<hex>`). Sorted because
+    /// `features` is a `BTreeMap` (determinism guard #8): two calls on
+    /// `==` signatures always produce the SAME `Vec` in the SAME order, so
+    /// `deblob-redis` can serialize it directly (e.g. as a JSON array) and
+    /// compare it byte-for-byte across an incremental write and a full
+    /// rebuild (§5.12). Hex, not base64/base32: a plain byte-for-byte
+    /// encoding with no padding-alphabet ambiguity, matching this crate's
+    /// existing `HEXLOWER`-style usage elsewhere in the workspace, but
+    /// implemented locally (no extra dependency) since it's a two-line
+    /// transform.
+    pub fn feature_keys_hex(&self) -> Vec<String> {
+        self.features.keys().map(|k| hex_encode(k)).collect()
+    }
+}
+
+/// Lowercase-hex encoding, deliberately hand-rolled (no `data-encoding`
+/// dependency) since `deblob-semantic` otherwise has no encoding-library
+/// dependency at all — see [`SemanticSignature::feature_keys_hex`].
+fn hex_encode(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(&mut out, "{b:02x}").expect("writing to a String never fails");
+    }
+    out
 }
 
 /// Extracts `metadata`'s path-independent semantic signature (§2). Emits
@@ -634,6 +661,36 @@ mod tests {
         let score = similarity(&sig, &sig);
         assert!(score.denominator > 0);
         assert_eq!(score.numerator, score.denominator);
+    }
+
+    #[test]
+    fn feature_keys_hex_is_sorted_and_deterministic_across_calls() {
+        let metadata = SemanticMetadata {
+            event_type: None,
+            fields: vec![FieldEntry {
+                path: vec![key("x")],
+                semantics: FieldSemantics {
+                    canonical_field_id: Some(CanonicalFieldId::new("f")),
+                    identifier_namespace: Some(deblob_core::semantic::NamespaceCode::new("ns")),
+                    ..empty_semantics()
+                },
+            }],
+        };
+        let sig = semantic_signature(&metadata);
+        let first = sig.feature_keys_hex();
+        let second = sig.feature_keys_hex();
+        assert_eq!(first, second, "must be deterministic across calls");
+        let mut sorted = first.clone();
+        sorted.sort();
+        assert_eq!(first, sorted, "must already be lexicographically sorted");
+        assert_eq!(first.len(), sig.feature_count());
+        // Every entry is valid lowercase hex of even length.
+        for entry in &first {
+            assert!(entry.len() % 2 == 0);
+            assert!(entry
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+        }
     }
 
     #[test]

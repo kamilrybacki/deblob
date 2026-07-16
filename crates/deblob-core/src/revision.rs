@@ -216,6 +216,30 @@ pub enum SemError {
     Corrupt(String),
 }
 
+/// The exact-candidate bound for a signature-neighbor query's inverted-index
+/// union (P2-D Task 10, `deblob-p2d-02-hermes-similarity.md` §4): "Max exact
+/// candidates 20,000 — if the inverted-index candidate union exceeds it,
+/// return `signature_too_broad`." A `usize` constant (not e.g. `u32`) since
+/// every callsite compares it directly against `Vec::len()`.
+pub const MAX_SIGNATURE_CANDIDATES: usize = 20_000;
+
+/// Result of a bounded feature-postings union lookup against
+/// `deblob:sem-sig:*` (Task 10's inverted index): either the exact set of
+/// candidate `sch_id`s sharing at least one signature feature with the
+/// query (NEVER truncated), or an explicit signal that the union exceeded
+/// [`MAX_SIGNATURE_CANDIDATES`] — the caller must surface
+/// `signature_too_broad` and must never silently cap the list and claim
+/// top-k correctness (spec §4/§5.4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignatureCandidates {
+    /// The full, untruncated candidate set — may include the query schema
+    /// itself; excluding it is the caller's job (mirrors how
+    /// `deblob:sem-index:*` reverse-index reads never pre-filter either).
+    Bounded(Vec<SchemaId>),
+    /// The union exceeded [`MAX_SIGNATURE_CANDIDATES`].
+    TooBroad,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -255,6 +255,37 @@ return 1
 ///   10. new_revision_id      freshly minted client-side (`RevisionId::new_v7`)
 ///   11. expected_etag        decimal string, or `''` for "expect no active
 ///       revision yet" (equivalent to expecting etag `0`)
+///   12. new_feature_keys_json (Task 10) JSON array of lowercase-hex
+///       [`deblob_semantic::signature::SemanticSignature::feature_keys_hex`]
+///       strings for `metadata_json`'s signature — computed in Rust
+///       (`crate::semantic::append_revision`), NEVER recomputed here: this
+///       script only ever does `SADD`/`SREM` against already-encoded
+///       feature keys, exactly like `PUBLISH_SCRIPT`'s `variants_json`
+///       never re-derives a `ShapeSummary` server-side. `"[]"` for a
+///       signature with zero features (never expected in practice, since
+///       `append_revision` is only ever called with a metadata that
+///       produced a real `sem_`, but always a syntactically valid JSON
+///       array either way).
+///
+/// Postings swap (Task 10, spec §5.10/§5.12 — "on re-annotation, atomically
+/// remove the old active revision's postings, add the new revision's
+/// postings, move the active pointer"): the OLD feature-key list is never
+/// passed in from the client (that would race a concurrent writer the exact
+/// same way a client-side-computed old `sem-index` key would — see this
+/// const's doc comment above on `cur_sem_id`). Instead it is round-tripped
+/// through a `feature_keys_json` field stored on `KEYS[1]` (the active
+/// pointer hash) by the PREVIOUS call to this script, and read back here —
+/// atomically, inside this same transition, before it is overwritten with
+/// the new list. A schema annotated before Task 10 existed simply has no
+/// `feature_keys_json` field yet: `old_features` is then treated as empty
+/// (nothing to `SREM`), and this call's `SADD`s plus the freshly-written
+/// `feature_keys_json` field self-heal it going forward — the same
+/// "defensive, skip rather than fail" posture `rebuild_index`/
+/// `rebuild_semantic_index` already use for schemas published before a
+/// field they now depend on existed. `deblob:sem-sig:<hex>` keys are
+/// computed inline (string-concatenated), the same way `old_index_key`
+/// below already is, for the identical reason: this crate targets a single
+/// Redis instance, never Cluster, so keys outside `KEYS` are safe here.
 ///
 /// Semantics (spec order: idempotency check first, then the guarded write):
 ///   - If an active revision already exists AND its OWN stored
@@ -300,11 +331,13 @@ local recorded_at = ARGV[8]
 local effective_from = ARGV[9]
 local new_revision_id = ARGV[10]
 local expected_etag_arg = ARGV[11]
+local new_feature_keys_json = ARGV[12]
 
 local cur_revision_id = redis.call('HGET', active_key, 'revision_id')
 local cur_sem_id = redis.call('HGET', active_key, 'sem_id')
 local cur_etag_str = redis.call('HGET', active_key, 'etag')
 local cur_etag = tonumber(cur_etag_str) or 0
+local old_feature_keys_json = redis.call('HGET', active_key, 'feature_keys_json')
 
 -- Idempotent replay: compare against the ACTIVE revision's own stored
 -- bytes (never recomputed), and bypass reason/etag checks entirely.
@@ -363,6 +396,24 @@ if cur_sem_id and cur_sem_id ~= new_sem_id then
   redis.call('SREM', old_index_key, sch_id)
 end
 redis.call('SADD', new_index_key, sch_id)
+
+-- Task 10: bounded inverted-index postings swap, atomically alongside the
+-- pointer move above. `old_features` comes from what THIS SAME active hash
+-- said its own feature list was, immediately before this call overwrote its
+-- revision_id/sem_id/etag fields (read at the very top of the script, well
+-- before any write) -- never recomputed, never client-supplied.
+local old_features = {}
+if old_feature_keys_json then
+  old_features = cjson.decode(old_feature_keys_json)
+end
+local new_features = cjson.decode(new_feature_keys_json)
+for _, hex in ipairs(old_features) do
+  redis.call('SREM', 'deblob:sem-sig:' .. hex, sch_id)
+end
+for _, hex in ipairs(new_features) do
+  redis.call('SADD', 'deblob:sem-sig:' .. hex, sch_id)
+end
+redis.call('HSET', active_key, 'feature_keys_json', new_feature_keys_json)
 
 redis.call('XADD', audit_key, '*',
   'actor', actor, 'reason', reason, 'schema', sch_id, 'sem', new_sem_id, 'ts', recorded_at)

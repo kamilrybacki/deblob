@@ -13,7 +13,9 @@
 
 use async_trait::async_trait;
 use deblob_core::id::{SchemaId, SemanticId};
-use deblob_core::revision::{AppendOutcome, Etag, ReasonCode, Revision, SemError};
+use deblob_core::revision::{
+    AppendOutcome, Etag, ReasonCode, Revision, SemError, SignatureCandidates,
+};
 use deblob_core::semantic::SemanticMetadata;
 use deblob_redis::RedisRegistry;
 
@@ -45,9 +47,26 @@ pub trait SemanticStore: Send + Sync {
         sch_id: &SchemaId,
     ) -> Result<Option<(SemanticMetadata, SemanticId, Etag)>, SemError>;
 
+    /// The schema's current FULL active [`Revision`] (with `revision_id`)
+    /// plus its [`Etag`] — Task 10 needs `revision_id`
+    /// (`semantic_revision_id` in the neighbors API response), which
+    /// `active_semantic` discards.
+    async fn active_revision(
+        &self,
+        sch_id: &SchemaId,
+    ) -> Result<Option<(Revision, Etag)>, SemError>;
+
     async fn revisions(&self, sch_id: &SchemaId) -> Result<Vec<Revision>, SemError>;
 
     async fn schemas_by_semantic(&self, sem_id: &SemanticId) -> Result<Vec<SchemaId>, SemError>;
+
+    /// Task 10: the bounded feature-postings union for `feature_keys_hex`
+    /// (the query signature's own posting keys) — the raw candidate lookup
+    /// `crate::semantic_neighbors::neighbors` scores/ranks/truncates.
+    async fn signature_candidates(
+        &self,
+        feature_keys_hex: &[String],
+    ) -> Result<SignatureCandidates, SemError>;
 }
 
 /// Delegates straight to `RedisRegistry`'s own inherent methods (Rust's
@@ -92,11 +111,25 @@ impl SemanticStore for RedisRegistry {
         self.active_semantic(sch_id).await
     }
 
+    async fn active_revision(
+        &self,
+        sch_id: &SchemaId,
+    ) -> Result<Option<(Revision, Etag)>, SemError> {
+        self.active_revision(sch_id).await
+    }
+
     async fn revisions(&self, sch_id: &SchemaId) -> Result<Vec<Revision>, SemError> {
         self.revisions(sch_id).await
     }
 
     async fn schemas_by_semantic(&self, sem_id: &SemanticId) -> Result<Vec<SchemaId>, SemError> {
         self.schemas_by_semantic(sem_id).await
+    }
+
+    async fn signature_candidates(
+        &self,
+        feature_keys_hex: &[String],
+    ) -> Result<SignatureCandidates, SemError> {
+        self.signature_candidates(feature_keys_hex).await
     }
 }

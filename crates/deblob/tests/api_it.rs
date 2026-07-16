@@ -15,7 +15,9 @@ use deblob::semantic_store::SemanticStore;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyVersion, SchemaId, SemanticId};
 use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore, Registry, SchemaRecord};
-use deblob_core::revision::{AppendOutcome, Etag, ReasonCode, Revision, RevisionStatus, SemError};
+use deblob_core::revision::{
+    AppendOutcome, Etag, ReasonCode, Revision, RevisionStatus, SemError, SignatureCandidates,
+};
 use deblob_core::semantic::SemanticMetadata;
 use deblob_redis::health::HealthGate;
 use http_body_util::BodyExt;
@@ -370,6 +372,21 @@ impl SemanticStore for FakeSemanticStore {
             }))
     }
 
+    async fn active_revision(
+        &self,
+        sch_id: &SchemaId,
+    ) -> Result<Option<(Revision, Etag)>, SemError> {
+        let state = self.state.lock().unwrap();
+        Ok(state
+            .revisions
+            .get(sch_id)
+            .and_then(|history| history.last())
+            .map(|r| {
+                let etag = *state.etags.get(sch_id).unwrap_or(&0);
+                (r.clone(), Etag(etag))
+            }))
+    }
+
     async fn revisions(&self, sch_id: &SchemaId) -> Result<Vec<Revision>, SemError> {
         let state = self.state.lock().unwrap();
         Ok(state.revisions.get(sch_id).cloned().unwrap_or_default())
@@ -382,6 +399,38 @@ impl SemanticStore for FakeSemanticStore {
             .get(sem_id)
             .map(|set| set.iter().cloned().collect())
             .unwrap_or_default())
+    }
+
+    /// Task 10: brute-force in-memory postings lookup — every ACTIVE
+    /// (latest-revision) schema whose signature shares at least one of
+    /// `feature_keys_hex` with the query. Faithful to the real
+    /// `deblob-redis` behavior (may include the query schema itself;
+    /// bounded the same way), just without an actual Redis SET behind it —
+    /// fine for the management-API tests, which don't exercise the
+    /// 20,000-candidate bound (that has real coverage in
+    /// `deblob-redis/tests/semantic_it.rs`).
+    async fn signature_candidates(
+        &self,
+        feature_keys_hex: &[String],
+    ) -> Result<SignatureCandidates, SemError> {
+        let wanted: std::collections::HashSet<&String> = feature_keys_hex.iter().collect();
+        let state = self.state.lock().unwrap();
+        let ids: Vec<SchemaId> = state
+            .revisions
+            .iter()
+            .filter_map(|(sch_id, history)| {
+                let active = history.last()?;
+                let sig = deblob_semantic::signature::semantic_signature(&active.metadata);
+                sig.feature_keys_hex()
+                    .iter()
+                    .any(|k| wanted.contains(k))
+                    .then(|| sch_id.clone())
+            })
+            .collect();
+        if ids.len() > deblob_core::revision::MAX_SIGNATURE_CANDIDATES {
+            return Ok(SignatureCandidates::TooBroad);
+        }
+        Ok(SignatureCandidates::Bounded(ids))
     }
 }
 

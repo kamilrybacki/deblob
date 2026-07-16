@@ -8,18 +8,21 @@
 //! append-only revision store) on the management port. No drift/similarity
 //! (Tasks 7/9), no new storage logic.
 
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use deblob_core::id::{SchemaId, SemanticId};
+use deblob_core::id::{RevisionId, SchemaId, SemanticId};
 use deblob_core::revision::{Etag, ReasonCode, Revision};
 use deblob_core::semantic::SemanticMetadata;
+use deblob_semantic::signature::{Score, Strength};
 use deblob_semantic::{
     canonical_field_paths, canonical_semantic_bytes, semantic_fingerprint, validate_metadata,
     validate_paths,
 };
 use serde::{Deserialize, Serialize};
+
+use crate::semantic_neighbors::{self, NeighborOutcome};
 
 use super::candidates::actor_from_headers;
 use super::{ApiError, ApiState, DataEnvelope, ListResponse};
@@ -267,4 +270,170 @@ pub async fn put_semantic(
     let mut response = (status, Json(body)).into_response();
     insert_etag(&mut response, etag)?;
     Ok(response)
+}
+
+// ---------------------------------------------------------------------
+// P2-D Task 10: `GET .../semantic-neighbors` — diagnostic-only.
+// ---------------------------------------------------------------------
+
+/// Query parameters for `GET /api/v1/schemas/{sch_id}/semantic-neighbors`
+/// (spec §4/§6).
+#[derive(Debug, Deserialize)]
+pub struct NeighborsQuery {
+    #[serde(default)]
+    pub k: Option<usize>,
+    #[serde(default)]
+    pub include_historical: Option<bool>,
+}
+
+/// Presentation-only string label for [`Strength`] — deliberately kept in
+/// this API-response module rather than as a `serde` derive on the Task 9
+/// type itself, matching this crate's existing pattern of explicit
+/// string<->enum mapping at the storage/wire boundary (see
+/// `deblob-redis::semantic::reason_code_str`).
+fn strength_label(s: Strength) -> &'static str {
+    match s {
+        Strength::Insufficient => "insufficient",
+        Strength::Weak => "weak",
+        Strength::Medium => "medium",
+        Strength::Strong => "strong",
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScoreView {
+    pub numerator: u64,
+    pub denominator: u64,
+    pub decimal: String,
+}
+
+impl From<Score> for ScoreView {
+    fn from(score: Score) -> Self {
+        ScoreView {
+            numerator: score.numerator,
+            denominator: score.denominator,
+            // 6 fractional digits, matching the spec §6 example
+            // (`"0.875000"`).
+            decimal: score.decimal_string(6),
+        }
+    }
+}
+
+/// One ranked neighbor candidate — spec §6's `neighbors[]` entry. Labelled
+/// a *candidate* everywhere it is rendered; this type has no field, and
+/// this module has no code path, that could ever assert equivalence.
+#[derive(Debug, Serialize)]
+pub struct NeighborView {
+    pub schema_id: SchemaId,
+    pub semantic_revision_id: RevisionId,
+    pub score: ScoreView,
+    pub strength: &'static str,
+    pub shared_anchor_count: usize,
+    pub matched_feature_classes: Vec<&'static str>,
+}
+
+/// The full `GET .../semantic-neighbors` response envelope (spec §6).
+/// `authority` is always the literal `"diagnostic_only"` — never
+/// conditional, never omittable. `reason` is populated ONLY for the
+/// no-anchor case (`neighbors` is then always empty).
+#[derive(Debug, Serialize)]
+pub struct SemanticNeighborsView {
+    pub query_schema: SchemaId,
+    pub signature_version: &'static str,
+    pub weights_version: &'static str,
+    pub neighbors: Vec<NeighborView>,
+    pub authority: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strength: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<&'static str>,
+}
+
+/// `GET /api/v1/schemas/{sch_id}/semantic-neighbors?k=&include_historical=`
+/// — the Task 10 diagnostic-only semantic-neighbor search (spec §4/§5/§6).
+/// Authenticated like every other `/api/v1/*` route (`auth::require_bearer`,
+/// wired in `api::router`); excludes the query schema; uses ACTIVE semantic
+/// revisions only.
+///
+/// `k`: defaults to [`semantic_neighbors::DEFAULT_K`], CLAMPED (never
+/// rejected with `422`) to [`semantic_neighbors::MAX_K`] — a deliberate
+/// choice for a diagnostic best-effort endpoint: an over-large `k` is
+/// caller carelessness, not a malformed request, and clamping always
+/// returns something useful rather than forcing a retry.
+///
+/// `include_historical=true`: this API has exactly ONE authentication tier
+/// (a single shared bearer token — `api::auth::require_bearer`; there is no
+/// scope/role system anywhere in this codebase). The spec (§6) gates
+/// `include_historical=true` to "auditors", which does not exist as a
+/// concept here. Rather than invent a new auth mechanism to satisfy that
+/// gate, this handler documents the gap explicitly: the query parameter is
+/// accepted (so a future auditor-scope addition is a non-breaking wire
+/// change) but is ALWAYS treated as `false` — every query runs
+/// active-revisions-only, regardless of what the caller passed. Historical
+/// revisions are consequently never queryable via this endpoint yet.
+///
+/// Never merges, aliases, promotes, or mutates any schema/`sem_`/family/
+/// candidate state (spec §6) — every call this makes to
+/// `SemanticStore`/`Registry` is a READ; see `crate::semantic_neighbors`'s
+/// module docs and `crates/deblob/tests/semantic_neighbors_it.rs`'s
+/// before/after state-snapshot test.
+pub async fn get_semantic_neighbors(
+    State(state): State<ApiState>,
+    Path(sch_id): Path<String>,
+    Query(params): Query<NeighborsQuery>,
+) -> Result<Json<DataEnvelope<SemanticNeighborsView>>, ApiError> {
+    let id = SchemaId::parse(&sch_id).map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    let k = params
+        .k
+        .unwrap_or(semantic_neighbors::DEFAULT_K)
+        .min(semantic_neighbors::MAX_K);
+    // See this function's doc comment: no auditor-scope infra exists, so
+    // `include_historical` is accepted but never honored yet.
+    let _ = params.include_historical;
+
+    let outcome = semantic_neighbors::neighbors(state.semantic.as_ref(), &id, k)
+        .await
+        .map_err(ApiError::from_sem)?
+        .ok_or_else(|| ApiError::not_found("schema has no active semantic annotation"))?;
+
+    let view = match outcome {
+        NeighborOutcome::Found(neighbors) => SemanticNeighborsView {
+            query_schema: id,
+            signature_version: deblob_semantic::signature::SIGNATURE_VERSION,
+            weights_version: deblob_semantic::signature::WEIGHTS_VERSION,
+            neighbors: neighbors
+                .into_iter()
+                .map(|n| NeighborView {
+                    schema_id: n.schema_id,
+                    semantic_revision_id: n.semantic_revision_id,
+                    score: n.score.into(),
+                    strength: strength_label(n.strength),
+                    shared_anchor_count: n.shared_anchor_count,
+                    matched_feature_classes: n.matched_feature_classes,
+                })
+                .collect(),
+            authority: "diagnostic_only",
+            strength: None,
+            reason: None,
+        },
+        NeighborOutcome::NoAnchor => SemanticNeighborsView {
+            query_schema: id,
+            signature_version: deblob_semantic::signature::SIGNATURE_VERSION,
+            weights_version: deblob_semantic::signature::WEIGHTS_VERSION,
+            neighbors: Vec::new(),
+            authority: "diagnostic_only",
+            strength: Some(strength_label(Strength::Insufficient)),
+            reason: Some("no_anchor_features"),
+        },
+        NeighborOutcome::TooBroad => {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "signature_too_broad",
+                "the candidate union for this schema's signature exceeds the bounded limit; \
+                 narrow the query rather than accept a silently truncated top-k result",
+            ));
+        }
+    };
+
+    Ok(Json(DataEnvelope { data: view }))
 }

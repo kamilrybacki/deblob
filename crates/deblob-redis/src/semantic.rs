@@ -34,8 +34,12 @@ use redis::AsyncCommands;
 
 use deblob_core::error::CoreError;
 use deblob_core::id::{RevisionId, SchemaId, SemanticId};
-use deblob_core::revision::{AppendOutcome, Etag, ReasonCode, Revision, RevisionStatus, SemError};
+use deblob_core::revision::{
+    AppendOutcome, Etag, ReasonCode, Revision, RevisionStatus, SemError, SignatureCandidates,
+    MAX_SIGNATURE_CANDIDATES,
+};
 use deblob_core::semantic::SemanticMetadata;
+use deblob_semantic::signature::semantic_signature;
 
 use crate::index::delete_matching;
 use crate::registry::{redis_err, RedisRegistry, AUDIT_KEY};
@@ -43,6 +47,12 @@ use crate::registry::{redis_err, RedisRegistry, AUDIT_KEY};
 /// Redis pattern matching every reverse semantic-index key. Analogous to
 /// `crate::index::INDEX_KEY_PATTERN`; walked by `rebuild_semantic_index`.
 pub const SEM_INDEX_KEY_PATTERN: &str = "deblob:sem-index:*";
+
+/// Redis pattern matching every bounded-neighbor-search posting key (Task
+/// 10, brief §4/§5.10): `deblob:sem-sig:<feature_hex>` (SET of `sch_id`s).
+/// Walked by `rebuild_semantic_index`'s postings-rebuild pass, exactly like
+/// [`SEM_INDEX_KEY_PATTERN`] is for the reverse `sem_` index.
+pub const SEM_SIG_KEY_PATTERN: &str = "deblob:sem-sig:*";
 
 fn sem_rev_key(sch_id: &SchemaId, revision_id: &RevisionId) -> String {
     format!(
@@ -62,6 +72,12 @@ fn sem_active_key(sch_id: &SchemaId) -> String {
 
 fn sem_index_key(sem_id: &SemanticId) -> String {
     format!("deblob:sem-index:{}", sem_id.as_str())
+}
+
+/// Task 10: the bounded-neighbor-search posting key for one already-encoded
+/// (lowercase-hex) signature feature.
+fn sem_sig_key(feature_hex: &str) -> String {
+    format!("deblob:sem-sig:{feature_hex}")
 }
 
 fn reason_code_str(code: ReasonCode) -> &'static str {
@@ -258,6 +274,17 @@ impl RedisRegistry {
         let canonical_bytes_hex = HEXLOWER.encode(canonical_bytes);
         let expected_arg = expected_etag.map(|e| e.0.to_string()).unwrap_or_default();
 
+        // Task 10: the new active revision's bounded-neighbor-search
+        // posting keys, computed HERE in Rust from `metadata` (never
+        // recomputed inside the Lua script — see `SEM_APPEND_SCRIPT`'s doc
+        // comment) and threaded through as one more ARGV. On an idempotent
+        // replay this is computed but never used by the script (the
+        // idempotency check returns before ever reaching the postings-swap
+        // code) — a harmless, cheap, pure computation either way.
+        let new_feature_keys_hex = semantic_signature(metadata).feature_keys_hex();
+        let new_feature_keys_json = serde_json::to_string(&new_feature_keys_hex)
+            .map_err(|e| SemError::StoreUnavailable(format!("serialize feature keys: {e}")))?;
+
         let mut invocation = self.sem_append_script.prepare_invoke();
         invocation
             .key(sem_active_key(sch_id))
@@ -274,7 +301,8 @@ impl RedisRegistry {
             .arg(recorded_at)
             .arg(effective_from)
             .arg(new_revision_id.as_str())
-            .arg(expected_arg.as_str());
+            .arg(expected_arg.as_str())
+            .arg(new_feature_keys_json.as_str());
 
         let result: redis::RedisResult<(String, String, String, String)> =
             invocation.invoke_async(&mut conn).await;
@@ -317,14 +345,18 @@ impl RedisRegistry {
         })
     }
 
-    /// The schema's current semantic assertion, or `None` if it has never
+    /// The schema's current FULL active [`Revision`] (including its
+    /// `revision_id`) plus its current [`Etag`], or `None` if it has never
     /// been annotated (no `deblob:sem-active:<sch_id>` key at all — a real
     /// absence, never a sentinel value; migration case: a schema published
-    /// before this feature existed reads back exactly the same way).
-    pub async fn active_semantic(
+    /// before this feature existed reads back exactly the same way). Task
+    /// 10 needs the `revision_id` (for the neighbors API's
+    /// `semantic_revision_id` field) that [`Self::active_semantic`] used to
+    /// discard — this is the single read both now share.
+    pub async fn active_revision(
         &self,
         sch_id: &SchemaId,
-    ) -> Result<Option<(SemanticMetadata, SemanticId, Etag)>, SemError> {
+    ) -> Result<Option<(Revision, Etag)>, SemError> {
         let mut conn = self.conn();
         let fields: HashMap<String, String> = conn
             .hgetall(sem_active_key(sch_id))
@@ -354,7 +386,23 @@ impl RedisRegistry {
                 ))
             })?;
 
-        Ok(Some((revision.metadata, revision.sem_id, Etag(etag))))
+        Ok(Some((revision, Etag(etag))))
+    }
+
+    /// The schema's current semantic assertion, or `None` if it has never
+    /// been annotated. A thin projection of [`Self::active_revision`] —
+    /// kept as its own method (rather than inlining `.map(...)` at every
+    /// call site) since it's the pre-Task-10 public contract every existing
+    /// caller (`api::semantic::get_semantic`/`put_semantic`) already
+    /// depends on.
+    pub async fn active_semantic(
+        &self,
+        sch_id: &SchemaId,
+    ) -> Result<Option<(SemanticMetadata, SemanticId, Etag)>, SemError> {
+        Ok(self
+            .active_revision(sch_id)
+            .await?
+            .map(|(revision, etag)| (revision.metadata, revision.sem_id, etag)))
     }
 
     /// The schema's full revision history, oldest first. `RevisionId` is a
@@ -420,18 +468,34 @@ impl RedisRegistry {
             .collect()
     }
 
-    /// Rebuilds `deblob:sem-index:*` from scratch, purely from the
-    /// authoritative `deblob:sem-active:*` pointers (revisions are the
-    /// deeper source of truth, but the ACTIVE pointer is what the reverse
-    /// index tracks — a superseded revision's `sem_` must NOT appear here).
-    /// Mirrors `crate::index::RedisRegistry::rebuild_index`'s
-    /// drop-then-rebuild strategy exactly, including reusing its
-    /// `delete_matching` helper. Always safe to run online. Returns the
-    /// number of annotated schemas reindexed.
+    /// Rebuilds BOTH `deblob:sem-index:*` (the reverse `sem_` index) AND
+    /// `deblob:sem-sig:*` (Task 10's bounded neighbor-search postings) from
+    /// scratch, purely from the authoritative `deblob:sem-active:*`
+    /// pointers (revisions are the deeper source of truth, but the ACTIVE
+    /// pointer is what both indexes track — a superseded revision's `sem_`
+    /// or signature must NOT appear in either). Mirrors
+    /// `crate::index::RedisRegistry::rebuild_index`'s drop-then-rebuild
+    /// strategy exactly, including reusing its `delete_matching` helper.
+    /// Always safe to run online.
+    ///
+    /// Rebuild ≡ incremental (spec §5.12): the postings this reconstructs
+    /// use the EXACT SAME `deblob_semantic::signature::semantic_signature`
+    /// → `feature_keys_hex()` pipeline `append_revision` already used to
+    /// compute what it wrote incrementally — recomputed here from each
+    /// active revision's own stored `metadata_json` (not re-derived from
+    /// `canonical_semantic_bytes`, which is a one-way hash preimage). Two
+    /// deterministic computations over the SAME stored metadata always
+    /// agree, so a full rebuild and the incremental writes that got there
+    /// produce byte-identical `deblob:sem-sig:*` sets and
+    /// `feature_keys_json` fields — see `deblob-redis/tests/semantic_it.rs`
+    /// for the pinning test.
+    ///
+    /// Returns the number of annotated schemas reindexed.
     pub async fn rebuild_semantic_index(&self) -> Result<u64, CoreError> {
         let mut conn = self.conn();
 
         delete_matching(conn.clone(), SEM_INDEX_KEY_PATTERN).await?;
+        delete_matching(conn.clone(), SEM_SIG_KEY_PATTERN).await?;
 
         let mut count: u64 = 0;
         let mut cursor = "0".to_string();
@@ -448,24 +512,62 @@ impl RedisRegistry {
 
             for key in &keys {
                 let sch_id_str = key.strip_prefix("deblob:sem-active:").unwrap_or(key);
-                let sem_id: Option<String> = conn.hget(key, "sem_id").await.map_err(redis_err)?;
-                let Some(sem_id) = sem_id else {
-                    // Defensive: a pointer hash missing its own `sem_id`
-                    // field can't be reindexed. Skip rather than fail the
-                    // whole rebuild — matches `rebuild_index`'s posture for
-                    // schemas published before the `bucket` field existed.
+                let (sem_id, revision_id): (Option<String>, Option<String>) = redis::cmd("HMGET")
+                    .arg(key)
+                    .arg("sem_id")
+                    .arg("revision_id")
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(redis_err)?;
+                let (Some(sem_id), Some(revision_id)) = (sem_id, revision_id) else {
+                    // Defensive: a pointer hash missing `sem_id`/
+                    // `revision_id` can't be reindexed. Skip rather than
+                    // fail the whole rebuild — matches `rebuild_index`'s
+                    // posture for schemas published before the `bucket`
+                    // field existed.
                     continue;
                 };
                 let schema_id = SchemaId::parse(sch_id_str).map_err(|e| {
                     CoreError::RegistryUnavailable(format!("corrupt sem-active key {key}: {e:?}"))
                 })?;
-                let sem_id = SemanticId::parse(&sem_id).map_err(|e| {
+                let sem_id_parsed = SemanticId::parse(&sem_id).map_err(|e| {
                     CoreError::RegistryUnavailable(format!("corrupt sem_id in {key}: {e:?}"))
                 })?;
                 let _: () = conn
-                    .sadd(sem_index_key(&sem_id), schema_id.as_str())
+                    .sadd(sem_index_key(&sem_id_parsed), schema_id.as_str())
                     .await
                     .map_err(redis_err)?;
+
+                // Task 10 postings: re-derive the signature from the active
+                // revision's own stored `metadata_json` — the same
+                // authoritative source `append_revision` reads/writes.
+                let rev_key = format!("deblob:sem-rev:{sch_id_str}:{revision_id}");
+                let metadata_json: Option<String> = conn
+                    .hget(&rev_key, "metadata_json")
+                    .await
+                    .map_err(redis_err)?;
+                if let Some(metadata_json) = metadata_json {
+                    let metadata: SemanticMetadata =
+                        serde_json::from_str(&metadata_json).map_err(|e| {
+                            CoreError::RegistryUnavailable(format!(
+                                "corrupt metadata_json in {rev_key}: {e}"
+                            ))
+                        })?;
+                    let feature_keys_hex = semantic_signature(&metadata).feature_keys_hex();
+                    for hex in &feature_keys_hex {
+                        let _: () = conn
+                            .sadd(sem_sig_key(hex), schema_id.as_str())
+                            .await
+                            .map_err(redis_err)?;
+                    }
+                    let feature_keys_json = serde_json::to_string(&feature_keys_hex)
+                        .unwrap_or_else(|_| "[]".to_string());
+                    let _: () = conn
+                        .hset(key, "feature_keys_json", feature_keys_json)
+                        .await
+                        .map_err(redis_err)?;
+                }
+
                 count += 1;
             }
 
@@ -476,5 +578,38 @@ impl RedisRegistry {
         }
 
         Ok(count)
+    }
+
+    /// Task 10: the bounded feature-postings union for `feature_keys_hex`
+    /// (spec §4) — `SUNION` across every `deblob:sem-sig:<hex>` set. Never
+    /// truncates: if the union's size exceeds
+    /// [`deblob_core::revision::MAX_SIGNATURE_CANDIDATES`], the FULL
+    /// (over-bound) member count is what triggers `TooBroad`, never a
+    /// partial read masquerading as complete. May include the query
+    /// schema's own id (its own postings ARE part of the union over its own
+    /// feature keys) — callers exclude it themselves, same posture as
+    /// `schemas_by_semantic`'s reverse-index reads.
+    pub async fn signature_candidates(
+        &self,
+        feature_keys_hex: &[String],
+    ) -> Result<SignatureCandidates, SemError> {
+        if feature_keys_hex.is_empty() {
+            return Ok(SignatureCandidates::Bounded(Vec::new()));
+        }
+        let mut conn = self.conn();
+        let keys: Vec<String> = feature_keys_hex.iter().map(|h| sem_sig_key(h)).collect();
+        let members: Vec<String> = conn.sunion(&keys).await.map_err(sem_redis_err)?;
+        if members.len() > MAX_SIGNATURE_CANDIDATES {
+            return Ok(SignatureCandidates::TooBroad);
+        }
+        let ids = members
+            .into_iter()
+            .map(|s| {
+                SchemaId::parse(&s).map_err(|e| {
+                    SemError::Corrupt(format!("bad schema id in postings index: {e:?}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(SignatureCandidates::Bounded(ids))
     }
 }
