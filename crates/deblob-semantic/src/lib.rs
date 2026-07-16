@@ -12,11 +12,16 @@
 pub mod canon;
 pub mod digest;
 pub mod path;
+pub mod signature;
 pub mod vocab;
 
 pub use canon::{canonical_semantic_bytes, CanonError};
 pub use digest::semantic_fingerprint;
 pub use path::{canonical_field_paths, validate_paths, PathError};
+pub use signature::{
+    has_anchor, matched_feature_classes, semantic_signature, shared_anchor_count, similarity,
+    strength, Score, SemanticSignature, Strength, SIGNATURE_VERSION, WEIGHTS_VERSION,
+};
 pub use vocab::{
     validate_metadata, CanonicalEventTypeIdRegistry, CanonicalFieldIdRegistry, Registries,
     VocabError, ISO4217_CURRENCIES, MEANING_VOCABULARIES, NAMESPACE_CODES, UCUM_UNITS,
