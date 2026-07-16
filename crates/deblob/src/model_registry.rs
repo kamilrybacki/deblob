@@ -670,7 +670,12 @@ pub struct PromotionApproval {
 pub trait ModelRegistry: Send + Sync {
     /// Registers a NEW candidate (state `Candidate`, `evidence: None`).
     /// `Err(Conflict)` if `model_id` is already registered — a model
-    /// version's identity is write-once.
+    /// version's identity is write-once. Spec §B7 separation of duties is
+    /// STRUCTURAL, not a caller convention: whatever `state`/`evidence`/
+    /// `shadow_since` the caller passed in on `version` are forcibly
+    /// overwritten to the bare `Candidate` defaults before the write — a
+    /// candidate can never be born already carrying (forged or otherwise)
+    /// gate evidence.
     async fn register_candidate(&self, version: ModelVersion) -> Result<(), CoreError>;
 
     /// The current active model, if any.
@@ -839,7 +844,7 @@ impl RedisModelRegistry {
 
 #[async_trait]
 impl ModelRegistry for RedisModelRegistry {
-    async fn register_candidate(&self, version: ModelVersion) -> Result<(), CoreError> {
+    async fn register_candidate(&self, mut version: ModelVersion) -> Result<(), CoreError> {
         let mut conn = self.conn();
         let key = model_key(&version.model_id);
         let exists: bool = redis::cmd("EXISTS")
@@ -853,6 +858,17 @@ impl ModelRegistry for RedisModelRegistry {
                 version.model_id
             )));
         }
+
+        // Spec §B7 separation of duties, made STRUCTURAL: a candidate is
+        // always born bare. Force this rather than trusting the caller —
+        // overwrite whatever `state`/`evidence`/`shadow_since` were passed
+        // in, so a forged `evidence: Some(...)` on a caller-supplied
+        // `ShadowCandidate`/`Active` version can never slip past this
+        // write-once EXISTS guard and later reach `promote` without ever
+        // going through `attach_evidence`.
+        version.state = ModelState::Candidate;
+        version.evidence = None;
+        version.shadow_since = None;
 
         let json = serde_json::to_string(&version)
             .map_err(|e| CoreError::RegistryUnavailable(format!("serialize model: {e}")))?;

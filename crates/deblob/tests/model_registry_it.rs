@@ -606,3 +606,108 @@ async fn attach_evidence_twice_on_the_same_candidate_is_a_conflict() {
         .unwrap_err();
     assert!(matches!(err, deblob_core::error::CoreError::Conflict(_)));
 }
+
+/// Spec §B7 separation of duties, made STRUCTURAL: `register_candidate`
+/// must FORCE the persisted version to a bare `Candidate` (`evidence:
+/// None`, `shadow_since: None`) even when the caller passes a version
+/// that's already marked `ShadowCandidate` with forged evidence attached.
+/// Without this, a caller could register a version that already looks
+/// gate-passed and call `promote` directly, bypassing `attach_evidence`
+/// (and the whole statistical gate) entirely.
+#[tokio::test]
+async fn register_candidate_forces_a_bare_candidate_even_if_caller_passes_forged_evidence() {
+    let (registry, _node) = connect().await;
+    let gate = test_gate();
+
+    let mut forged = version("model-forged", 1000);
+    forged.state = ModelState::ShadowCandidate;
+    forged.evidence = Some(evidence(0, 200, 0.001, 0.999, 0.99));
+    forged.shadow_since = Some(1000);
+
+    registry.register_candidate(forged).await.unwrap();
+
+    let stored = registry.get("model-forged").await.unwrap().unwrap();
+    assert_eq!(
+        stored.state,
+        ModelState::Candidate,
+        "register_candidate must force the persisted state to Candidate regardless of \
+         what the caller passed in"
+    );
+    assert!(
+        stored.evidence.is_none(),
+        "register_candidate must strip any forged evidence the caller passed in"
+    );
+    assert!(
+        stored.shadow_since.is_none(),
+        "register_candidate must clear any forged shadow_since the caller passed in"
+    );
+
+    // A forced-bare candidate must still go through attach_evidence before
+    // promote is even eligible — promote must refuse it exactly like any
+    // other bare Candidate, proving the forged fields never took effect.
+    let err = registry
+        .promote("model-forged", approved("ops:kamil"), &gate)
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, deblob_core::error::CoreError::Conflict(_)),
+        "a forced-bare candidate must be refused by promote (not ShadowCandidate), got {err:?}"
+    );
+    assert!(registry.get_active().await.unwrap().is_none());
+}
+
+/// Spec §B11: `promote` must reject a candidate whose
+/// `GateConfig::min_shadow_hold_ms` has not yet elapsed since
+/// `shadow_since`. Every other test in this suite uses
+/// `min_shadow_hold_ms: 0` (no hold), so the `elapsed < hold` rejection
+/// branch was previously never exercised.
+///
+/// `model_registry.rs`'s internal `now_ms()` reads the real wall clock
+/// with no injectable test seam (no `Clock`/`MockClock` abstraction exists
+/// anywhere in this crate), so this test asserts ONLY the rejection
+/// branch — deterministically, not via a race: `attach_evidence` sets
+/// `shadow_since` to "now" and `promote` is called immediately after with
+/// an hour-long hold, so `elapsed < hold` is true by construction with no
+/// wall-clock flakiness.
+#[tokio::test]
+async fn promote_is_rejected_before_the_shadow_hold_elapses() {
+    let (registry, _node) = connect().await;
+    let gate = GateConfig {
+        min_test_n: 1,
+        per_family_min_n: 1,
+        per_family_precision_floor: 0.0,
+        max_false_merge_upper_ci: 1.0,
+        min_shadow_hold_ms: 3_600_000, // 1 hour — cannot elapse within a test run
+        ..GateConfig::default()
+    };
+
+    let candidate = version("model-shadow-hold", 1000);
+    registry.register_candidate(candidate).await.unwrap();
+    let decision = registry
+        .attach_evidence(
+            "model-shadow-hold",
+            evidence(0, 200, 0.001, 0.999, 0.95),
+            &gate,
+        )
+        .await
+        .unwrap();
+    assert!(matches!(decision, GateDecision::EnteredShadow(_)));
+
+    let err = registry
+        .promote("model-shadow-hold", approved("ops:kamil"), &gate)
+        .await
+        .unwrap_err();
+    match err {
+        deblob_core::error::CoreError::PolicyRejected(msg) => {
+            assert!(
+                msg.contains("shadow hold"),
+                "expected a shadow-hold rejection message, got {msg:?}"
+            );
+        }
+        other => panic!("expected PolicyRejected on an unelapsed shadow hold, got {other:?}"),
+    }
+    assert!(
+        registry.get_active().await.unwrap().is_none(),
+        "a promote rejected for an unelapsed shadow hold must never move the active alias"
+    );
+}
