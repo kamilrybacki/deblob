@@ -7,6 +7,14 @@ rust-version.workspace = true
 
 [dependencies]
 deblob-core = { path = "../deblob-core" }
+# SLM continual-learning loop (spec:
+# docs/superpowers/specs/2026-07-16-slm-continual-learning.md §3): the
+# retrain orchestrator evaluates a candidate model against a held-out
+# corpus via `deblob_eval::{run_eval, compute_metrics}` and exports the
+# synthetic corpus's train slice via `deblob_eval::render_finetune_jsonl`.
+# `deblob-eval` depends only on deblob-core/-fingerprint/-monoid/-slm — not
+# on `deblob` — so this introduces no cycle.
+deblob-eval = { path = "../deblob-eval" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
 deblob-http = { path = "../deblob-http" }
 deblob-kafka = { path = "../deblob-kafka" }
