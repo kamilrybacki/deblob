@@ -14,10 +14,14 @@ deblob-core = { path = "../deblob-core" }
 deblob = { path = "../deblob" }
 deblob-eval = { path = "../deblob-eval" }
 deblob-slm = { path = "../deblob-slm" }
+deblob-monoid = { path = "../deblob-monoid" }
+deblob-fingerprint = { path = "../deblob-fingerprint" }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 async-trait.workspace = true
+sha2.workspace = true
+uuid.workspace = true
 rand = "0.8"
 rand_chacha = "0.3"
 futures-executor = "0.3"

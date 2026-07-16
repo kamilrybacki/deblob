@@ -687,14 +687,18 @@ dependencies = [
  "deblob",
  "deblob-core",
  "deblob-eval",
+ "deblob-fingerprint",
+ "deblob-monoid",
  "deblob-slm",
  "futures-executor",
  "rand 0.8.7",
  "rand_chacha 0.3.1",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.18",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

@@ -1,0 +1,107 @@
+[
+  {
+    "$schema": "/mediawiki/page/create/1.0.0",
+    "meta": {
+      "uri": "https://en.wikipedia.org/wiki/Structural_biology",
+      "request_id": "9d1f2e3a-0001-4a11-8b11-000000000001",
+      "id": "wm-page-create-0001",
+      "dt": "2023-01-01T00:00:00Z",
+      "domain": "en.wikipedia.org",
+      "stream": "mediawiki.page-create",
+      "topic": "eqiad.mediawiki.page-create",
+      "partition": 0,
+      "offset": 100001
+    },
+    "database": "enwiki",
+    "page_id": 900001,
+    "page_title": "Structural_biology",
+    "page_namespace": 0,
+    "rev_id": 800001,
+    "performer": {
+      "user_text": "ExampleEditor",
+      "user_id": 11001,
+      "user_groups": ["*", "user"],
+      "user_is_bot": false
+    },
+    "dt": "2023-01-01T00:00:00Z"
+  },
+  {
+    "$schema": "/mediawiki/page/create/2.0.0",
+    "meta": {
+      "uri": "https://en.wikipedia.org/wiki/Protein_folding",
+      "request_id": "9d1f2e3a-0002-4a11-8b11-000000000002",
+      "id": "wm-page-create-0002",
+      "dt": "2023-06-01T00:00:00Z",
+      "domain": "en.wikipedia.org",
+      "stream": "mediawiki.page-create",
+      "topic": "eqiad.mediawiki.page-create",
+      "partition": 0,
+      "offset": 100450
+    },
+    "database": "enwiki",
+    "page_id": 900450,
+    "page_title": "Protein_folding",
+    "page_namespace": 0,
+    "rev_id": 800450,
+    "performer": {
+      "user_text": "AnotherEditor",
+      "user_id": 11450,
+      "user_groups": ["*", "user", "autoconfirmed"],
+      "user_is_bot": false
+    },
+    "page_is_redirect": false,
+    "dt": "2023-06-01T00:00:00Z"
+  },
+  {
+    "$schema": "/mediawiki/revision/create/1.0.0",
+    "meta": {
+      "uri": "https://en.wikipedia.org/wiki/Structural_biology",
+      "request_id": "9d1f2e3a-0003-4a11-8b11-000000000003",
+      "id": "wm-revision-create-0001",
+      "dt": "2023-01-01T00:10:00Z",
+      "domain": "en.wikipedia.org",
+      "stream": "mediawiki.revision-create",
+      "topic": "eqiad.mediawiki.revision-create",
+      "partition": 1,
+      "offset": 200001
+    },
+    "database": "enwiki",
+    "page_id": 900001,
+    "page_title": "Structural_biology",
+    "rev_id": 800002,
+    "rev_parent_id": 800001,
+    "rev_timestamp": "2023-01-01T00:10:00Z",
+    "rev_content_model": "wikitext",
+    "performer": {
+      "user_text": "ExampleEditor",
+      "user_id": 11001,
+      "user_groups": ["*", "user"],
+      "user_is_bot": false
+    }
+  },
+  {
+    "$schema": "/mediawiki/recentchange/1.0.0",
+    "meta": {
+      "uri": "https://en.wikipedia.org/wiki/Protein_folding",
+      "request_id": "9d1f2e3a-0004-4a11-8b11-000000000004",
+      "id": "wm-recentchange-0001",
+      "dt": "2023-06-01T00:05:00Z",
+      "domain": "en.wikipedia.org",
+      "stream": "mediawiki.recentchange",
+      "topic": "eqiad.mediawiki.recentchange",
+      "partition": 2,
+      "offset": 300001
+    },
+    "type": "edit",
+    "namespace": 0,
+    "title": "Protein_folding",
+    "comment": "copyedit intro",
+    "user": "AnotherEditor",
+    "bot": false,
+    "minor": true,
+    "server_url": "https://en.wikipedia.org",
+    "server_name": "en.wikipedia.org",
+    "wiki": "enwiki",
+    "parsedcomment": "copyedit intro"
+  }
+]
