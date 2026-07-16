@@ -66,6 +66,23 @@ pub struct FamilyRef {
     pub canonical: String,
 }
 
+/// The family metadata that lives at `deblob:family:<fam_id>` (spec §6),
+/// as returned by [`Registry::get_family`]. The P1 family record is
+/// minimal: `crate::lua::PUBLISH_SCRIPT`'s `HINCRBY` only ever writes a
+/// `next_version` counter (plus a `v:<n>` entry per version and an echoed
+/// `family_id` field) onto that hash — there is no `name`/`state`/`compat`
+/// field stored anywhere for a family, so this struct exposes exactly what
+/// the write path actually populates, not more.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct FamilyRecord {
+    pub family_id: FamilyId,
+    /// The highest version ever allocated to this family — the same
+    /// `next_version` field `HINCRBY` maintains. Versions are allocated
+    /// 1.. and are contiguous (never sparse), so this also doubles as the
+    /// count of versions that exist.
+    pub current_version: FamilyVersion,
+}
+
 #[async_trait]
 pub trait Registry: Send + Sync {
     async fn get_schema(&self, id: &SchemaId) -> Result<Option<SchemaRecord>, CoreError>;
@@ -168,6 +185,31 @@ pub trait Registry: Send + Sync {
         family_id: &FamilyId,
         version: FamilyVersion,
     ) -> Result<Option<SchemaId>, CoreError>;
+
+    /// The family record stored at `deblob:family:<fam_id>` (spec §6) —
+    /// `None` if nothing has ever been published to `family_id` (including
+    /// a `family_id` that was never minted at all). Never an error for a
+    /// not-found family (mirrors [`Registry::list_families_in_buckets`]'s
+    /// "empty/absent is a valid answer, not a failure" posture).
+    ///
+    /// P2-D polish Task 2: backs `GET /api/v1/families/{fam_id}`.
+    async fn get_family(&self, family_id: &FamilyId) -> Result<Option<FamilyRecord>, CoreError>;
+
+    /// Every version ever published to `family_id`, ascending. Family
+    /// versions are allocated 1.. via `HINCRBY` at `publish` time and are
+    /// contiguous — never sparse (spec §6) — so a correct implementation is
+    /// always `1..=get_family(family_id)?.current_version`, derived rather
+    /// than independently stored/enumerated. `Ok(vec![])` for an unknown
+    /// family, never an error; callers that need to distinguish "unknown
+    /// family" from "family with zero versions" (which the contiguity
+    /// invariant above makes impossible for a family that exists) should
+    /// call [`Registry::get_family`] first.
+    ///
+    /// P2-D polish Task 2: backs `GET /api/v1/families/{fam_id}/versions`.
+    async fn list_family_versions(
+        &self,
+        family_id: &FamilyId,
+    ) -> Result<Vec<FamilyVersion>, CoreError>;
 }
 
 #[async_trait]

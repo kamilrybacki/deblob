@@ -1084,6 +1084,20 @@ mod tests {
         ) -> Result<Option<SchemaId>, CoreError> {
             unimplemented!("not exercised by shadow-lane tests")
         }
+
+        async fn get_family(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+        ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+            unimplemented!("not exercised by shadow-lane tests")
+        }
+
+        async fn list_family_versions(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+        ) -> Result<Vec<deblob_core::id::FamilyVersion>, CoreError> {
+            unimplemented!("not exercised by shadow-lane tests")
+        }
     }
 
     #[derive(Default)]

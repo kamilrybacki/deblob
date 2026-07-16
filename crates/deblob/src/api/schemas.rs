@@ -3,8 +3,8 @@
 
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use deblob_core::id::SchemaId;
-use deblob_core::ports::SchemaRecord;
+use deblob_core::id::{FamilyId, FamilyVersion, SchemaId};
+use deblob_core::ports::{FamilyRecord, SchemaRecord};
 use serde::Deserialize;
 
 use super::{cursor, ApiError, ApiState, DataEnvelope, ListResponse};
@@ -57,18 +57,49 @@ pub async fn get_schema(
     Ok(Json(DataEnvelope { data: record }))
 }
 
-/// `GET /api/v1/families/{fam_id}` — the current `Registry` trait (Task 7)
-/// exposes no family-lookup method (only `get_schema`, `resolve_structural`,
-/// `publish`, `get_alias`, `list_schemas`); rather than invent one here,
-/// this returns 501 until a later task adds family-indexed reads to the
-/// trait.
-pub async fn get_family(Path(_fam_id): Path<String>) -> ApiError {
-    ApiError::not_implemented(
-        "family lookup is not yet exposed by the Registry trait (see get_family_versions)",
-    )
+/// `GET /api/v1/families/{fam_id}` — 200 with the family record
+/// (`Registry::get_family`, P2-D polish Task 2), or 404 if nothing has ever
+/// been published to it.
+pub async fn get_family(
+    State(state): State<ApiState>,
+    Path(fam_id): Path<String>,
+) -> Result<Json<DataEnvelope<FamilyRecord>>, ApiError> {
+    let id = FamilyId::parse(&fam_id).map_err(|e| ApiError::unprocessable(e.to_string()))?;
+
+    let record = state
+        .registry
+        .get_family(&id)
+        .await
+        .map_err(ApiError::from_core)?
+        .ok_or_else(|| ApiError::not_found("family not found"))?;
+
+    Ok(Json(DataEnvelope { data: record }))
 }
 
-/// `GET /api/v1/families/{fam_id}/versions` — same gap as `get_family`.
-pub async fn get_family_versions(Path(_fam_id): Path<String>) -> ApiError {
-    ApiError::not_implemented("family version listing is not yet exposed by the Registry trait")
+/// `GET /api/v1/families/{fam_id}/versions` — 200 with every version ever
+/// published to the family (`Registry::list_family_versions`), or 404 if
+/// the family itself doesn't exist. The existence check goes through
+/// `get_family` first so an unknown family is a 404, not an empty-but-200
+/// list (versions are never legitimately empty for a family that exists —
+/// see `Registry::list_family_versions`'s contiguity invariant).
+pub async fn get_family_versions(
+    State(state): State<ApiState>,
+    Path(fam_id): Path<String>,
+) -> Result<Json<DataEnvelope<Vec<FamilyVersion>>>, ApiError> {
+    let id = FamilyId::parse(&fam_id).map_err(|e| ApiError::unprocessable(e.to_string()))?;
+
+    state
+        .registry
+        .get_family(&id)
+        .await
+        .map_err(ApiError::from_core)?
+        .ok_or_else(|| ApiError::not_found("family not found"))?;
+
+    let versions = state
+        .registry
+        .list_family_versions(&id)
+        .await
+        .map_err(ApiError::from_core)?;
+
+    Ok(Json(DataEnvelope { data: versions }))
 }

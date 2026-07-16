@@ -36,10 +36,54 @@ within a protocol version:
   **case-sensitive** — `Cel` and `cel` are different tokens; never normalize.
 - `identifier_namespace` — a curated table of namespace codes
   (`acme.customer_id`, `iso.country_code`, ...).
-- `enum_semantics` — each schema-observed enum VALUE maps to a
-  `MeaningCode {vocabulary, code}`; only the `vocabulary` NAMESPACE is
-  checked against a registered table (`deblob/order-status/v1`, ...) — the
-  individual `code` within a registered vocabulary is trusted.
+- `enum_semantics` — a LIST of `{value, meaning}` entries (P2-D polish
+  Task 3 API shape change; NOT a JSON object/map — see below), each pairing
+  one schema-observed enum VALUE with a `MeaningCode {vocabulary, code}`;
+  only the `vocabulary` NAMESPACE is checked against a registered table
+  (`deblob/order-status/v1`, ...) — the individual `code` within a
+  registered vocabulary is trusted.
+
+#### `enum_semantics`: typed `value`, not a bare string (P2-D polish)
+
+Before P2-D polish, `enum_semantics` was a JSON object (`{"<value>":
+{"vocabulary": ..., "code": ...}}`) keyed on the schema's own enum value as
+a bare string, and the `sem_` digest GUESSED the value's JSON type back out
+of that string (looked-like-`"true"`/`"false"` → bool, looked-like-a-number
+→ number, else → string). That guess was ambiguous: a genuine JSON string
+`"true"` and a genuine JSON boolean `true` both keyed as the literal text
+`true` and were indistinguishable — a latent digest collision.
+
+`enum_semantics` is now a JSON ARRAY, and each entry's `value` carries its
+own JSON type EXPLICITLY, adjacently tagged:
+
+```json
+{
+  "enum_semantics": [
+    {"value": {"type": "string", "v": "ACTIVE"},
+     "meaning": {"vocabulary": "deblob/order-status/v1", "code": "pending"}},
+    {"value": {"type": "bool", "v": true},
+     "meaning": {"vocabulary": "deblob/order-status/v1", "code": "confirmed"}},
+    {"value": {"type": "number", "v": "1"},
+     "meaning": {"vocabulary": "deblob/order-status/v1", "code": "unit_count"}},
+    {"value": {"type": "null"},
+     "meaning": {"vocabulary": "deblob/order-status/v1", "code": "no_status"}}
+  ]
+}
+```
+
+- `value.type` is one of `"null"`, `"bool"`, `"number"`, `"string"` — an
+  unrecognized `type` (or the old bare-string/object-map shape) is a hard
+  `422` deserialize failure, never silently coerced.
+- `value.type: "number"`'s `v` is the number's CANONICAL-DECIMAL-GRAMMAR
+  TEXT (e.g. `"1"`, `"1.0"`, `"1e0"`), never a bare JSON number literal in
+  the request and never an `f64` internally — the existing P1 numeric rule
+  still unifies `1`/`1.0`/`1e0` into the SAME digest key, but ONLY within
+  `Number`; a `Number("1")` and a `String("1")` (or a `Bool`/`Null`) are
+  permanently distinct.
+- **This is a breaking wire-shape change** for any caller that previously
+  sent `enum_semantics` as an object. Safe to ship without a migration: no
+  production schema had ever been annotated with `enum_semantics` before
+  this change landed.
 
 Extending any baked table is a NEW protocol version (`deblob-semantic-v2`),
 never an in-place edit — this is what lets a `sem_` computed today stay

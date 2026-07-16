@@ -14,11 +14,9 @@
 //! Scope: canonicalization only. Hashing/domain-separation is `digest.rs`;
 //! storage/API/similarity-signature are later tasks.
 
-use std::collections::BTreeMap;
-
 use deblob_core::semantic::{
-    CanonicalEventTypeId, EpochBase, FieldSemantics, MeaningCode, PathSegment, SemanticMetadata,
-    Temporal, TemporalKind, TemporalResolution, Unit, UnitSystem,
+    CanonicalEventTypeId, EnumMapping, EnumValue, EpochBase, FieldSemantics, MeaningCode,
+    PathSegment, SemanticMetadata, Temporal, TemporalKind, TemporalResolution, Unit, UnitSystem,
 };
 use unicode_normalization::UnicodeNormalization;
 
@@ -48,14 +46,23 @@ pub enum CanonError {
         first_field_index: usize,
         second_field_index: usize,
     },
-    /// Two `enum_semantics` keys within the same field canonicalized to the
-    /// same typed key bytes (e.g. `"1"` and `"1.0"` both present as
-    /// separate map entries) — not reachable via a plain `BTreeMap<String,
-    /// _>` with genuinely distinct value semantics, so this is a defensive
-    /// guard against a silently-lossy digest rather than a documented spec
+    /// Two `enum_semantics` entries within the same field canonicalized to
+    /// the same typed value bytes (e.g. `Number("1")` and `Number("1.0")`
+    /// both present as separate entries) — a defensive guard against a
+    /// silently-lossy digest (only one of the two colliding entries would
+    /// otherwise survive canonicalization) rather than a documented spec
     /// requirement.
-    #[error("field {field_index}: duplicate canonical enum-semantics key")]
+    #[error("field {field_index}: duplicate canonical enum-semantics value")]
     DuplicateEnumKey { field_index: usize },
+    /// An `enum_semantics` entry's [`EnumValue::Number`] text is not a
+    /// well-formed JSON number literal. `EnumValue::Number` asserts "this is
+    /// a number" explicitly (P2-D polish Task 3) — unlike the old
+    /// string-guessing digest, a malformed payload here is a caller error,
+    /// never silently reinterpreted as a different type.
+    #[error(
+        "field {field_index}: enum value declared as Number but not a valid JSON number literal"
+    )]
+    InvalidEnumNumber { field_index: usize },
 }
 
 // ---- wire primitives -------------------------------------------------
@@ -241,33 +248,46 @@ fn canonical_decimal(s: &str) -> Option<CanonicalDecimal> {
     })
 }
 
-// ---- enum_semantics: typed-value-sorted map -----------------------------
+// ---- enum_semantics: typed-value-sorted list -----------------------------
 
 const TAG_KV_STRING: u8 = 0;
 const TAG_KV_NUMBER: u8 = 1;
 const TAG_KV_BOOL: u8 = 2;
+const TAG_KV_NULL: u8 = 3;
 
-/// Encodes one `enum_semantics` map key with a leading type discriminator
-/// so `integer 1`, `string "1"`, and `boolean true` never collide, and
-/// numeric-looking keys canonicalize via [`canonical_decimal`] so `1` /
-/// `1.0` / `1e0` sort and compare identically.
-fn typed_key_bytes(key: &str) -> Vec<u8> {
+/// Encodes one `enum_semantics` entry's [`EnumValue`] with a leading type
+/// discriminator taken directly from the EXPLICIT typed variant (P2-D
+/// polish Task 3) — never re-derived by parsing/guessing, which is exactly
+/// the ambiguity that let a string `"true"` and a boolean `true` collide on
+/// the old string-keyed digest. `Number` canonicalizes via
+/// [`canonical_decimal`] (the existing P1 numeric rule) so `1` / `1.0` /
+/// `1e0` still sort and compare identically WITHIN `Number` — that
+/// unification never crosses into `Bool`/`String`/`Null`, which each keep
+/// their own tag byte.
+fn typed_value_bytes(field_index: usize, value: &EnumValue) -> Result<Vec<u8>, CanonError> {
     let mut out = Vec::new();
-    if key == "true" || key == "false" {
-        out.push(TAG_KV_BOOL);
-        out.push(u8::from(key == "true"));
-        return out;
+    match value {
+        EnumValue::Null => {
+            out.push(TAG_KV_NULL);
+        }
+        EnumValue::Bool(b) => {
+            out.push(TAG_KV_BOOL);
+            out.push(u8::from(*b));
+        }
+        EnumValue::Number(text) => {
+            let dec =
+                canonical_decimal(text).ok_or(CanonError::InvalidEnumNumber { field_index })?;
+            out.push(TAG_KV_NUMBER);
+            out.push(u8::from(dec.negative));
+            push_i64(&mut out, dec.exponent);
+            push_lp_str(&mut out, &dec.digits);
+        }
+        EnumValue::String(s) => {
+            out.push(TAG_KV_STRING);
+            push_lp_str(&mut out, s);
+        }
     }
-    if let Some(dec) = canonical_decimal(key) {
-        out.push(TAG_KV_NUMBER);
-        out.push(u8::from(dec.negative));
-        push_i64(&mut out, dec.exponent);
-        push_lp_str(&mut out, &dec.digits);
-        return out;
-    }
-    out.push(TAG_KV_STRING);
-    push_lp_str(&mut out, key);
-    out
+    Ok(out)
 }
 
 fn encode_meaning_code(mc: &MeaningCode, out: &mut Vec<u8>) {
@@ -275,18 +295,22 @@ fn encode_meaning_code(mc: &MeaningCode, out: &mut Vec<u8>) {
     push_lp_str(out, &mc.code);
 }
 
-/// Encodes a non-empty `enum_semantics` map: entries sorted by their
-/// canonical typed-key bytes (not by the raw `BTreeMap` string order), as a
-/// 4-byte entry count followed by `(typed_key_bytes, vocabulary, code)`
-/// triples. Caller guarantees `map` is non-empty (an empty map normalizes
-/// to the attribute being absent, handled by [`encode_field_semantics`]).
+/// Encodes a non-empty `enum_semantics` list: entries sorted by their
+/// canonical typed-value bytes (`(type-tag, canonical value bytes)` —
+/// independent of input order), as a 4-byte entry count followed by
+/// `(typed_value_bytes, vocabulary, code)` triples. Caller guarantees
+/// `mappings` is non-empty (an empty list normalizes to the attribute being
+/// absent, handled by [`encode_field_semantics`]).
 fn encode_enum_semantics(
     field_index: usize,
-    map: &BTreeMap<String, MeaningCode>,
+    mappings: &[EnumMapping],
     out: &mut Vec<u8>,
 ) -> Result<(), CanonError> {
-    let mut entries: Vec<(Vec<u8>, &MeaningCode)> =
-        map.iter().map(|(k, v)| (typed_key_bytes(k), v)).collect();
+    let mut entries: Vec<(Vec<u8>, &MeaningCode)> = Vec::with_capacity(mappings.len());
+    for mapping in mappings {
+        let value_bytes = typed_value_bytes(field_index, &mapping.value)?;
+        entries.push((value_bytes, &mapping.meaning));
+    }
     entries.sort_by(|a, b| a.0.cmp(&b.0));
 
     for pair in entries.windows(2) {
@@ -296,8 +320,8 @@ fn encode_enum_semantics(
     }
 
     push_u32(out, entries.len() as u32);
-    for (key_bytes, mc) in &entries {
-        out.extend_from_slice(key_bytes);
+    for (value_bytes, mc) in &entries {
+        out.extend_from_slice(value_bytes);
         encode_meaning_code(mc, out);
     }
     Ok(())
@@ -434,10 +458,10 @@ fn encode_field_semantics(
             body.extend_from_slice(&temporal_bytes);
         }
     }
-    if let Some(enum_map) = &semantics.enum_semantics {
-        if !enum_map.is_empty() {
+    if let Some(enum_mappings) = &semantics.enum_semantics {
+        if !enum_mappings.is_empty() {
             bitmap |= BIT_ENUM_SEMANTICS;
-            encode_enum_semantics(field_index, enum_map, &mut body)?;
+            encode_enum_semantics(field_index, enum_mappings, &mut body)?;
         }
     }
 
@@ -567,8 +591,7 @@ pub fn canonical_semantic_bytes(metadata: &SemanticMetadata) -> Result<Vec<u8>, 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deblob_core::semantic::{FieldEntry, Unit, UnitSystem};
-    use std::collections::BTreeMap;
+    use deblob_core::semantic::{EnumMapping, EnumValue, FieldEntry, Unit, UnitSystem};
 
     fn key(s: &str) -> PathSegment {
         PathSegment::Key(s.to_string())
@@ -684,13 +707,51 @@ mod tests {
     }
 
     #[test]
-    fn typed_key_bytes_number_and_lookalike_string_are_distinguished_by_tag() {
-        // A number-shaped key always takes the NUMBER tag; only a
-        // non-numeric key takes the STRING tag, so the two tag spaces never
-        // overlap for the same textual content.
-        assert_eq!(typed_key_bytes("1")[0], TAG_KV_NUMBER);
-        assert_eq!(typed_key_bytes("abc")[0], TAG_KV_STRING);
-        assert_eq!(typed_key_bytes("true")[0], TAG_KV_BOOL);
+    fn typed_value_bytes_tag_matches_the_explicit_enum_value_variant() {
+        // The tag is taken directly from the EXPLICIT EnumValue variant —
+        // never re-derived by parsing/guessing the value's own text — so a
+        // number-shaped String("1") still takes the STRING tag, not NUMBER.
+        assert_eq!(
+            typed_value_bytes(0, &EnumValue::Number("1".to_string())).unwrap()[0],
+            TAG_KV_NUMBER
+        );
+        assert_eq!(
+            typed_value_bytes(0, &EnumValue::String("1".to_string())).unwrap()[0],
+            TAG_KV_STRING
+        );
+        assert_eq!(
+            typed_value_bytes(0, &EnumValue::String("abc".to_string())).unwrap()[0],
+            TAG_KV_STRING
+        );
+        assert_eq!(
+            typed_value_bytes(0, &EnumValue::Bool(true)).unwrap()[0],
+            TAG_KV_BOOL
+        );
+        assert_eq!(
+            typed_value_bytes(0, &EnumValue::String("true".to_string())).unwrap()[0],
+            TAG_KV_STRING
+        );
+        assert_eq!(
+            typed_value_bytes(0, &EnumValue::Null).unwrap()[0],
+            TAG_KV_NULL
+        );
+    }
+
+    #[test]
+    fn typed_value_bytes_string_true_and_bool_true_are_distinct_bytes() {
+        // The headline fix (task-3-brief.md): a genuine string "true" and a
+        // genuine boolean true must never collide on the canonical bytes,
+        // even though they used to share the exact same map key under the
+        // old string-keyed representation.
+        let as_string = typed_value_bytes(0, &EnumValue::String("true".to_string())).unwrap();
+        let as_bool = typed_value_bytes(0, &EnumValue::Bool(true)).unwrap();
+        assert_ne!(as_string, as_bool);
+    }
+
+    #[test]
+    fn typed_value_bytes_number_rejects_non_numeric_text() {
+        let err = typed_value_bytes(2, &EnumValue::Number("not-a-number".to_string())).unwrap_err();
+        assert_eq!(err, CanonError::InvalidEnumNumber { field_index: 2 });
     }
 
     // -- field-semantics normalization -----------------------------------
@@ -714,9 +775,9 @@ mod tests {
     }
 
     #[test]
-    fn empty_enum_semantics_map_normalizes_field_semantics_to_none() {
+    fn empty_enum_semantics_list_normalizes_field_semantics_to_none() {
         let semantics = FieldSemantics {
-            enum_semantics: Some(BTreeMap::new()),
+            enum_semantics: Some(Vec::new()),
             ..empty_semantics()
         };
         assert_eq!(encode_field_semantics(0, &semantics).unwrap(), None);
@@ -769,24 +830,51 @@ mod tests {
 
     #[test]
     fn enum_semantics_rejects_duplicate_canonical_key() {
-        let mut map = BTreeMap::new();
-        map.insert(
-            "1".to_string(),
-            MeaningCode {
-                vocabulary: "deblob/x/v1".to_string(),
-                code: "a".to_string(),
+        let mappings = vec![
+            EnumMapping {
+                value: EnumValue::Number("1".to_string()),
+                meaning: MeaningCode {
+                    vocabulary: "deblob/x/v1".to_string(),
+                    code: "a".to_string(),
+                },
             },
-        );
-        map.insert(
-            "1.0".to_string(),
-            MeaningCode {
-                vocabulary: "deblob/x/v1".to_string(),
-                code: "b".to_string(),
+            EnumMapping {
+                value: EnumValue::Number("1.0".to_string()),
+                meaning: MeaningCode {
+                    vocabulary: "deblob/x/v1".to_string(),
+                    code: "b".to_string(),
+                },
             },
-        );
+        ];
         let mut out = Vec::new();
-        let err = encode_enum_semantics(0, &map, &mut out).unwrap_err();
+        let err = encode_enum_semantics(0, &mappings, &mut out).unwrap_err();
         assert_eq!(err, CanonError::DuplicateEnumKey { field_index: 0 });
+    }
+
+    #[test]
+    fn enum_semantics_string_true_and_bool_true_do_not_collide_as_duplicates() {
+        // Same headline fix, exercised through the list-level duplicate
+        // detector: String("true") and Bool(true) mapping to the SAME
+        // meaning code must NOT be flagged as a duplicate — they are
+        // genuinely distinct typed values.
+        let mappings = vec![
+            EnumMapping {
+                value: EnumValue::String("true".to_string()),
+                meaning: MeaningCode {
+                    vocabulary: "deblob/x/v1".to_string(),
+                    code: "a".to_string(),
+                },
+            },
+            EnumMapping {
+                value: EnumValue::Bool(true),
+                meaning: MeaningCode {
+                    vocabulary: "deblob/x/v1".to_string(),
+                    code: "a".to_string(),
+                },
+            },
+        ];
+        let mut out = Vec::new();
+        encode_enum_semantics(0, &mappings, &mut out).unwrap();
     }
 
     // -- ordering ------------------------------------------------------
@@ -818,14 +906,13 @@ mod tests {
     // -- top-level bytes: determinism / sensitivity -----------------------
 
     fn full_metadata() -> SemanticMetadata {
-        let mut enum_semantics = BTreeMap::new();
-        enum_semantics.insert(
-            "ACTIVE".to_string(),
-            MeaningCode {
+        let enum_semantics = vec![EnumMapping {
+            value: EnumValue::String("ACTIVE".to_string()),
+            meaning: MeaningCode {
                 vocabulary: "deblob/order-status/v1".to_string(),
                 code: "pending".to_string(),
             },
-        );
+        }];
         SemanticMetadata {
             event_type: Some(CanonicalEventTypeId::new("user.created")),
             fields: vec![field(

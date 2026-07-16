@@ -9,7 +9,6 @@
 //! `sem_` digest preimage.
 
 use crate::id::SemanticId;
-use std::collections::BTreeMap;
 
 /// A validated-elsewhere (Task 2) identifier-namespace code, e.g.
 /// `"acme.customer_id"`.
@@ -101,6 +100,54 @@ pub struct MeaningCode {
     pub code: String,
 }
 
+/// A schema-observed enum VALUE, carrying its own JSON type EXPLICITLY
+/// (P2-D polish Task 3, `task-3-brief.md`). Before this type existed,
+/// `enum_semantics` keyed on a bare `String`, and the `sem_` digest guessed
+/// the JSON type back out of that string (`"true"` looked like a bool,
+/// `"1"` looked like a number, anything else was a string) — which meant a
+/// genuine string value `"true"` and a genuine boolean value `true` were
+/// indistinguishable and collided on the same digest key. `EnumValue` closes
+/// that hole by making the type part of the value itself, never re-derived
+/// by parsing.
+///
+/// `Number` holds the value's canonical-decimal-grammar TEXT exactly as
+/// observed (e.g. `"1"`, `"1.0"`, `"1e0"`) — never an `f64` — so the digest
+/// (`deblob_semantic::canon`) can still apply the existing P1 numeric
+/// canonicalization rule and unify `1`/`1.0`/`1e0` as the SAME digest key,
+/// while a `Number("1")` and a `String("1")` (or a `Bool`/`Null`) remain
+/// permanently distinct by construction.
+///
+/// Serde uses an adjacently-tagged representation (`{"type":"bool","v":true}`
+/// / `{"type":"string","v":"true"}` / `{"type":"number","v":"1"}` /
+/// `{"type":"null"}`) rather than serde's default externally-tagged shape,
+/// so the wire form round-trips unambiguously and an unrecognized `"type"`
+/// is a hard deserialize error, never silently coerced.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "type", content = "v", rename_all = "snake_case")]
+pub enum EnumValue {
+    Null,
+    Bool(bool),
+    /// Canonical-decimal-grammar text, never `f64` — see the type's doc
+    /// comment.
+    Number(String),
+    String(String),
+}
+
+/// One `enum_semantics` entry: a single typed [`EnumValue`] the schema was
+/// observed to carry, plus the controlled [`MeaningCode`] it maps to.
+/// `FieldSemantics::enum_semantics` is a `Vec<EnumMapping>` rather than a
+/// `value -> MeaningCode` map (a JSON object key can never carry a type
+/// discriminator, which is exactly the ambiguity this type exists to close)
+/// — determinism/ordering for hashing is the digest encoder's job
+/// (`deblob_semantic::canon`), not this type's; this type carries no `Ord`
+/// of its own.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnumMapping {
+    pub value: EnumValue,
+    pub meaning: MeaningCode,
+}
+
 /// One typed path segment. `Wildcard` (an array element position) is a
 /// distinct typed value, NOT the literal string `"*"` — a raw `"*"` string
 /// must not deserialize into `Wildcard`. Canonical byte-level encoding
@@ -134,10 +181,14 @@ pub struct FieldSemantics {
     /// physical, i.e. `sch_`'s concern, not `sem_`'s).
     pub numeric_scale: Option<i64>,
     pub temporal: Option<Temporal>,
-    /// Keys are the schema's own enum VALUES (as observed in the data);
-    /// values are the controlled [`MeaningCode`] each value maps to. A
-    /// `BTreeMap` keeps this deterministic for hashing/fingerprinting.
-    pub enum_semantics: Option<BTreeMap<String, MeaningCode>>,
+    /// Each entry is one of the schema's own enum VALUES (as observed in the
+    /// data, typed EXPLICITLY via [`EnumValue`] — P2-D polish Task 3) paired
+    /// with the controlled [`MeaningCode`] it maps to. A plain `Vec` rather
+    /// than a map: a JSON object key cannot itself carry a type
+    /// discriminator, so `{value, meaning}` pairs are listed instead —
+    /// deterministic ordering for hashing is imposed by the digest encoder
+    /// (`deblob_semantic::canon`), not by this field's declaration order.
+    pub enum_semantics: Option<Vec<EnumMapping>>,
 }
 
 /// One field's typed path plus its controlled semantics. `SemanticMetadata`
@@ -213,7 +264,6 @@ pub struct SemanticFingerprint(pub SemanticId);
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeMap;
 
     #[test]
     fn privacy_class_round_trips_snake_case() {
@@ -253,14 +303,13 @@ mod tests {
 
     #[test]
     fn field_semantics_round_trips_all_attributes() {
-        let mut enum_semantics = BTreeMap::new();
-        enum_semantics.insert(
-            "ACTIVE".to_string(),
-            MeaningCode {
+        let enum_semantics = vec![EnumMapping {
+            value: EnumValue::String("ACTIVE".to_string()),
+            meaning: MeaningCode {
                 vocabulary: "deblob/order-status/v1".to_string(),
                 code: "pending".to_string(),
             },
-        );
+        }];
 
         let fs = FieldSemantics {
             canonical_field_id: Some(CanonicalFieldId::new("temperature.ambient")),
@@ -296,6 +345,104 @@ mod tests {
         let json = serde_json::to_string(&fs).unwrap();
         let round: FieldSemantics = serde_json::from_str(&json).unwrap();
         assert_eq!(fs, round);
+    }
+
+    // ---- EnumValue: explicit JSON type (P2-D polish Task 3) ---------------
+
+    #[test]
+    fn enum_value_bool_and_string_are_distinct_types_not_just_distinct_values() {
+        // The headline fix: a string "true" and a boolean true must be
+        // different EnumValue values (not just different in some derived
+        // sense) — Eq must say so directly, before any digest is involved.
+        let as_bool = EnumValue::Bool(true);
+        let as_string = EnumValue::String("true".to_string());
+        assert_ne!(as_bool, as_string);
+    }
+
+    #[test]
+    fn enum_value_serializes_with_explicit_tagged_shape() {
+        assert_eq!(
+            serde_json::to_value(EnumValue::Bool(true)).unwrap(),
+            serde_json::json!({"type": "bool", "v": true})
+        );
+        assert_eq!(
+            serde_json::to_value(EnumValue::String("true".to_string())).unwrap(),
+            serde_json::json!({"type": "string", "v": "true"})
+        );
+        assert_eq!(
+            serde_json::to_value(EnumValue::Number("1".to_string())).unwrap(),
+            serde_json::json!({"type": "number", "v": "1"})
+        );
+        assert_eq!(
+            serde_json::to_value(EnumValue::Null).unwrap(),
+            serde_json::json!({"type": "null"})
+        );
+    }
+
+    #[test]
+    fn enum_value_round_trips_every_variant() {
+        for value in [
+            EnumValue::Null,
+            EnumValue::Bool(false),
+            EnumValue::Number("1.0".to_string()),
+            EnumValue::String("1.0".to_string()),
+        ] {
+            let json = serde_json::to_string(&value).unwrap();
+            let round: EnumValue = serde_json::from_str(&json).unwrap();
+            assert_eq!(value, round);
+        }
+    }
+
+    #[test]
+    fn enum_value_rejects_unknown_type_tag() {
+        let json = r#"{"type": "array", "v": []}"#;
+        let result: Result<EnumValue, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn enum_mapping_rejects_unknown_field() {
+        let json = r#"{
+            "value": {"type": "bool", "v": true},
+            "meaning": {"vocabulary": "v", "code": "c"},
+            "bogus": 1
+        }"#;
+        let result: Result<EnumMapping, _> = serde_json::from_str(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn enum_semantics_is_a_list_of_typed_mappings_not_a_map() {
+        let fs = FieldSemantics {
+            enum_semantics: Some(vec![
+                EnumMapping {
+                    value: EnumValue::Bool(true),
+                    meaning: MeaningCode {
+                        vocabulary: "deblob/order-status/v1".to_string(),
+                        code: "pending".to_string(),
+                    },
+                },
+                EnumMapping {
+                    value: EnumValue::String("true".to_string()),
+                    meaning: MeaningCode {
+                        vocabulary: "deblob/order-status/v1".to_string(),
+                        code: "pending".to_string(),
+                    },
+                },
+            ]),
+            ..FieldSemantics {
+                canonical_field_id: None,
+                identifier_namespace: None,
+                unit: None,
+                numeric_scale: None,
+                temporal: None,
+                enum_semantics: None,
+            }
+        };
+        let json = serde_json::to_string(&fs).unwrap();
+        let round: FieldSemantics = serde_json::from_str(&json).unwrap();
+        assert_eq!(fs, round);
+        assert_eq!(round.enum_semantics.unwrap().len(), 2);
     }
 
     #[test]

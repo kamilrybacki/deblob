@@ -120,6 +120,36 @@ impl Registry for FakeRegistry {
             .find(|s| &s.family_id == family_id && s.version == version)
             .map(|s| s.schema_id.clone()))
     }
+
+    async fn get_family(
+        &self,
+        family_id: &deblob_core::id::FamilyId,
+    ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+        let current = self
+            .schemas
+            .iter()
+            .filter(|s| &s.family_id == family_id)
+            .map(|s| s.version.0)
+            .max();
+        Ok(current.map(|v| deblob_core::ports::FamilyRecord {
+            family_id: family_id.clone(),
+            current_version: FamilyVersion(v),
+        }))
+    }
+
+    async fn list_family_versions(
+        &self,
+        family_id: &deblob_core::id::FamilyId,
+    ) -> Result<Vec<FamilyVersion>, CoreError> {
+        let mut versions: Vec<FamilyVersion> = self
+            .schemas
+            .iter()
+            .filter(|s| &s.family_id == family_id)
+            .map(|s| s.version)
+            .collect();
+        versions.sort();
+        Ok(versions)
+    }
 }
 
 /// In-memory `EvidenceStore` fake, keyed by `CandidateId`.
@@ -491,6 +521,24 @@ fn empty_state() -> ApiState {
         HealthGate::new(),
         Arc::new(FakeSemanticStore::default()),
     )
+}
+
+/// A `SchemaRecord` published as a specific `version` within a caller-given
+/// `family_id` — needed for the family-endpoint tests, which require
+/// multiple schemas sharing one family at distinct versions (unlike
+/// `sample_schema`, which mints a fresh family per call).
+fn family_schema(seed: u8, family_id: deblob_core::id::FamilyId, version: u32) -> SchemaRecord {
+    SchemaRecord {
+        schema_id: SchemaId::from_digest(&[seed; 32]),
+        family_id,
+        version: FamilyVersion(version),
+        canonical: "{}".to_string(),
+        canonicalizer: "deblob-canon-v1".to_string(),
+        provenance: serde_json::json!({}),
+        semantic: None,
+        semantic_fingerprint: None,
+        privacy_class: None,
+    }
 }
 
 /// A schema with a real `deblob-canon-v1` shape (one top-level numeric
@@ -1205,6 +1253,115 @@ async fn get_semantic_returns_active_and_etag() {
     );
 }
 
+/// P2-D polish Task 3: `enum_semantics` is now a LIST of typed
+/// `{value, meaning}` entries (never a `value -> meaning` JSON object) —
+/// verifies the PUT wire shape end to end, not just the pure crate-level
+/// canon/digest tests.
+#[tokio::test]
+async fn put_semantic_accepts_typed_enum_value_list_shape() {
+    let schema = semantic_schema(41);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let mut body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    body["metadata"]["fields"][0]["semantics"]["enum_semantics"] = serde_json::json!([
+        {
+            "value": {"type": "string", "v": "ACTIVE"},
+            "meaning": {"vocabulary": "deblob/order-status/v1", "code": "pending"}
+        },
+        {
+            "value": {"type": "bool", "v": true},
+            "meaning": {"vocabulary": "deblob/order-status/v1", "code": "confirmed"}
+        }
+    ]);
+
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = body_json(resp).await;
+    assert_eq!(
+        json["data"]["metadata"]["fields"][0]["semantics"]["enum_semantics"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+/// The pre-P2D-polish wire shape (`enum_semantics` as a `value -> meaning`
+/// JSON object) is now a hard rejection — never silently accepted/coerced.
+/// Valid JSON that doesn't match the target Rust shape surfaces as axum's
+/// `JsonRejection::JsonDataError`, which axum itself maps to `422` (`400`
+/// is reserved for actually-malformed JSON syntax) — this handler never
+/// even runs, since `Json<PutSemanticRequest>` extraction fails first.
+#[tokio::test]
+async fn put_semantic_rejects_legacy_object_shaped_enum_semantics() {
+    let schema = semantic_schema(42);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let mut body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    body["metadata"]["fields"][0]["semantics"]["enum_semantics"] = serde_json::json!({
+        "ACTIVE": {"vocabulary": "deblob/order-status/v1", "code": "pending"}
+    });
+
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// An `enum_semantics[].value` with an unrecognized `"type"` tag is a hard
+/// rejection (`422`, see the previous test's doc comment), never silently
+/// coerced into one of the known variants.
+#[tokio::test]
+async fn put_semantic_rejects_unknown_enum_value_type_tag() {
+    let schema = semantic_schema(43);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let mut body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    body["metadata"]["fields"][0]["semantics"]["enum_semantics"] = serde_json::json!([
+        {
+            "value": {"type": "array", "v": []},
+            "meaning": {"vocabulary": "deblob/order-status/v1", "code": "pending"}
+        }
+    ]);
+
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 #[tokio::test]
 async fn get_semantic_revisions_lists_history() {
     let schema = semantic_schema(29);
@@ -1320,6 +1477,130 @@ async fn semantic_endpoints_require_bearer() {
             None,
             None,
             &semantic_body("Cel", Some("correction"), Some("initial annotation")),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------
+// Family reads (P2-D polish Task 2)
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn get_family_returns_record_with_current_version() {
+    let family_id = deblob_core::id::FamilyId::new_v7();
+    let s1 = family_schema(40, family_id.clone(), 1);
+    let s2 = family_schema(41, family_id.clone(), 2);
+    let state = make_state(
+        FakeRegistry::new(vec![s1, s2]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+
+    let resp = app
+        .oneshot(get(
+            &format!("/api/v1/families/{}", family_id.as_str()),
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["data"]["family_id"], family_id.as_str());
+    assert_eq!(body["data"]["current_version"], 2);
+}
+
+#[tokio::test]
+async fn get_family_404_when_unknown() {
+    let app = api::router(empty_state());
+    let unknown = deblob_core::id::FamilyId::new_v7();
+
+    let resp = app
+        .oneshot(get(
+            &format!("/api/v1/families/{}", unknown.as_str()),
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["code"], "not_found");
+}
+
+#[tokio::test]
+async fn get_family_versions_returns_all_versions_in_order() {
+    let family_id = deblob_core::id::FamilyId::new_v7();
+    let s1 = family_schema(42, family_id.clone(), 1);
+    let s2 = family_schema(43, family_id.clone(), 2);
+    let state = make_state(
+        FakeRegistry::new(vec![s1, s2]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+
+    let resp = app
+        .oneshot(get(
+            &format!("/api/v1/families/{}/versions", family_id.as_str()),
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    let versions: Vec<u64> = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_u64().unwrap())
+        .collect();
+    assert_eq!(versions, vec![1, 2]);
+}
+
+#[tokio::test]
+async fn get_family_versions_404_when_unknown() {
+    let app = api::router(empty_state());
+    let unknown = deblob_core::id::FamilyId::new_v7();
+
+    let resp = app
+        .oneshot(get(
+            &format!("/api/v1/families/{}/versions", unknown.as_str()),
+            Some(TOKEN),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn family_endpoints_require_bearer() {
+    let family_id = deblob_core::id::FamilyId::new_v7();
+    let app = api::router(empty_state());
+
+    let resp = app
+        .clone()
+        .oneshot(get(
+            &format!("/api/v1/families/{}", family_id.as_str()),
+            None,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+
+    let resp2 = app
+        .oneshot(get(
+            &format!("/api/v1/families/{}/versions", family_id.as_str()),
+            None,
         ))
         .await
         .unwrap();

@@ -288,11 +288,23 @@ pub async fn put_semantic(
             );
         }
 
-        // (a) semantic drift: only meaningful once the schema's family has
-        // an ADJACENT (version - 1) member to compare against — version 1
-        // has no prior version by definition.
-        if record.version.0 > 1 {
-            let prior_version = FamilyVersion(record.version.0 - 1);
+        // (a) semantic drift: compare against EVERY prior family version
+        // (P2-D polish Task 1), not only the adjacent (version - 1) one —
+        // version 1 has no prior version by definition, hence the loop
+        // simply doesn't run for it (`1..record.version.0` is empty when
+        // `record.version.0 <= 1`). This catches e.g. v1 and v3 carrying
+        // different compatible `sem_` while v2 sits unannotated in
+        // between, which the old adjacent-only check could never see.
+        // Bounded by the current version number — linear in a family's
+        // version count, acceptable since families stay small — and each
+        // prior version is independent best-effort: a lookup/drift-check
+        // error on ONE prior is logged and does not stop the remaining
+        // priors from being checked, since this is diagnostic-only and
+        // must never fail an annotation that already succeeded. The
+        // algorithm itself (`check_family_version_drift`) is untouched;
+        // only the SET of versions it runs against has grown.
+        for v in 1..record.version.0 {
+            let prior_version = FamilyVersion(v);
             match state
                 .registry
                 .family_version_schema(&record.family_id, prior_version)
@@ -314,21 +326,24 @@ pub async fn put_semantic(
                         tracing::warn!(
                             error = %e,
                             family_id = %record.family_id.as_str(),
+                            prior_version = prior_version.0,
                             "semantic-drift check failed (diagnostic-only, annotation already succeeded)"
                         );
                     }
                 }
                 Ok(None) => {
-                    // No adjacent version published (e.g. version 1 of a
-                    // family that skipped a number, or a schema that was
-                    // never actually published through a family at all) —
-                    // nothing to compare against, not an error.
+                    // No schema published at this version (e.g. a family
+                    // that skipped a number, or a schema that was never
+                    // actually published through a family at all) —
+                    // nothing to compare against at THIS version, not an
+                    // error; keep checking the remaining prior versions.
                 }
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
                         family_id = %record.family_id.as_str(),
-                        "looking up the prior family version failed (diagnostic-only, annotation already succeeded)"
+                        prior_version = prior_version.0,
+                        "looking up a prior family version failed (diagnostic-only, annotation already succeeded)"
                     );
                 }
             }

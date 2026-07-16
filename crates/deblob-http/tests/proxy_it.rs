@@ -117,6 +117,20 @@ impl Registry for FakeRegistry {
     ) -> Result<Option<SchemaId>, CoreError> {
         panic!("not exercised by HotMatcher::classify")
     }
+
+    async fn get_family(
+        &self,
+        _family_id: &FamilyId,
+    ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+        panic!("not exercised by HotMatcher::classify")
+    }
+
+    async fn list_family_versions(
+        &self,
+        _family_id: &FamilyId,
+    ) -> Result<Vec<FamilyVersion>, CoreError> {
+        panic!("not exercised by HotMatcher::classify")
+    }
 }
 
 // Silence "never constructed"/"never called" warnings on the unused parts
@@ -395,6 +409,20 @@ impl Registry for DownRegistry {
         _family_id: &FamilyId,
         _version: FamilyVersion,
     ) -> Result<Option<SchemaId>, CoreError> {
+        panic!("not exercised by HotMatcher::classify")
+    }
+
+    async fn get_family(
+        &self,
+        _family_id: &FamilyId,
+    ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+        panic!("not exercised by HotMatcher::classify")
+    }
+
+    async fn list_family_versions(
+        &self,
+        _family_id: &FamilyId,
+    ) -> Result<Vec<FamilyVersion>, CoreError> {
         panic!("not exercised by HotMatcher::classify")
     }
 }

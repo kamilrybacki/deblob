@@ -305,6 +305,73 @@ async fn family_versions_allocate_atomically() {
 }
 
 #[tokio::test]
+async fn get_family_and_list_family_versions_reflect_published_versions() {
+    // publish two schemas to the SAME family → get_family reports the
+    // current (highest) version, list_family_versions reports both 1 and 2.
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let family = FamilyId::new_v7();
+    let cand1 = CandidateId::from_digest(&[50u8; 32]);
+    let cand2 = CandidateId::from_digest(&[51u8; 32]);
+    let rec1 = record_with([60u8; 32], family.clone());
+    let rec2 = record_with([61u8; 32], family.clone());
+
+    reg.publish(rec1.clone(), &cand1, "bucket:5:aaa", &[], "kamil", "v1")
+        .await
+        .unwrap();
+    reg.publish(rec2.clone(), &cand2, "bucket:5:bbb", &[], "kamil", "v2")
+        .await
+        .unwrap();
+
+    let fam = reg
+        .get_family(&family)
+        .await
+        .unwrap()
+        .expect("family must exist after two publishes");
+    assert_eq!(fam.family_id, family);
+    assert_eq!(fam.current_version, FamilyVersion(2));
+
+    let versions = reg.list_family_versions(&family).await.unwrap();
+    assert_eq!(versions, vec![FamilyVersion(1), FamilyVersion(2)]);
+}
+
+#[tokio::test]
+async fn get_family_unknown_returns_none_not_error() {
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let unknown = FamilyId::new_v7();
+    assert_eq!(reg.get_family(&unknown).await.unwrap(), None);
+    assert_eq!(
+        reg.list_family_versions(&unknown).await.unwrap(),
+        Vec::<FamilyVersion>::new()
+    );
+}
+
+#[tokio::test]
 async fn refuses_volatile_redis_without_flag() {
     // container has no AOF → connect with allow_volatile: false must error
     let node = Redis::default().start().await.unwrap();

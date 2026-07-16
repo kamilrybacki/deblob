@@ -719,6 +719,20 @@ mod tests {
         ) -> Result<Option<SchemaId>, CoreError> {
             unimplemented!("not exercised by retrieval tests")
         }
+
+        async fn get_family(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+        ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+            unimplemented!("not exercised by retrieval tests")
+        }
+
+        async fn list_family_versions(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+        ) -> Result<Vec<FamilyVersion>, CoreError> {
+            unimplemented!("not exercised by retrieval tests")
+        }
     }
 
     /// A `Registry` fake that, unlike [`FakeRegistry`] above, actually
@@ -830,6 +844,20 @@ mod tests {
             _family_id: &deblob_core::id::FamilyId,
             _version: FamilyVersion,
         ) -> Result<Option<SchemaId>, CoreError> {
+            unimplemented!("not exercised by retrieval tests")
+        }
+
+        async fn get_family(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+        ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+            unimplemented!("not exercised by retrieval tests")
+        }
+
+        async fn list_family_versions(
+            &self,
+            _family_id: &deblob_core::id::FamilyId,
+        ) -> Result<Vec<FamilyVersion>, CoreError> {
             unimplemented!("not exercised by retrieval tests")
         }
     }
