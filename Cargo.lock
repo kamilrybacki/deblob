@@ -641,6 +641,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
 ]
