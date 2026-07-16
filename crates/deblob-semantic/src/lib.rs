@@ -17,7 +17,7 @@ pub mod vocab;
 
 pub use canon::{canonical_semantic_bytes, CanonError};
 pub use digest::semantic_fingerprint;
-pub use path::{canonical_field_paths, validate_paths, PathError};
+pub use path::{canonical_field_paths, canonical_field_paths_for, validate_paths, PathError};
 pub use signature::{
     has_anchor, matched_feature_classes, semantic_signature, shared_anchor_count, similarity,
     strength, Score, SemanticSignature, Strength, SIGNATURE_VERSION, WEIGHTS_VERSION,

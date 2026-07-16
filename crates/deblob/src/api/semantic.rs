@@ -17,7 +17,7 @@ use deblob_core::revision::{Etag, ReasonCode, Revision};
 use deblob_core::semantic::SemanticMetadata;
 use deblob_semantic::signature::{Score, Strength};
 use deblob_semantic::{
-    canonical_field_paths, canonical_semantic_bytes, semantic_fingerprint, validate_metadata,
+    canonical_field_paths_for, canonical_semantic_bytes, semantic_fingerprint, validate_metadata,
     validate_paths,
 };
 use serde::{Deserialize, Serialize};
@@ -213,9 +213,13 @@ pub async fn put_semantic(
     validate_metadata(&req.metadata, &state.semantic_registries)
         .map_err(|e| ApiError::unprocessable(e.to_string()))?;
 
-    // Task 4: every annotated path must exist on the schema's own
-    // structural canonical form. Names only the offending path.
-    let valid_paths = canonical_field_paths(&record.canonical)
+    // Task 4 (+ the Task 8 monoid-grammar follow-up): every annotated path
+    // must exist on the schema's own structural canonical form. Dispatches
+    // on the record's OWN `canonicalizer` so a PROMOTED schema (written in
+    // the `deblob-monoid-v1` generalized-field grammar, not the plain
+    // `deblob-canon-v1` shape grammar) enumerates its real paths instead of
+    // 422-ing on a grammar mismatch. Names only the offending path.
+    let valid_paths = canonical_field_paths_for(&record.canonicalizer, &record.canonical)
         .map_err(|e| ApiError::unprocessable(e.to_string()))?;
     validate_paths(&req.metadata, &valid_paths)
         .map_err(|e| ApiError::unprocessable(e.to_string()))?;

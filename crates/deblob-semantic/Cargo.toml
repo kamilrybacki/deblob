@@ -14,3 +14,4 @@ serde_json.workspace = true
 
 [dev-dependencies]
 deblob-fingerprint = { path = "../deblob-fingerprint" }
+deblob-monoid = { path = "../deblob-monoid" }

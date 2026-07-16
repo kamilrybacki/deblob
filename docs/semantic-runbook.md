@@ -217,47 +217,51 @@ field carrying the same meaning. Response:
   revisions are **not queryable** through this endpoint at all, regardless
   of what the caller passes.
 
-## Known gap: annotation is incompatible with a REALLY promoted schema
+## Fixed: annotation now supports both canonicalizer grammars
 
-**Discovered by the Task 8 capstone** (`crates/deblob/tests/
-semantic_capstone_it.rs`'s module doc comment has the full technical
-detail) — recorded here because it is operator-visible, not just an
-implementation footnote:
+**Originally discovered by the Task 8 capstone** (`crates/deblob/tests/
+semantic_capstone_it.rs`'s module doc comment has the full incident
+history) and **fixed by the Task 8 follow-up**
+(`crates/deblob-semantic/src/path.rs`, `crates/deblob/src/api/
+semantic.rs`) — recorded here because the original gap was
+operator-visible, not just an implementation footnote.
 
-`Promoter::promote` (P1) ALWAYS stores a promoted `SchemaRecord` with
-`canonicalizer: "deblob-monoid-v1"` (`deblob_monoid::GENERALIZER`) and a
-`canonical` JSON shaped like `{"optional": ..., ...}` (the generalized,
-type-union+optionality profile). `deblob_semantic::path::
-canonical_field_paths` — which `PUT .../semantic` calls UNCONDITIONALLY,
-even for an `event_type`-only annotation with zero field entries — only
-understands the PLAIN `"deblob-canon-v1"` shape grammar
-(`{"t": ..., "f": {...}}`). The result: **every schema actually published
-through real candidate promotion currently 422s on ANY semantic
-annotation attempt**, with `"structural canonical form does not match the
-deblob-canon-v1 shape grammar"`.
+A `SchemaRecord::canonical` string is written in one of TWO grammars,
+selected by `SchemaRecord::canonicalizer`:
 
-This is not a corner case — every family_version/schema every deblob
-deployment will ever mint via `POST /candidates/{id}/promote` hits this.
-Every prior P2-D task's test suite (1-7, 9, 10) missed it because each one
-exercised the governance API against a HAND-BUILT plain-canonicalizer
-`SchemaRecord`, never a genuinely-promoted one — a gap in test coverage,
-not in test correctness, that only a true end-to-end run (through the real
-`serve()`/`Promoter` wiring, real Kafka+Redis) could surface.
+- **`"deblob-canon-v1"`** (`deblob_fingerprint::canon::CANONICALIZER`): the
+  plain shape tree — `{"t":"obj","f":{...}}` / `{"t":"arr","of":[...]}` /
+  `{"t":"null|bool|num|str"}`.
+- **`"deblob-monoid-v1"`** (`deblob_monoid::profile::GENERALIZER`): the
+  generalized field-statistics tree every `Promoter::promote`d/PROMOTED
+  schema actually carries — `{"optional":bool,"types":[...],
+  "children":{...},"elem":{...}}`, rooted at the bare field body itself
+  (the `{"gen":...,"fields":...}` framing only ever appears in
+  `generalized_fingerprint`'s hash preimage, never in the persisted
+  `canonical` string).
 
-**Workaround today: none at the API level.** An operator cannot currently
-annotate a real production schema.
+`deblob_semantic::path::canonical_field_paths_for(canonicalizer,
+canonical)` dispatches on the schema record's OWN `canonicalizer` to pick
+the matching walker, and `api::semantic::put_semantic` calls it with
+`record.canonicalizer` instead of assuming the plain grammar. Path
+enumeration is grammar-equivalent either way: an object's fields (`"f"` /
+`"children"`) each contribute one `Key(name)` segment; an array's elements
+(`"of"` / `"elem"`) contribute one shared `Wildcard` segment;
+`types`/`optional` never affect the enumerated path set. An unrecognized
+`canonicalizer` string is a named `PathError::UnknownCanonicalizer`,
+surfaced as `422` — never a silent accept.
 
-**Fix is out of scope for this task** (Task 8's brief scoped exactly two
-wirings — config-seeded registries, and drift/collision firing — neither of
-which is this). The fix belongs to a follow-up task and has at least two
-honest shapes: (a) teach `canonical_field_paths`/`crate::semantic_drift::
-typed_paths` a SECOND walker for the generalized-profile grammar (real
-architecture work — the generalized-profile grammar was never designed
-with field-path enumeration in mind), or (b) gate `PUT .../semantic`
-functionality on `record.canonicalizer == "deblob-canon-v1"` and return a
-clear, documented `422`/`501` for a generalized schema until (a) lands.
-Track this as the FIRST thing a Task 9/P3 semantic-annotation follow-up
-should resolve.
+**Practical effect:** a schema published through real candidate promotion
+(`POST /candidates/{id}/promote`) can now be annotated exactly like a
+hand-published plain-canonicalizer schema — `PUT .../semantic` succeeds for
+a path that actually exists in the promoted schema's generalized field
+structure, and still `422`s for one that doesn't. Proven end to end against
+a real `ColdLane::ingest` -> `Promoter::promote` -> `PUT .../semantic` HTTP
+call over real Redis in `crates/deblob/tests/
+semantic_monoid_promoted_it.rs`; `crates/deblob/tests/
+semantic_capstone_it.rs` still hand-publishes plain-canonicalizer fixture
+schemas (an intentional, orthogonal test-isolation choice for that suite,
+not a workaround for this gap anymore).
 
 ## Deferred to P3/P4 gates
 
