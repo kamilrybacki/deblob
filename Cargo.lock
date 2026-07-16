@@ -680,6 +680,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "deblob-experiment"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "deblob",
+ "deblob-core",
+ "deblob-eval",
+ "deblob-slm",
+ "futures-executor",
+ "rand 0.8.7",
+ "rand_chacha 0.3.1",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+]
+
+[[package]]
 name = "deblob-fingerprint"
 version = "0.1.0"
 dependencies = [
