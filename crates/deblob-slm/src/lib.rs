@@ -11,12 +11,18 @@
 //! since only `deblob-slm` implementations (`HttpInferencer`, later
 //! `LocalInferencer`) and callers of this port need it.
 
+pub mod adapters;
 pub mod cache;
 pub mod contract;
 pub mod feedback;
 pub mod http;
 pub mod prompt;
+pub mod runtime;
 
+pub use adapters::{
+    CactusConfig, CactusInferencer, LlamaCppConfig, LlamaCppInferencer, OllamaConfig,
+    OllamaInferencer, RetryPolicy,
+};
 pub use contract::{
     validate_decision, AbstainCause, ContractError, EndpointStatus, FamilyCandidate,
     InferenceBudget, InferenceDecision, InferenceError, InferenceOutcome, InferenceRequest,
@@ -28,3 +34,4 @@ pub use prompt::{
     build_prompt, detect_injection, redact_field_name, CandidateProfileView, NumericBucket, Prompt,
     RedactedFieldStat, RedactedName, MAX_FIELDS, MAX_NAME_LEN, MAX_PATH_DEPTH,
 };
+pub use runtime::{Backend, ModelBundle, ModelFamily, RuntimeInfo};
