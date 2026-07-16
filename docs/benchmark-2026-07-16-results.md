@@ -26,3 +26,17 @@ slm/http_proxy disabled. Report: docs/benchmark-report-2026-07-16.html + Artifac
 ## Recommendation
 Batch records per Kafka transaction in deblob-kafka's relay before P3/P4 — amortises the ~73 ms commit,
 should raise relay throughput ~100×, preserves exactly-once per batch. Every other layer is already fast.
+
+## RELAY FIX RESULTS (batching + pipelining)
+The benchmark's headline bottleneck (per-record EOS transaction) was fixed in two layers:
+1. Transaction batching (500 records/txn) — amortises the commit. Alone: 14 -> 49 rec/s (3.5x).
+   Revealed a 2nd bottleneck: the relay produced each record SERIALLY inside the txn
+   (produce().await per record -> ~1000 awaited round-trips per 500-record batch -> ~10s/txn, CPU idle).
+2. Intra-batch produce pipelining (send_result + await-all-before-commit) — parallelises the produces.
+   Combined: **14 -> 598 rec/s (~43x)**, and Deblob CPU went from idle 30m to 1131m
+   (now CPU-bound / doing real work, not commit-latency-bound).
+Both preserve exactly-once (chaos suite green vs real KRaft: crash-before-commit invisible,
+whole-batch reprocess, per-partition offset coverage, rebalance, duplicate-delivery).
+598/s is the single-partition/single-relay figure (events.raw had 1 partition; Deblob had headroom
+to its 2-core limit) -> scales further with more partitions + relay instances.
+Merged to main: 96a3660 (batching), 509f1a1 (pipelining).
