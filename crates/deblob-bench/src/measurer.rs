@@ -122,6 +122,22 @@ pub fn consumer_client_config(brokers: &str, group_id: &str) -> ClientConfig {
 /// ending a run promptly once production has genuinely finished.
 pub const DEFAULT_IDLE_TIMEOUT: Duration = Duration::from_secs(10);
 
+/// How long [`measure_topic`] will wait for the consumer group to receive
+/// its partition assignment before it starts the idle-timeout clock at all.
+///
+/// This is the fix for the live k3s run that captured 0-of-20000 tagged
+/// messages: a fresh consumer group's join (coordinator discovery +
+/// `JoinGroup`/`SyncGroup` rounds) can easily take several seconds, and the
+/// old code started `last_progress` at loop entry — so with a short
+/// `--measure-timeout-secs`/idle window, the loop could hit its stop
+/// condition before the consumer was ever actually assigned a partition,
+/// let alone had a chance to poll a real message. Bounded generously here
+/// (and separately capped by the caller's overall `deadline`, so a
+/// genuinely unreachable broker still can't hang the bench forever) so a
+/// cold group join is tolerated even when the caller passes a tight idle
+/// timeout.
+pub const DEFAULT_ASSIGNMENT_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Why [`measure_topic`]'s consume loop stopped. Exists so the stop
 /// decision is directly observable/testable, not just an implicit `break`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -184,6 +200,51 @@ pub async fn measure_topic(
 
     let mut acc = MeasureAccumulator::default();
     let overall_deadline = tokio::time::Instant::now() + deadline;
+
+    // Phase 1: wait for the consumer group to actually be assigned
+    // partitions before starting the idle clock. Calling `consumer.recv()`
+    // is what drives rdkafka's internal join/rebalance machinery, so this
+    // polls it — bounded by `DEFAULT_ASSIGNMENT_TIMEOUT` and by the overall
+    // deadline (never waits past either) — until `consumer.assignment()`
+    // is non-empty. If a message happens to arrive during this window (it
+    // can: assignment completing and the first message being handed back
+    // can land in the same `recv()`), it's folded into `acc` immediately
+    // rather than discarded.
+    let assignment_deadline =
+        overall_deadline.min(tokio::time::Instant::now() + DEFAULT_ASSIGNMENT_TIMEOUT);
+    loop {
+        let assigned = consumer
+            .assignment()
+            .map(|tpl| tpl.count() > 0)
+            .unwrap_or(false);
+        if assigned {
+            break;
+        }
+        let now = tokio::time::Instant::now();
+        if now >= assignment_deadline {
+            break;
+        }
+        let wait = assignment_deadline.saturating_duration_since(now);
+        match tokio::time::timeout(wait, consumer.recv()).await {
+            Ok(Ok(msg)) => {
+                let processed = process_headers(msg.headers(), now_ns());
+                acc.record(processed);
+                break;
+            }
+            // A genuine Kafka error this early ends the run — fall through
+            // to the main loop, which will immediately observe the
+            // deadline/idle condition and return whatever's in `acc`
+            // (nothing, in this case) rather than propagating a hard
+            // error over a partial run.
+            Ok(Err(_kafka_err)) => break,
+            // Still waiting on assignment; loop and recheck.
+            Err(_elapsed) => {}
+        }
+    }
+
+    // The idle clock starts here — AFTER assignment (or after giving up
+    // waiting for it), never at consumer construction. A slow group join
+    // no longer eats into the idle budget.
     let mut last_progress = tokio::time::Instant::now();
 
     loop {

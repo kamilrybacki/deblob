@@ -296,3 +296,66 @@ async fn list_families_by_band_depth_finds_renamed_bucket() {
         "widened discovery must find record_b via (band, depth) prefix, ignoring reqhash8"
     );
 }
+
+/// fix1: `rebuild_index` must reconstruct the `deblob:schemas` listing
+/// index purely from bare `deblob:schema:*` hashes — the repair path for a
+/// vault written before that index existed (or one where it was lost).
+#[tokio::test]
+async fn rebuild_index_restores_schemas_listing_index() {
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let reg = RedisRegistry::connect(
+        &url,
+        RedisOpts {
+            allow_volatile: true,
+        },
+    )
+    .await
+    .unwrap();
+
+    let (record, bucket) = record_and_bucket(br#"{"id":"x","note":"z"}"#, FamilyId::new_v7());
+    let cand = CandidateId::from_digest(&[58u8; 32]);
+    reg.publish(record.clone(), &cand, &bucket, &[], "kamil", "publish")
+        .await
+        .unwrap();
+
+    // Sanity: listed right after publish (fix1 populates the index on
+    // every publish).
+    let (data, _) = reg.list_schemas(None, 50).await.unwrap();
+    assert!(
+        data.iter().any(|r| r.schema_id == record.schema_id),
+        "schema must be listed right after publish"
+    );
+
+    // Simulate a pre-fix1 vault (or a lost/corrupted index) by dropping
+    // ONLY `deblob:schemas` directly — the authoritative
+    // `deblob:schema:*` hash, including its `record`/`bucket` fields, is
+    // untouched.
+    let client = redis::Client::open(url.as_str()).unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    let _: () = conn.del("deblob:schemas").await.unwrap();
+
+    let (data_after_drop, cursor_after_drop) = reg.list_schemas(None, 50).await.unwrap();
+    assert!(
+        data_after_drop.is_empty(),
+        "listing index gone -> list_schemas must return no schemas, not an error"
+    );
+    assert!(
+        cursor_after_drop.is_none(),
+        "a genuinely empty index must not carry a next_cursor"
+    );
+
+    // Rebuild purely from deblob:schema:* -> listing restored.
+    reg.rebuild_index().await.unwrap();
+
+    let (data_restored, _) = reg.list_schemas(None, 50).await.unwrap();
+    assert!(
+        data_restored
+            .iter()
+            .any(|r| r.schema_id == record.schema_id),
+        "rebuild_index must restore the schema to the listing index, got: {data_restored:?}"
+    );
+}

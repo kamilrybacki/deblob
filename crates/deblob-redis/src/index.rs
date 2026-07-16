@@ -22,7 +22,7 @@ use deblob_core::id::SchemaId;
 use deblob_core::ports::{FamilyRef, Registry};
 use redis::AsyncCommands;
 
-use crate::registry::{redis_err, RedisRegistry};
+use crate::registry::{redis_err, RedisRegistry, SCHEMA_INDEX_KEY};
 
 /// Redis pattern matching every derived structural-index key. `rebuild_index`
 /// drops everything matching this pattern before reconstructing it, and
@@ -266,16 +266,25 @@ impl RedisRegistry {
         self.list_families_in_buckets_bucketed(&keys).await
     }
 
-    /// Rebuild the entire structural index from scratch, purely from the
-    /// authoritative `deblob:schema:*` records: drops every key matching
-    /// [`INDEX_KEY_PATTERN`], then re-`SADD`s each schema's membership into
-    /// the bucket recorded on its own hash (the `bucket` field written by
-    /// `publish`). The index is disposable — this is always safe to run,
-    /// online, at any time. Returns the number of schemas reindexed.
+    /// Rebuild the entire structural index AND the schemas-listing index
+    /// (fix1) from scratch, purely from the authoritative `deblob:schema:*`
+    /// records: drops every key matching [`INDEX_KEY_PATTERN`] plus
+    /// [`SCHEMA_INDEX_KEY`] itself, then re-`SADD`s each schema's membership
+    /// into the bucket recorded on its own hash (the `bucket` field written
+    /// by `publish`) AND into `SCHEMA_INDEX_KEY`. Both indexes are
+    /// disposable — this is always safe to run, online, at any time — and
+    /// this is the repair path for a vault written before `SCHEMA_INDEX_KEY`
+    /// existed: run `rebuild_index` once and `GET /api/v1/schemas` starts
+    /// returning real pages again. Returns the number of schemas whose
+    /// structural-index bucket membership was reindexed (schemas
+    /// pre-dating the `bucket` field are still added to `SCHEMA_INDEX_KEY`
+    /// — see below — but are not counted here, matching this return
+    /// value's pre-fix1 meaning).
     pub async fn rebuild_index(&self) -> Result<u64, CoreError> {
         let mut conn = self.conn();
 
         delete_matching(conn.clone(), INDEX_KEY_PATTERN).await?;
+        let _: () = conn.del(SCHEMA_INDEX_KEY).await.map_err(redis_err)?;
 
         let mut count: u64 = 0;
         let mut cursor = "0".to_string();
@@ -292,6 +301,17 @@ impl RedisRegistry {
 
             for key in &keys {
                 let sch_id_str = key.strip_prefix("deblob:schema:").unwrap_or(key);
+
+                // fix1: every `deblob:schema:*` key found is a real,
+                // authoritative schema record — restore its
+                // SCHEMA_INDEX_KEY membership unconditionally, independent
+                // of whether it also has the (older) `bucket` field the
+                // structural-index rebuild below depends on.
+                let _: () = conn
+                    .sadd(SCHEMA_INDEX_KEY, sch_id_str)
+                    .await
+                    .map_err(redis_err)?;
+
                 let bucket: Option<String> = conn.hget(key, "bucket").await.map_err(redis_err)?;
                 let Some(bucket) = bucket else {
                     // Defensive: a schema published before the `bucket`

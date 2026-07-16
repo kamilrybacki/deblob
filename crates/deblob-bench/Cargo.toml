@@ -25,3 +25,4 @@ clap = { version = "4", features = ["derive"] }
 [dev-dependencies]
 deblob-core = { path = "../deblob-core" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
+testcontainers-modules = { version = "0.11", features = ["kafka"] }

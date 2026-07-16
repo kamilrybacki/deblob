@@ -76,6 +76,20 @@ fn published_key(id: &SchemaId) -> String {
 /// check two places.
 pub(crate) const AUDIT_KEY: &str = "deblob:audit:log";
 
+/// The maintained schemas-listing index (fix1): a Redis `SET` of every
+/// published schema's `sch_id`. `PUBLISH_SCRIPT` `SADD`s it atomically
+/// alongside the schema's own record on every publish (fresh or idempotent
+/// republish), so `list_schemas` can page over this one small, dense SET —
+/// O(schemas) — instead of `SCAN`ning the entire `deblob:*` keyspace for
+/// sparse `deblob:schema:*` keys, which previously produced empty pages
+/// with a non-zero cursor even when schemas existed (a `SCAN COUNT` batch
+/// over the whole keyspace can easily land on zero schema keys among the
+/// thousands of candidate/evidence/index/semantic keys sharing the same
+/// prefix space). `crate::index::rebuild_index` reconstructs this SET from
+/// the authoritative `deblob:schema:*` hashes, so a vault written before
+/// this index existed is repairable by running it once.
+pub(crate) const SCHEMA_INDEX_KEY: &str = "deblob:schemas";
+
 pub(crate) fn redis_err(e: redis::RedisError) -> CoreError {
     CoreError::RegistryUnavailable(e.to_string())
 }
@@ -286,7 +300,8 @@ impl Registry for RedisRegistry {
             .key(alias_key(alias_from))
             .key(bucket_key)
             .key(AUDIT_KEY)
-            .key(published_key(&record.schema_id));
+            .key(published_key(&record.schema_id))
+            .key(SCHEMA_INDEX_KEY);
         for (variant_bucket, _) in variant_members {
             invocation.key(variant_bucket);
         }
@@ -322,6 +337,16 @@ impl Registry for RedisRegistry {
         .transpose()
     }
 
+    /// fix1: pages over the maintained [`SCHEMA_INDEX_KEY`] SET via `SSCAN`
+    /// — never `SCAN`s the whole `deblob:*` keyspace. Every member of that
+    /// SET is a real `sch_id` (nothing else is ever `SADD`ed into it), so
+    /// every batch `SSCAN` returns is, by construction, real schema ids —
+    /// O(schemas), not O(keyspace) — which is what makes a returned page
+    /// empty ONLY when there are genuinely no more schemas to return
+    /// (`next_cursor` is then `None` too). A member whose `deblob:schema:*`
+    /// hash is somehow missing (never expected — schemas are immutable and
+    /// never deleted, spec §6) is defensively skipped rather than surfaced
+    /// as an error, matching this function's pre-fix1 behaviour.
     async fn list_schemas(
         &self,
         cursor: Option<String>,
@@ -330,18 +355,18 @@ impl Registry for RedisRegistry {
         let mut conn = self.conn();
         let start_cursor = cursor.unwrap_or_else(|| "0".to_string());
         let count = limit.max(1);
-        let (next_cursor, keys): (String, Vec<String>) = redis::cmd("SCAN")
+        let (next_cursor, ids): (String, Vec<String>) = redis::cmd("SSCAN")
+            .arg(SCHEMA_INDEX_KEY)
             .arg(&start_cursor)
-            .arg("MATCH")
-            .arg("deblob:schema:*")
             .arg("COUNT")
             .arg(count)
             .query_async(&mut conn)
             .await
             .map_err(redis_err)?;
 
-        let mut records = Vec::with_capacity(keys.len());
-        for key in keys {
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            let key = format!("deblob:schema:{id}");
             let (record_json, version): (Option<String>, Option<String>) = redis::cmd("HMGET")
                 .arg(&key)
                 .arg("record")
