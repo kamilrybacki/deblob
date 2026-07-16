@@ -132,6 +132,20 @@ impl Registry for MissRegistry {
     ) -> Result<Option<SchemaId>, CoreError> {
         Ok(None)
     }
+
+    async fn get_family(
+        &self,
+        _family_id: &deblob_core::id::FamilyId,
+    ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+        Ok(None)
+    }
+
+    async fn list_family_versions(
+        &self,
+        _family_id: &deblob_core::id::FamilyId,
+    ) -> Result<Vec<FamilyVersion>, CoreError> {
+        Ok(vec![])
+    }
 }
 
 fn matcher() -> Arc<HotMatcher> {

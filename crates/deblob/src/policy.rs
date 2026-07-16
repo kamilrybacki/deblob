@@ -377,6 +377,20 @@ mod tests {
         ) -> Result<Option<SchemaId>, CoreError> {
             unimplemented!("not exercised by promoter tests")
         }
+
+        async fn get_family(
+            &self,
+            _family_id: &FamilyId,
+        ) -> Result<Option<deblob_core::ports::FamilyRecord>, CoreError> {
+            unimplemented!("not exercised by promoter tests")
+        }
+
+        async fn list_family_versions(
+            &self,
+            _family_id: &FamilyId,
+        ) -> Result<Vec<FamilyVersion>, CoreError> {
+            unimplemented!("not exercised by promoter tests")
+        }
     }
 
     fn profile_of(json: &str) -> MonoidProfile {

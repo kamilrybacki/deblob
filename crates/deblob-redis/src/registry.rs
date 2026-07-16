@@ -4,7 +4,7 @@ use crate::health::HealthGate;
 use crate::lua::{PUBLISH_SCRIPT, SEM_APPEND_SCRIPT};
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
-use deblob_core::ports::{FamilyRef, Registry, SchemaRecord};
+use deblob_core::ports::{FamilyRecord, FamilyRef, Registry, SchemaRecord};
 use redis::{AsyncCommands, Client, Script};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -408,5 +408,46 @@ impl Registry for RedisRegistry {
             })
         })
         .transpose()
+    }
+
+    /// P2-D polish Task 2: a single `HGET` on the family hash's
+    /// `next_version` field — the SAME counter `crate::lua::PUBLISH_SCRIPT`'s
+    /// `HINCRBY` maintains (fresh publish -> increment; idempotent
+    /// republish -> untouched). `None` for a family hash that doesn't
+    /// exist at all (nothing ever published to it) — a READ-only addition,
+    /// no new write, no change to `publish`'s own behaviour.
+    async fn get_family(&self, family_id: &FamilyId) -> Result<Option<FamilyRecord>, CoreError> {
+        let mut conn = self.conn();
+        let raw: Option<String> = conn
+            .hget(family_key(family_id), "next_version")
+            .await
+            .map_err(redis_err)?;
+        raw.map(|v| {
+            v.parse::<u32>()
+                .map(|v| FamilyRecord {
+                    family_id: family_id.clone(),
+                    current_version: FamilyVersion(v),
+                })
+                .map_err(|e| {
+                    CoreError::RegistryUnavailable(format!("corrupt family version counter: {e}"))
+                })
+        })
+        .transpose()
+    }
+
+    /// P2-D polish Task 2: `1..=current_version`, derived from
+    /// [`RedisRegistry::get_family`] rather than a second Redis round trip
+    /// enumerating `v:1..v:N` — family versions are allocated via `HINCRBY`
+    /// and are contiguous, never sparse (spec §6, and see
+    /// `family_versions_allocate_atomically` in `registry_it.rs`), so this
+    /// derivation is exact. `Ok(vec![])` for an unknown family.
+    async fn list_family_versions(
+        &self,
+        family_id: &FamilyId,
+    ) -> Result<Vec<FamilyVersion>, CoreError> {
+        match self.get_family(family_id).await? {
+            None => Ok(vec![]),
+            Some(fam) => Ok((1..=fam.current_version.0).map(FamilyVersion).collect()),
+        }
     }
 }
