@@ -1,0 +1,105 @@
+# Cactus Deployment — serves Needle 26M via `cactus serve` over the
+# OpenAI-compat API (spec §5, `deblob_slm::adapters::cactus`'s
+# `DEFAULT_CACTUS_BASE_URL = "http://localhost:8081/v1"`; the CLI contract
+# `cactus serve Cactus-Compute/needle` is verified against
+# github.com/cactus-compute/cactus's own README). CPU-only; pinned to
+# worker nodes.
+#
+# *** UNRESOLVED CONCERN — read before deploying this file ***
+# Unlike Ollama and llama.cpp, Cactus has NO official prebuilt Linux
+# container image and NO x86_64 Linux wheel on PyPI as of this writing
+# (`cactus-compute` 2.0.1 ships only `manylinux_2_27_aarch64` +
+# macOS-arm64 wheels — verified via the PyPI JSON API). The `cactus` CLI
+# itself is built FROM SOURCE (`git clone ... && source ./setup && cactus
+# build --python`, a dev-environment script expecting `python3.12-venv`
+# and a configured git identity) and its kernels are explicitly described
+# as "ARM NEON SIMD" — this project appears to target mobile/edge ARM
+# hardware first, x86_64 server support is unconfirmed.
+#
+# This manifest is therefore shipped as a documented PLACEHOLDER: the
+# image below does not exist yet and MUST be built and pushed before this
+# Deployment will run. Two paths, in order of preference:
+#   1. If lw-c1/lw-c2 are aarch64 (`kubectl get nodes -o wide` /
+#      `uname -m` on the node): build a small image from
+#      `python:3.12-slim` that clones cactus-compute/cactus, runs
+#      `source ./setup && cactus build --python`, and ENTRYPOINTs
+#      `cactus serve Cactus-Compute/needle --host 0.0.0.0 --port 8081`.
+#      Push it to `ghcr.io/kamilandrzejrybacki-inc/cactus-server:<tag>`
+#      and update `spec.template.spec.containers[0].image` below.
+#   2. If the workers are x86_64, Cactus is very likely NOT viable —
+#      fall back to the spec §5 "Needle JAX adapter — diagnostic only"
+#      instead of this Deployment, and drop the Cactus roster entry from
+#      `30-experiment-config.yaml`'s model map.
+# See deploy/experiment/README.md for the full writeup.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cactus
+  namespace: deblob-experiment
+  labels: { app: cactus, role: model-server }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: cactus } }
+  template:
+    metadata:
+      labels: { app: cactus, role: model-server }
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: cactus
+          # PLACEHOLDER — see the file-header concern above. Must be built
+          # and pushed before `kubectl apply`/rollout will succeed; a
+          # `kubectl apply --dry-run=client` still validates the YAML shape
+          # without pulling this image.
+          image: ghcr.io/kamilandrzejrybacki-inc/cactus-server:TO_BE_BUILT
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          command: ["cactus"]
+          args: ["serve", "Cactus-Compute/needle", "--host", "0.0.0.0", "--port", "8081"]
+          env:
+            - { name: HOME, value: "/data" }
+          ports:
+            - { name: http, containerPort: 8081 }
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "1Gi" }
+          readinessProbe:
+            tcpSocket: { port: 8081 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket: { port: 8081 }
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          volumeMounts:
+            - { name: data, mountPath: /data }
+      volumes:
+        - name: data
+          emptyDir: { sizeLimit: 2Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cactus
+  namespace: deblob-experiment
+  labels: { app: cactus }
+spec:
+  selector: { app: cactus }
+  ports:
+    - { name: http, port: 8081, targetPort: 8081 }

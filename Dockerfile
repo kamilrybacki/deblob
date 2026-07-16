@@ -52,21 +52,30 @@ COPY crates ./crates
 
 # --locked: fail the build rather than silently re-resolve
 # dependencies if Cargo.lock and Cargo.toml ever drift apart.
-# Build both the server binary (`deblob`) and the benchmark client
-# (`deblob-bench`) — one image serves the Deblob Deployment (ENTRYPOINT
-# deblob) and the in-cluster benchmark Job (command deblob-bench).
+# Build the server binary (`deblob`), the benchmark client
+# (`deblob-bench`), and the comparative-experiment runner
+# (`deblob-experiment`, Task 5 —
+# docs/superpowers/specs/2026-07-16-deblob-experiment.md) — one image
+# serves the Deblob Deployment (ENTRYPOINT deblob), the in-cluster
+# benchmark Job (command deblob-bench), and the in-cluster experiment Job
+# (command deblob-experiment; see deploy/experiment/90-experiment-job.yaml).
+# `deblob-experiment` depends on the `deblob` crate itself (for
+# `deblob::shadow`/`deblob::retrain`, called verbatim — see that crate's
+# own docs), so it needs no system libraries beyond the ones already
+# installed above for rdkafka.
 #
 # Cache mounts on the cargo registry + target dir: without them, every
 # source change re-links AND re-downloads/re-compiles the full dependency
 # graph (~15 min). `target/` is a cache mount, so it never lands in the
-# image's layer filesystem — the two binaries are copied out to /out
+# image's layer filesystem — the three binaries are copied out to /out
 # (a normal, non-mounted path) inside this same RUN before the mount is
 # torn down, so the runtime stage can still COPY them out below.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/build/target \
-    cargo build --release --locked --package deblob --package deblob-bench \
+    cargo build --release --locked \
+        --package deblob --package deblob-bench --package deblob-experiment \
     && mkdir -p /out \
-    && cp target/release/deblob target/release/deblob-bench /out/
+    && cp target/release/deblob target/release/deblob-bench target/release/deblob-experiment /out/
 
 ########################################
 # Runtime
@@ -91,6 +100,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /out/deblob /usr/local/bin/deblob
 COPY --from=builder /out/deblob-bench /usr/local/bin/deblob-bench
+COPY --from=builder /out/deblob-experiment /usr/local/bin/deblob-experiment
 
 WORKDIR /app
 

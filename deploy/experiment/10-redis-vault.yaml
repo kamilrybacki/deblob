@@ -1,0 +1,95 @@
+# Reused (with a hardened securityContext added on top — review finding)
+# from deploy/bench/20-redis-vault.yaml (spec §8: "Redis vault (reuse the
+# bench AOF redis manifest — the feedback store + model registry need
+# it)") — only the namespace changed and the security posture tightened.
+# AOF everysec + noeviction, as the Deblob vault requires (it refuses
+# non-persistent Redis without --unsafe-volatile). Ephemeral storage —
+# wiped on teardown. Pinned to worker nodes. No `role: model-server`
+# label: this pod gets NO internet egress (see 05-networkpolicy.yaml).
+#
+# Security posture (matches the model-serving Deployments in this dir):
+# non-root UID/GID, `fsGroup` so the `data` emptyDir is group-writable by
+# that UID, seccomp RuntimeDefault, no privilege escalation, all
+# capabilities dropped, and a read-only root filesystem — the AOF/RDB
+# files (`dir /data` in redis.conf below) and the container's default
+# `/tmp` both land on the writable `data`/`tmp` emptyDirs instead, so
+# `redis-server` never needs to write to the image's root filesystem.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: redis-vault-conf
+  namespace: deblob-experiment
+data:
+  redis.conf: |
+    appendonly yes
+    appendfsync everysec
+    maxmemory-policy noeviction
+    save ""
+    dir /data
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis-vault
+  namespace: deblob-experiment
+  labels: { app: redis-vault }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector: { matchLabels: { app: redis-vault } }
+  template:
+    metadata:
+      labels: { app: redis-vault }
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+              - matchExpressions:
+                  - key: node-role.kubernetes.io/control-plane
+                    operator: DoesNotExist
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      containers:
+        - name: redis
+          image: redis:7.4-alpine
+          args: ["redis-server", "/etc/redis/redis.conf"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+            readOnlyRootFilesystem: true
+          ports:
+            - { name: redis, containerPort: 6379 }
+          resources:
+            requests: { cpu: "250m", memory: "512Mi" }
+            limits: { cpu: "1", memory: "2Gi" }
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          volumeMounts:
+            - { name: conf, mountPath: /etc/redis }
+            - { name: data, mountPath: /data }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: conf
+          configMap: { name: redis-vault-conf }
+        - name: data
+          emptyDir: { sizeLimit: 4Gi }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis-vault
+  namespace: deblob-experiment
+  labels: { app: redis-vault }
+spec:
+  selector: { app: redis-vault }
+  ports:
+    - { name: redis, port: 6379, targetPort: 6379 }

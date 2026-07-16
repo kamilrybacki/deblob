@@ -1,0 +1,90 @@
+# Non-secret experiment configuration (spec §8). Mirrors deploy/bench's
+# `30-deblob-config.yaml` convention (a single embedded config-file key).
+#
+# IMPORTANT — current vs forward-declared: `deblob-experiment`'s `main.rs`
+# (Task 5 is deploy-only, no Rust logic change) currently always runs
+# `RunConfig::default()` against the synthetic corpus + the mock
+# inferencer (see crates/deblob-experiment/src/run.rs's own module docs:
+# "real corpus ingestion ... and live model adapters ... are later
+# tasks"). Everything under `[models]`/`[corpus.real]` below is therefore
+# FORWARD-DECLARED — the contract a future config-loading change should
+# read — not yet consumed by the running binary. `[corpus.synthetic]`
+# records today's actual hardcoded defaults as an audit trail.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: deblob-experiment-config
+  namespace: deblob-experiment
+data:
+  experiment.toml: |
+    [corpus.synthetic]
+    # ACTIVE today — matches RunConfig::default() exactly (run.rs). A
+    # config-loading change should read these instead of the hardcoded
+    # `Default` impl, but must keep byte-identical output for this seed
+    # (run.rs's own determinism test depends on it).
+    seed = 42
+    families = 12
+    variants_per_family = 8
+    bootstrap_iterations = 2000
+    mock_disagreement_rate = 0.2
+
+    [corpus.real]
+    # FORWARD-DECLARED (spec §6b). These fixture files (checked into
+    # crates/deblob-experiment/tests/fixtures/) are NOT baked into the
+    # runtime image (the Dockerfile's runtime stage copies only compiled
+    # binaries, never `tests/` or corpus data) — ship them via a separate
+    # ConfigMap/PVC mounted at `/corpus` alongside this one once
+    # corpus-ingest wiring reads this section.
+    github_archive_fixture = "/corpus/github_archive_sample.json"
+    wikimedia_fixture = "/corpus/wikimedia_sample.json"
+
+    [models]
+    # Model roster -> endpoint map (spec §5), pointing at this
+    # namespace's model-serving Services (20/21/22-model-*.yaml).
+    [models.granite_3_1_moe_1b]
+    backend = "ollama"
+    endpoint = "http://ollama.deblob-experiment.svc.cluster.local:11434/v1"
+    model = "granite3.1-moe:1b"
+
+    [models.qwen2_5_1_5b_instruct]
+    backend = "ollama"
+    endpoint = "http://ollama.deblob-experiment.svc.cluster.local:11434/v1"
+    model = "qwen2.5:1.5b-instruct"
+
+    [models.functiongemma_270m]
+    backend = "llama_cpp"
+    endpoint = "http://llama-cpp.deblob-experiment.svc.cluster.local:8080/v1"
+    model = "functiongemma-270m-it-F16"
+
+    [models.needle_26m]
+    # See 22-model-cactus.yaml's header: this Service is a documented
+    # PLACEHOLDER until a Cactus server image is built and pushed.
+    backend = "cactus"
+    endpoint = "http://cactus.deblob-experiment.svc.cluster.local:8081/v1"
+    model = "needle-26m"
+
+    [gate]
+    # The trust gate is FROZEN (spec §1/§8): `deblob::shadow::evaluate_policy`
+    # (crates/deblob/src/shadow.rs) takes NO runtime config — its
+    # thresholds are Rust `const`s baked into the pinned `deblob`
+    # dependency at build time. This section is an AUDIT TRAIL of those
+    # constants as of this deploy, not a tunable — changing these numbers
+    # here has no effect on the running gate.
+    policy_max_distance = 0.15    # POLICY_MAX_DISTANCE
+    policy_min_margin = 0.10      # POLICY_MIN_MARGIN
+    policy_min_observations = 20  # POLICY_MIN_OBSERVATIONS
+    policy_requires_rank_one = true
+
+    [continual.training_job]
+    # Arm-C fine-tune backend (spec §7/§8): REMOTE ONLY, default = HF
+    # Jobs. `HfJobsBackend::submit`/`poll` shell out to the `hf` CLI from
+    # THIS Job's own pod (a worker) — the worker only submits/polls; HF's
+    # infrastructure does the actual training. No GPU is ever requested
+    # in this namespace (spec §9: "no real GPU training inside the
+    # cluster").
+    backend = "hfjobs"
+    hf_token_secret_ref = "experiment/hf-token"  # HF Jobs `--secrets` name reference, NOT the raw token
+    output_repo = "kamilandrzejrybacki-inc/deblob-experiment-checkpoints"
+    hardware_flavor = "cpu-basic"
+    max_usd_ceiling = 5.00
+    max_runtime_minutes = 60

@@ -1,0 +1,11 @@
+# Ephemeral comparative-experiment namespace (Task 5,
+# docs/superpowers/specs/2026-07-16-deblob-experiment.md). Teardown =
+# `kubectl delete ns deblob-experiment`. Mirrors deploy/bench's namespace
+# convention exactly.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deblob-experiment
+  labels:
+    app.kubernetes.io/part-of: deblob-experiment
+    purpose: experiment

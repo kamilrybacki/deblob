@@ -1,0 +1,103 @@
+# Namespace isolation, extended from deploy/bench/05-networkpolicy.yaml with
+# an EGRESS default-deny too (the bench stack never talked outbound to the
+# internet; this stack's model-serving pods pull weights/packages once at
+# startup, so egress needs an explicit, narrowly-scoped hole instead of the
+# bench's "ingress-only" posture).
+#
+# Net effect: every pod in the namespace can only (a) resolve DNS, (b) reach
+# other pods in this same namespace (Job -> model Services -> Redis vault),
+# and (c) — ONLY pods labelled `role: model-server` — reach the public
+# internet on 443 to fetch model weights/packages once. Nothing in this
+# namespace is reachable from, or can reach, anything outside it otherwise.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: deblob-experiment
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+  # empty ingress = deny all ingress
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-egress
+  namespace: deblob-experiment
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  # empty egress = deny all egress
+---
+# Confines the whole experiment stack to its own namespace: the experiment
+# Job, the three model-serving Deployments, and the Redis vault may all talk
+# to each other, but nothing else in the cluster can reach in and nothing
+# here can reach sideways into another namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-intra-namespace
+  namespace: deblob-experiment
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: deblob-experiment
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: deblob-experiment
+---
+# DNS resolution (CoreDNS lives in kube-system) — required for every pod
+# once default-deny-egress is in effect, including intra-namespace Service
+# DNS lookups (redis-vault.deblob-experiment.svc.cluster.local etc.).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns-egress
+  namespace: deblob-experiment
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+# The ONE deliberate egress hole: pods labelled `role: model-server` (the
+# Ollama/llama.cpp/Cactus Deployments — see 20/21/22-model-*.yaml) need
+# outbound HTTPS once at startup to pull model weights (Ollama registry,
+# Hugging Face Hub) or the Cactus package. The experiment Job and the Redis
+# vault carry no such label and therefore get NO internet egress at all —
+# satisfying spec §8's "the experiment Job may reach the model-serving
+# Services and the Redis vault only".
+#
+# This is intentionally broad on destination (0.0.0.0/0:443) because the
+# registries/CDNs behind Ollama/HF/PyPI don't publish stable IP ranges; if a
+# stricter posture is required, replace this with a CiliumNetworkPolicy
+# FQDN rule (Ollama's default CNI on this cluster is Cilium — see
+# ~/Code/CLAUDE.md's `Cilium migration gotchas` note) scoped to
+# registry.ollama.ai / huggingface.co / pypi.org / files.pythonhosted.org.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-model-weight-pull-egress
+  namespace: deblob-experiment
+spec:
+  podSelector:
+    matchLabels:
+      role: model-server
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - ipBlock: { cidr: 0.0.0.0/0 }
+      ports:
+        - { protocol: TCP, port: 443 }
