@@ -6,12 +6,11 @@
 //! directly; nothing here re-normalizes.
 
 use deblob_core::semantic::{
-    CanonicalEventTypeId, CanonicalFieldId, EpochBase, FieldEntry, FieldSemantics, MeaningCode,
-    NamespaceCode, PathSegment, SemanticMetadata, Temporal, TemporalKind, TemporalResolution, Unit,
-    UnitSystem,
+    CanonicalEventTypeId, CanonicalFieldId, EnumMapping, EnumValue, EpochBase, FieldEntry,
+    FieldSemantics, MeaningCode, NamespaceCode, PathSegment, SemanticMetadata, Temporal,
+    TemporalKind, TemporalResolution, Unit, UnitSystem,
 };
 use deblob_semantic::{has_anchor, semantic_signature, similarity, strength, Score, Strength};
-use std::collections::BTreeMap;
 
 fn key(s: &str) -> PathSegment {
     PathSegment::Key(s.to_string())
@@ -367,14 +366,13 @@ fn no_anchor_signature_is_insufficient() {
 
 #[test]
 fn repeated_feature_is_capped_at_four() {
-    let mut enum_semantics = BTreeMap::new();
-    enum_semantics.insert(
-        "A".to_string(),
-        MeaningCode {
+    let enum_semantics = vec![EnumMapping {
+        value: EnumValue::String("A".to_string()),
+        meaning: MeaningCode {
             vocabulary: "deblob/order-status/v1".to_string(),
             code: "pending".to_string(),
         },
-    );
+    }];
 
     // 6 distinct fields all carrying the SAME enum meaning code: the
     // standalone `enum-meaning:` feature is field-independent, so all 6

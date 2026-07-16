@@ -8,12 +8,11 @@
 
 use deblob_core::id::{CandidateId, SchemaId};
 use deblob_core::semantic::{
-    CanonicalEventTypeId, CanonicalFieldId, EpochBase, FieldEntry, FieldSemantics, MeaningCode,
-    NamespaceCode, PathSegment, SemanticMetadata, Temporal, TemporalKind, TemporalResolution, Unit,
-    UnitSystem,
+    CanonicalEventTypeId, CanonicalFieldId, EnumMapping, EnumValue, EpochBase, FieldEntry,
+    FieldSemantics, MeaningCode, NamespaceCode, PathSegment, SemanticMetadata, Temporal,
+    TemporalKind, TemporalResolution, Unit, UnitSystem,
 };
 use deblob_semantic::{canonical_semantic_bytes, semantic_fingerprint, CanonError};
-use std::collections::BTreeMap;
 
 fn key(s: &str) -> PathSegment {
     PathSegment::Key(s.to_string())
@@ -33,14 +32,13 @@ fn empty_semantics() -> FieldSemantics {
 /// A metadata carrying at least one instance of every axis, used as the
 /// baseline for the single-attribute-change sensitivity tests below.
 fn baseline() -> SemanticMetadata {
-    let mut enum_semantics = BTreeMap::new();
-    enum_semantics.insert(
-        "ACTIVE".to_string(),
-        MeaningCode {
+    let enum_semantics = vec![EnumMapping {
+        value: EnumValue::String("ACTIVE".to_string()),
+        meaning: MeaningCode {
             vocabulary: "deblob/order-status/v1".to_string(),
             code: "pending".to_string(),
         },
-    );
+    }];
 
     SemanticMetadata {
         event_type: Some(CanonicalEventTypeId::new("user.created")),
@@ -157,17 +155,142 @@ fn numeric_scale_change_changes_the_fingerprint() {
 #[test]
 fn single_enum_meaning_entry_change_changes_the_fingerprint() {
     let mut changed = baseline();
-    let mut enum_semantics = BTreeMap::new();
-    enum_semantics.insert(
-        "ACTIVE".to_string(),
-        MeaningCode {
+    let enum_semantics = vec![EnumMapping {
+        value: EnumValue::String("ACTIVE".to_string()),
+        meaning: MeaningCode {
             vocabulary: "deblob/order-status/v1".to_string(),
             // Only the code differs from baseline's "pending".
             code: "confirmed".to_string(),
         },
-    );
+    }];
     changed.fields[0].semantics.enum_semantics = Some(enum_semantics);
     assert_ne!(fp(&baseline()), fp(&changed));
+}
+
+// ---- headline: typed enum value (P2-D polish Task 3) ---------------------
+
+#[test]
+fn enum_value_string_true_and_bool_true_produce_different_sem_() {
+    // The headline fix from task-3-brief.md: a String("true") mapping and a
+    // Bool(true) mapping to the SAME meaning code must produce DIFFERENT
+    // sem_ — under the old string-keyed BTreeMap<String, MeaningCode> they
+    // were indistinguishable (both keyed as the bare string "true").
+    let meaning = MeaningCode {
+        vocabulary: "deblob/order-status/v1".to_string(),
+        code: "pending".to_string(),
+    };
+    let string_true = SemanticMetadata {
+        event_type: None,
+        fields: vec![FieldEntry {
+            path: vec![key("status")],
+            semantics: FieldSemantics {
+                enum_semantics: Some(vec![EnumMapping {
+                    value: EnumValue::String("true".to_string()),
+                    meaning: meaning.clone(),
+                }]),
+                ..empty_semantics()
+            },
+        }],
+    };
+    let bool_true = SemanticMetadata {
+        event_type: None,
+        fields: vec![FieldEntry {
+            path: vec![key("status")],
+            semantics: FieldSemantics {
+                enum_semantics: Some(vec![EnumMapping {
+                    value: EnumValue::Bool(true),
+                    meaning,
+                }]),
+                ..empty_semantics()
+            },
+        }],
+    };
+
+    assert_ne!(fp(&string_true), fp(&bool_true));
+    assert_ne!(
+        canonical_semantic_bytes(&string_true).unwrap(),
+        canonical_semantic_bytes(&bool_true).unwrap()
+    );
+}
+
+#[test]
+fn enum_value_number_canonicalizes_int_float_and_exponent_forms_equal() {
+    // Numeric canonicalization is preserved: Number("1") == Number("1.0")
+    // == Number("1e0") within the digest, even after the type-guessing
+    // logic was replaced with the explicit EnumValue::Number variant.
+    let meaning = MeaningCode {
+        vocabulary: "deblob/order-status/v1".to_string(),
+        code: "pending".to_string(),
+    };
+    let variants = ["1", "1.0", "1e0"];
+    let fingerprints: Vec<_> = variants
+        .iter()
+        .map(|text| {
+            let meta = SemanticMetadata {
+                event_type: None,
+                fields: vec![FieldEntry {
+                    path: vec![key("status")],
+                    semantics: FieldSemantics {
+                        enum_semantics: Some(vec![EnumMapping {
+                            value: EnumValue::Number(text.to_string()),
+                            meaning: meaning.clone(),
+                        }]),
+                        ..empty_semantics()
+                    },
+                }],
+            };
+            fp(&meta)
+        })
+        .collect();
+    assert_eq!(fingerprints[0], fingerprints[1]);
+    assert_eq!(fingerprints[1], fingerprints[2]);
+}
+
+#[test]
+fn enum_semantics_determinism_is_independent_of_mapping_input_order() {
+    let a = EnumMapping {
+        value: EnumValue::String("A".to_string()),
+        meaning: MeaningCode {
+            vocabulary: "deblob/order-status/v1".to_string(),
+            code: "a".to_string(),
+        },
+    };
+    let b = EnumMapping {
+        value: EnumValue::Bool(true),
+        meaning: MeaningCode {
+            vocabulary: "deblob/order-status/v1".to_string(),
+            code: "b".to_string(),
+        },
+    };
+    let c = EnumMapping {
+        value: EnumValue::Number("3".to_string()),
+        meaning: MeaningCode {
+            vocabulary: "deblob/order-status/v1".to_string(),
+            code: "c".to_string(),
+        },
+    };
+
+    let forward = SemanticMetadata {
+        event_type: None,
+        fields: vec![FieldEntry {
+            path: vec![key("status")],
+            semantics: FieldSemantics {
+                enum_semantics: Some(vec![a.clone(), b.clone(), c.clone()]),
+                ..empty_semantics()
+            },
+        }],
+    };
+    let reverse = SemanticMetadata {
+        event_type: None,
+        fields: vec![FieldEntry {
+            path: vec![key("status")],
+            semantics: FieldSemantics {
+                enum_semantics: Some(vec![c, a, b]),
+                ..empty_semantics()
+            },
+        }],
+    };
+    assert_eq!(fp(&forward), fp(&reverse));
 }
 
 #[test]
@@ -312,7 +435,7 @@ fn metadata_with_no_surviving_assertion_is_none_not_a_sentinel() {
                         epoch: None,
                         resolution: None,
                     }),
-                    enum_semantics: Some(BTreeMap::new()),
+                    enum_semantics: Some(Vec::new()),
                     ..empty_semantics()
                 },
             },

@@ -163,10 +163,10 @@ fn validate_field_semantics(
     }
 
     if let Some(enum_semantics) = &semantics.enum_semantics {
-        for meaning in enum_semantics.values() {
-            if !MEANING_VOCABULARIES.contains(&meaning.vocabulary.as_str()) {
+        for mapping in enum_semantics {
+            if !MEANING_VOCABULARIES.contains(&mapping.meaning.vocabulary.as_str()) {
                 return Err(VocabError::UnknownMeaningVocabulary(
-                    meaning.vocabulary.clone(),
+                    mapping.meaning.vocabulary.clone(),
                 ));
             }
         }
@@ -226,10 +226,9 @@ pub fn validate_metadata(
 mod tests {
     use super::*;
     use deblob_core::semantic::{
-        CanonicalEventTypeId, CanonicalFieldId, FieldEntry, MeaningCode, NamespaceCode,
-        PathSegment, Unit, UnitSystem,
+        CanonicalEventTypeId, CanonicalFieldId, EnumMapping, EnumValue, FieldEntry, MeaningCode,
+        NamespaceCode, PathSegment, Unit, UnitSystem,
     };
-    use std::collections::BTreeMap;
 
     fn field(semantics: FieldSemantics) -> FieldEntry {
         FieldEntry {
@@ -422,14 +421,13 @@ mod tests {
 
     #[test]
     fn meaning_code_with_unregistered_vocabulary_is_rejected() {
-        let mut enum_semantics = BTreeMap::new();
-        enum_semantics.insert(
-            "ACTIVE".to_string(),
-            MeaningCode {
+        let enum_semantics = vec![EnumMapping {
+            value: EnumValue::String("ACTIVE".to_string()),
+            meaning: MeaningCode {
                 vocabulary: "acme/not-registered/v1".to_string(),
                 code: "pending".to_string(),
             },
-        );
+        }];
         let meta = metadata_with(vec![field(FieldSemantics {
             enum_semantics: Some(enum_semantics),
             ..empty_semantics()
@@ -446,21 +444,22 @@ mod tests {
         // deblob-semantic-v1 only checks that the vocabulary *namespace* is
         // registered/immutable — it does not maintain a per-vocabulary code
         // list, so any code string under a registered vocabulary passes.
-        let mut enum_semantics = BTreeMap::new();
-        enum_semantics.insert(
-            "ACTIVE".to_string(),
-            MeaningCode {
-                vocabulary: "deblob/order-status/v1".to_string(),
-                code: "pending".to_string(),
+        let enum_semantics = vec![
+            EnumMapping {
+                value: EnumValue::String("ACTIVE".to_string()),
+                meaning: MeaningCode {
+                    vocabulary: "deblob/order-status/v1".to_string(),
+                    code: "pending".to_string(),
+                },
             },
-        );
-        enum_semantics.insert(
-            "INACTIVE".to_string(),
-            MeaningCode {
-                vocabulary: "deblob/order-status/v1".to_string(),
-                code: "some-arbitrary-code-not-in-any-list".to_string(),
+            EnumMapping {
+                value: EnumValue::String("INACTIVE".to_string()),
+                meaning: MeaningCode {
+                    vocabulary: "deblob/order-status/v1".to_string(),
+                    code: "some-arbitrary-code-not-in-any-list".to_string(),
+                },
             },
-        );
+        ];
         let meta = metadata_with(vec![field(FieldSemantics {
             enum_semantics: Some(enum_semantics),
             ..empty_semantics()
@@ -470,14 +469,13 @@ mod tests {
 
     #[test]
     fn fully_populated_valid_metadata_validates_end_to_end() {
-        let mut enum_semantics = BTreeMap::new();
-        enum_semantics.insert(
-            "ACTIVE".to_string(),
-            MeaningCode {
+        let enum_semantics = vec![EnumMapping {
+            value: EnumValue::String("ACTIVE".to_string()),
+            meaning: MeaningCode {
                 vocabulary: "deblob/order-status/v1".to_string(),
                 code: "pending".to_string(),
             },
-        );
+        }];
 
         let meta = SemanticMetadata {
             event_type: Some(CanonicalEventTypeId::new("order.created")),

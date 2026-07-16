@@ -327,7 +327,8 @@ pub fn semantic_signature(metadata: &SemanticMetadata) -> SemanticSignature {
         }
 
         if let Some(enum_semantics) = &sem.enum_semantics {
-            for meaning in enum_semantics.values() {
+            for mapping in enum_semantics {
+                let meaning = &mapping.meaning;
                 if let Some(cfid) = cfid {
                     bump(
                         &mut features,

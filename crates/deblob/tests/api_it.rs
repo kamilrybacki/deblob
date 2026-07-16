@@ -1253,6 +1253,115 @@ async fn get_semantic_returns_active_and_etag() {
     );
 }
 
+/// P2-D polish Task 3: `enum_semantics` is now a LIST of typed
+/// `{value, meaning}` entries (never a `value -> meaning` JSON object) —
+/// verifies the PUT wire shape end to end, not just the pure crate-level
+/// canon/digest tests.
+#[tokio::test]
+async fn put_semantic_accepts_typed_enum_value_list_shape() {
+    let schema = semantic_schema(41);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let mut body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    body["metadata"]["fields"][0]["semantics"]["enum_semantics"] = serde_json::json!([
+        {
+            "value": {"type": "string", "v": "ACTIVE"},
+            "meaning": {"vocabulary": "deblob/order-status/v1", "code": "pending"}
+        },
+        {
+            "value": {"type": "bool", "v": true},
+            "meaning": {"vocabulary": "deblob/order-status/v1", "code": "confirmed"}
+        }
+    ]);
+
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::CREATED);
+    let json = body_json(resp).await;
+    assert_eq!(
+        json["data"]["metadata"]["fields"][0]["semantics"]["enum_semantics"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+/// The pre-P2D-polish wire shape (`enum_semantics` as a `value -> meaning`
+/// JSON object) is now a hard rejection — never silently accepted/coerced.
+/// Valid JSON that doesn't match the target Rust shape surfaces as axum's
+/// `JsonRejection::JsonDataError`, which axum itself maps to `422` (`400`
+/// is reserved for actually-malformed JSON syntax) — this handler never
+/// even runs, since `Json<PutSemanticRequest>` extraction fails first.
+#[tokio::test]
+async fn put_semantic_rejects_legacy_object_shaped_enum_semantics() {
+    let schema = semantic_schema(42);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let mut body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    body["metadata"]["fields"][0]["semantics"]["enum_semantics"] = serde_json::json!({
+        "ACTIVE": {"vocabulary": "deblob/order-status/v1", "code": "pending"}
+    });
+
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+/// An `enum_semantics[].value` with an unrecognized `"type"` tag is a hard
+/// rejection (`422`, see the previous test's doc comment), never silently
+/// coerced into one of the known variants.
+#[tokio::test]
+async fn put_semantic_rejects_unknown_enum_value_type_tag() {
+    let schema = semantic_schema(43);
+    let sch_id = schema.schema_id.clone();
+    let state = make_state(
+        FakeRegistry::new(vec![schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    let app = api::router(state);
+    let uri = semantic_uri(&sch_id);
+
+    let mut body = semantic_body("Cel", Some("correction"), Some("initial annotation"));
+    body["metadata"]["fields"][0]["semantics"]["enum_semantics"] = serde_json::json!([
+        {
+            "value": {"type": "array", "v": []},
+            "meaning": {"vocabulary": "deblob/order-status/v1", "code": "pending"}
+        }
+    ]);
+
+    let resp = app
+        .oneshot(put_json(&uri, Some(TOKEN), None, &body))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
 #[tokio::test]
 async fn get_semantic_revisions_lists_history() {
     let schema = semantic_schema(29);
