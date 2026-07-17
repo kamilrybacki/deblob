@@ -88,6 +88,13 @@ data:
     # training inside the cluster"). `backend = "hfjobs"` still works
     # (config-swap only, `HfJobsBackend` unchanged) if Modal isn't set up.
     backend = "modal"
+    # There is no wire-level training-recipe knob (the `lora` field is
+    # just {rank, alpha, learning_rate, epochs} — spec §8's literal list).
+    # The LEARNING recipe itself is baked into trainer.py, not
+    # request-configurable: as of this deploy trainer.py's `train_lora`
+    # runs the v4-validated recipe (completion-only loss + balanced
+    # sampling across gold decision classes) by default — see
+    # trainer.py's module docstring "Training recipe" section.
 
     # --- Modal (chosen) ---
     # `endpoint_base` is the trainer app's OWN web-endpoint URL (printed by

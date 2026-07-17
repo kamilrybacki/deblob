@@ -2,6 +2,25 @@
 hook (spec §7/§8; Rust seam: `crates/deblob-experiment/src/continual/
 training_job/modal.rs`'s `ModalBackend`).
 
+## Training recipe — v4-validated, now the PRODUCTION default
+
+`train_lora` below runs the "v4" recipe validated by the 5-iteration
+mode-collapse fix-up experiment (see `validate_v2_completion_only.py`,
+`validate_v3_finite_scoring.py`, `validate_v4_finite_plus_veto.py` in this
+same directory — READ, do NOT delete):
+  1. **COMPLETION-ONLY loss** — the prompt tokens are masked with label
+     `-100`; loss is computed only on the gold tool-call tokens (ported
+     from `validate_v2_completion_only.py`'s `train_and_eval`). The prior
+     recipe (`labels=input_ids` over the WHOLE prompt+completion sequence)
+     is what mode-collapsed on family-held-out `new_candidate` cases.
+  2. **BALANCED sampling** across the gold `decision` classes
+     (`match_schema`/`new_candidate`/`abstain`) — minority classes are
+     oversampled, capped at 4x, via `_balance` (ported verbatim from
+     `validate_v2_completion_only.py`).
+Finite-hypothesis-scoring + the deterministic distance/margin veto
+(`validate_v3`/`validate_v4`) are INFERENCE-time concerns, not this
+trainer's — see the "Inference-time decision path" section below.
+
 Deploy-side Python only — NOT compiled by cargo, NOT part of any Rust
 crate's build. `python3 -m py_compile` is this file's own gate (see the
 Task 6 report). Deploy with `modal deploy deploy/experiment/modal/
@@ -49,7 +68,42 @@ out-of-band by whatever deploy step exports `ReplaySet::to_jsonl()`/builds
 each `ModelBundle` today. Filling that manifest-population step in is
 explicitly OUT OF SCOPE here (same posture as the Task 4 report's own
 disclosed gap #2) — this file fails loudly (never silently) if a digest
-isn't found.
+isn't found. [`load_replay_lines`] now also accepts a manifest
+`local_path` given RELATIVE to the mounted Volume (not just an absolute
+in-container path) so the out-of-band populate step can write portable
+paths — see its docstring.
+
+## Output persistence — no longer S3-only
+
+[`upload_artifacts`] now also accepts a `modal-volume://<subpath>` output
+URI, which persists the trained adapter under the SAME `base_model_cache`
+Volume this function already has mounted — a round can therefore run
+end-to-end (submit -> train -> upload -> digests) with zero external
+storage config. The `s3://` branch is unchanged for deploys that DO have
+a bucket. The one remaining manual step either way: pulling the adapter
+back out for promotion (`modal volume get deblob-base-models <subpath>`
+for the volume scheme, or your normal S3 tooling) — this trainer's job
+ends at "trained + uploaded", per the separation-of-duties note above.
+
+## Inference-time decision path (NOT this trainer's job)
+
+Finite-hypothesis-scoring (enumerate every legal completion, score by
+length-normalized conditional log-likelihood, argmax — see
+`validate_v3_finite_scoring.py`'s `_legal_completions`/`_score_finite`)
+and the deterministic distance/margin veto on top of it (force
+`new_candidate` when the top-1 structural distance exceeds the policy
+threshold, abstain on a near-tie — see `validate_v4_finite_plus_veto.py`'s
+`_score_finite`) are how the production decision path should consume the
+fine-tuned SLM's output. Neither belongs in `train_lora`: they are
+inference-time scoring/gating, not a training-loop change, and Deblob
+already has a live equivalent of the deterministic half — the trust gate
+in `crates/deblob/src/trusted.rs` (`trusted_verdict`, `PolicyGateInputs`)
+plus the frozen policy grid in `crates/deblob/src/shadow.rs`
+(`evaluate_policy`: `POLICY_MAX_DISTANCE`/`POLICY_MIN_MARGIN`/rank-one
+checks — the same thresholds `validate_v4`'s veto mirrors). Wiring
+finite-hypothesis-scoring into whatever calls the fine-tuned model at
+inference time is a separate, disclosed gap — not silently claimed done
+here.
 
 ## Needle caveat (spec §8, task ask: do NOT claim LoRA parity for Needle)
 
@@ -182,9 +236,17 @@ def load_replay_lines(dataset_digest: str) -> list[dict[str, Any]]:
     output — one `{case_name, partition, prompt, gold_tool_call,
     replay_stratum}` object per line, see `deblob_eval::generate::
     render_finetune_jsonl`'s doc) via the same manifest as the base model.
+
+    `entry["local_path"]` may be an absolute in-container path OR a path
+    RELATIVE to the mounted `base_model_cache` Volume (`CACHE_MOUNT`) — the
+    out-of-band manifest-populate step can write either; a relative path
+    is resolved against `CACHE_MOUNT` so the manifest stays portable
+    across deploys that mount the Volume at a different point.
     """
     entry = resolve_manifest_entry(dataset_digest)
     jsonl_path = Path(entry["local_path"])
+    if not jsonl_path.is_absolute():
+        jsonl_path = Path(CACHE_MOUNT) / jsonl_path
     lines = []
     with jsonl_path.open("r", encoding="utf-8") as f:
         for line in f:
@@ -236,8 +298,11 @@ def upload_artifacts(local_dir: Path, output_uri: str) -> None:
     """Copies everything under `local_dir` to `output_uri` (external
     storage) — task ask: "artifacts persisted to output_uri, not left on
     the ephemeral container." Supports `s3://` (via `boto3`, imported
-    lazily so a non-S3 deploy never needs it installed) today; any other
-    scheme is a documented TODO, never a silent no-op.
+    lazily so a non-S3 deploy never needs it installed) and
+    `modal-volume://<subpath>` (persists into the SAME `base_model_cache`
+    Volume this function already has mounted — no S3 bucket required to
+    run a round end-to-end); any other scheme is a documented TODO, never
+    a silent no-op.
     """
     if output_uri.startswith("s3://"):
         import boto3
@@ -249,10 +314,64 @@ def upload_artifacts(local_dir: Path, output_uri: str) -> None:
                 key = f"{prefix}/{path.relative_to(local_dir)}".lstrip("/")
                 s3.upload_file(str(path), bucket, key)
         return
+    if output_uri.startswith("modal-volume://"):
+        subpath = output_uri[len("modal-volume://") :].strip("/")
+        if not subpath:
+            raise ValueError(
+                f"modal-volume:// output_uri missing a subpath: {output_uri!r} "
+                "— e.g. modal-volume://arm-c-artifacts/<job_id>"
+            )
+        dest_root = Path(CACHE_MOUNT) / subpath
+        for path in local_dir.rglob("*"):
+            if path.is_file():
+                dest = dest_root / path.relative_to(local_dir)
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(path, dest)
+        # Commit explicitly so the write is visible outside this container
+        # the moment `train_lora` returns (Volume writes are otherwise only
+        # guaranteed durable/visible at function exit).
+        base_model_cache.commit()
+        return
     raise NotImplementedError(
         f"upload_artifacts: unsupported output_uri scheme in {output_uri!r} "
-        "— add a branch here before using a non-s3:// output_uri"
+        "— add a branch here before using a non-s3:///modal-volume:// output_uri"
     )
+
+
+def _decision(line: dict[str, Any]) -> str:
+    """The gold decision class (`match_schema`/`new_candidate`/`abstain`)
+    a replay line belongs to — the class `_balance` below oversamples on.
+    Ported verbatim from `validate_v2_completion_only.py`.
+    """
+    return line["gold_tool_call"].get("decision", "?")
+
+
+def _balance(
+    train_lines: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int], dict[str, int]]:
+    """Oversamples minority `decision` classes so training can't collapse
+    to the majority class (v1's failure mode) — capped at 4x so the
+    minority isn't overfit. Ported verbatim from
+    `validate_v2_completion_only.py`'s `_balance`.
+
+    Returns `(balanced_lines, original_distribution, balanced_distribution)`
+    — both distributions are surfaced in `train_lora`'s returned metrics.
+    """
+    from collections import defaultdict
+
+    by: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for line in train_lines:
+        by[_decision(line)].append(line)
+    target = max(len(v) for v in by.values())
+    out: list[dict[str, Any]] = []
+    for _decision_class, rows in by.items():
+        reps = min(4, max(1, round(target / len(rows))))  # cap 4x
+        out.extend(rows * reps)
+    original_dist = {d: len(v) for d, v in by.items()}
+    balanced_dist = {
+        d: len(v) * min(4, max(1, round(target / len(v)))) for d, v in by.items()
+    }
+    return out, original_dist, balanced_dist
 
 
 @app.function(
@@ -268,7 +387,18 @@ def train_lora(request: dict[str, Any]) -> dict[str, Any]:
     (Rust) as JSON. Returns `{"artifact_digests": {"training_checkpoint":
     "...", "quantized_weights": "..."}, "metrics": {...}}` — digests only,
     never raw weights (separation of duties, see module docstring).
+
+    Runs the v4-validated recipe (module docstring's "Training recipe"
+    section): COMPLETION-ONLY loss + BALANCED sampling across gold
+    `decision` classes, ported from `validate_v2_completion_only.py`.
     """
+    import os
+
+    # Must be set before `import torch` — same OOM fix validated in
+    # `validate_v2_completion_only.py`'s `train_and_eval` (a T4's 16GB
+    # fragments easily under gradient checkpointing + batch-1 training).
+    os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
     import torch
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -312,6 +442,11 @@ def train_lora(request: dict[str, Any]) -> dict[str, Any]:
     base_model = AutoModelForCausalLM.from_pretrained(
         repo_id, cache_dir=f"{CACHE_MOUNT}/hf-cache", torch_dtype=torch.bfloat16
     ).to("cuda")
+    # OOM fixes validated alongside the completion-only recipe (a T4's
+    # 16GB is tight for gradient checkpointing to help matter): disable KV
+    # cache during training and enable activation checkpointing.
+    base_model.config.use_cache = False
+    base_model.gradient_checkpointing_enable()
 
     lora_cfg = request["lora"]
     peft_config = LoraConfig(
@@ -322,39 +457,80 @@ def train_lora(request: dict[str, Any]) -> dict[str, Any]:
         task_type="CAUSAL_LM",
     )
     model = get_peft_model(base_model, peft_config)
+    # Required for gradient checkpointing to actually flow gradients back
+    # through a PEFT-wrapped model (frozen base + trainable LoRA adapters).
+    model.enable_input_require_grads()
 
-    texts = [
-        f"{line['prompt']}\n{json.dumps(line['gold_tool_call'], sort_keys=True)}"
-        for line in replay_lines
-    ]
-    encodings = tokenizer(
-        texts, truncation=True, max_length=1024, padding=True, return_tensors="pt"
-    )
-    dataset = torch.utils.data.TensorDataset(
-        encodings["input_ids"], encodings["attention_mask"]
-    )
-    loader = torch.utils.data.DataLoader(dataset, batch_size=2, shuffle=True)
+    # --- BALANCED sampling across gold `decision` classes (v1's failure:
+    # no balancing at all -> collapsed onto the majority class). ---
+    balanced_lines, orig_decision_dist, balanced_decision_dist = _balance(replay_lines)
+
+    # --- COMPLETION-ONLY examples: mask everything before the tool-call
+    # with label -100 so loss is computed ONLY on the gold tool-call
+    # tokens (v1's bug: `labels=input_ids` over the WHOLE prompt+
+    # completion sequence, which trains the model to reproduce the prompt
+    # too and is what mode-collapsed). Ported from
+    # `validate_v2_completion_only.py`'s `train_and_eval`. ---
+    MAX_SEQUENCE_LEN = 640
+    built_examples: list[tuple[list[int], list[int]]] = []
+    for line in balanced_lines:
+        prompt_text = line["prompt"] + "\n"
+        completion_text = (
+            json.dumps(line["gold_tool_call"], sort_keys=True) + tokenizer.eos_token
+        )
+        prompt_ids = tokenizer(prompt_text, add_special_tokens=False)["input_ids"]
+        completion_ids = tokenizer(completion_text, add_special_tokens=False)[
+            "input_ids"
+        ]
+        input_ids = (prompt_ids + completion_ids)[:MAX_SEQUENCE_LEN]
+        labels = ([-100] * len(prompt_ids) + completion_ids)[:MAX_SEQUENCE_LEN]
+        # Truncation must still leave at least one real completion token —
+        # an all-masked example contributes zero gradient and is dropped
+        # rather than silently trained on nothing.
+        if all(label == -100 for label in labels):
+            continue
+        built_examples.append((input_ids, labels))
+    if not built_examples:
+        raise RuntimeError(
+            "completion-only example building left zero trainable examples "
+            f"(MAX_SEQUENCE_LEN={MAX_SEQUENCE_LEN}) — every prompt is "
+            "longer than the truncation budget; raise MAX_SEQUENCE_LEN or "
+            "shorten prompts before training"
+        )
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lora_cfg["learning_rate"])
     model.train()
-    for _epoch in range(lora_cfg["epochs"]):
-        for input_ids, attention_mask in loader:
+    losses: list[float] = []
+    for epoch in range(lora_cfg["epochs"]):
+        generator = torch.Generator().manual_seed(request["seed"] + epoch)
+        order = torch.randperm(len(built_examples), generator=generator).tolist()
+        for i in order:
             if time.monotonic() - started_at > budget_seconds:
                 raise RuntimeError(
                     f"training exceeded its {request['budget_max_runtime_minutes']}"
                     "-minute budget — aborting rather than overrunning the "
                     "spend cap (see module docstring's spend-cap note)"
                 )
-            input_ids = input_ids.to("cuda")
-            attention_mask = attention_mask.to("cuda")
-            outputs = model(
-                input_ids=input_ids, attention_mask=attention_mask, labels=input_ids
-            )
+            ids, labels = built_examples[i]
+            input_ids = torch.tensor([ids], device="cuda")
+            label_tensor = torch.tensor([labels], device="cuda")
+            outputs = model(input_ids=input_ids, labels=label_tensor)
             outputs.loss.backward()
             optimizer.step()
             optimizer.zero_grad()
+            losses.append(float(outputs.loss.detach().cpu()))
 
     metrics = sanity_check(model, tokenizer, replay_lines)
+    metrics["decision_distribution"] = {
+        "original": orig_decision_dist,
+        "balanced": balanced_decision_dist,
+    }
+    metrics["original_train_n"] = len(replay_lines)
+    metrics["balanced_train_n"] = len(balanced_lines)
+    metrics["completion_only_examples"] = len(built_examples)
+    if losses:
+        tail = losses[-20:]
+        metrics["final_loss"] = sum(tail) / len(tail)
 
     local_dir = Path(tempfile.mkdtemp(prefix="deblob-modal-artifact-"))
     try:
