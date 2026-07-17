@@ -1,0 +1,1621 @@
+{
+  "model": "Qwen/Qwen2.5-0.5B-Instruct",
+  "epochs": 3,
+  "rank": 16,
+  "balanced_dist": {
+    "match_schema": 432,
+    "new_candidate": 432,
+    "abstain": 432
+  },
+  "final_loss": 0.0257,
+  "eval_finite_scoring": {
+    "decision_match": 0.783,
+    "recall": {
+      "match_schema": 1.0,
+      "new_candidate": 0.333,
+      "abstain": 0.583
+    },
+    "match_schema_id_correct": 0.472,
+    "support": {
+      "match_schema": 72,
+      "new_candidate": 24,
+      "abstain": 24
+    }
+  },
+  "examples": [
+    {
+      "case": "gen_003_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.063
+    },
+    {
+      "case": "gen_003_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.06
+    },
+    {
+      "case": "gen_003_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.078
+    },
+    {
+      "case": "gen_003_03_drift_enum_value",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.065
+    },
+    {
+      "case": "gen_003_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.065
+    },
+    {
+      "case": "gen_003_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "margin": 0.263
+    },
+    {
+      "case": "gen_003_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.042
+    },
+    {
+      "case": "gen_003_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.05
+    },
+    {
+      "case": "gen_003_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "margin": 0.174
+    },
+    {
+      "case": "gen_003_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.06
+    },
+    {
+      "case": "gen_007_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_uhqmv5giebvvkm74cpskuunihxib6elvmhmmzelauy4z7roytqka"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.055
+    },
+    {
+      "case": "gen_007_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_uhqmv5giebvvkm74cpskuunihxib6elvmhmmzelauy4z7roytqka"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.062
+    },
+    {
+      "case": "gen_007_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_uhqmv5giebvvkm74cpskuunihxib6elvmhmmzelauy4z7roytqka"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.066
+    },
+    {
+      "case": "gen_007_03_drift_enum_value",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_uhqmv5giebvvkm74cpskuunihxib6elvmhmmzelauy4z7roytqka"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.057
+    },
+    {
+      "case": "gen_007_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_uhqmv5giebvvkm74cpskuunihxib6elvmhmmzelauy4z7roytqka"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.057
+    },
+    {
+      "case": "gen_007_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.278
+    },
+    {
+      "case": "gen_007_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.08
+    },
+    {
+      "case": "gen_007_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.078
+    },
+    {
+      "case": "gen_007_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.078
+    },
+    {
+      "case": "gen_007_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.041
+    },
+    {
+      "case": "gen_010_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_xm2bogttekntdtdhj3wshmsz7agogw2n32cjns5j4j46dlytup3q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.056
+    },
+    {
+      "case": "gen_010_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_xm2bogttekntdtdhj3wshmsz7agogw2n32cjns5j4j46dlytup3q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.066
+    },
+    {
+      "case": "gen_010_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_xm2bogttekntdtdhj3wshmsz7agogw2n32cjns5j4j46dlytup3q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.058
+    },
+    {
+      "case": "gen_010_03_drift_wrapper",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_xm2bogttekntdtdhj3wshmsz7agogw2n32cjns5j4j46dlytup3q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.003
+    },
+    {
+      "case": "gen_010_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_xm2bogttekntdtdhj3wshmsz7agogw2n32cjns5j4j46dlytup3q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.062
+    },
+    {
+      "case": "gen_010_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_xm2bogttekntdtdhj3wshmsz7agogw2n32cjns5j4j46dlytup3q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_xm2bogttekntdtdhj3wshmsz7agogw2n32cjns5j4j46dlytup3q"
+      },
+      "margin": 0.237
+    },
+    {
+      "case": "gen_010_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.072
+    },
+    {
+      "case": "gen_010_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.064
+    },
+    {
+      "case": "gen_010_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_jtg33dnwszbzn3xt7wrq4rwibsss57p5figyu3no4hjyneawraeq"
+      },
+      "margin": 0.046
+    },
+    {
+      "case": "gen_010_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.01
+    },
+    {
+      "case": "gen_013_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "margin": 0.043
+    },
+    {
+      "case": "gen_013_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "margin": 0.042
+    },
+    {
+      "case": "gen_013_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "margin": 0.04
+    },
+    {
+      "case": "gen_013_03_drift_widen_nullability",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "margin": 0.051
+    },
+    {
+      "case": "gen_013_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_66kk2szhxepswwtkgs4zrnxjktjhxvaygiveh26jt34mdfsr532q"
+      },
+      "margin": 0.049
+    },
+    {
+      "case": "gen_013_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.241
+    },
+    {
+      "case": "gen_013_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.083
+    },
+    {
+      "case": "gen_013_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.077
+    },
+    {
+      "case": "gen_013_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.034
+    },
+    {
+      "case": "gen_013_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.025
+    },
+    {
+      "case": "gen_016_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.002
+    },
+    {
+      "case": "gen_016_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "margin": 0.002
+    },
+    {
+      "case": "gen_016_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.003
+    },
+    {
+      "case": "gen_016_03_drift_add_optional",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "margin": 0.01
+    },
+    {
+      "case": "gen_016_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "margin": 0.004
+    },
+    {
+      "case": "gen_016_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_v4mvtfpehgzwrjmjngrrlgzitrojbhz2vew65tlofobbm3pajeia"
+      },
+      "margin": 0.308
+    },
+    {
+      "case": "gen_016_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.078
+    },
+    {
+      "case": "gen_016_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.016
+    },
+    {
+      "case": "gen_016_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.074
+    },
+    {
+      "case": "gen_016_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.142
+    },
+    {
+      "case": "gen_031_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_m55axbwstxj3kozo3mnlrxbgvus6rwggqty23np7jbuq6uauqxta"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.046
+    },
+    {
+      "case": "gen_031_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_m55axbwstxj3kozo3mnlrxbgvus6rwggqty23np7jbuq6uauqxta"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.042
+    },
+    {
+      "case": "gen_031_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_m55axbwstxj3kozo3mnlrxbgvus6rwggqty23np7jbuq6uauqxta"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.046
+    },
+    {
+      "case": "gen_031_03_drift_enum_value",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_m55axbwstxj3kozo3mnlrxbgvus6rwggqty23np7jbuq6uauqxta"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.046
+    },
+    {
+      "case": "gen_031_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_m55axbwstxj3kozo3mnlrxbgvus6rwggqty23np7jbuq6uauqxta"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.048
+    },
+    {
+      "case": "gen_031_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.249
+    },
+    {
+      "case": "gen_031_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.071
+    },
+    {
+      "case": "gen_031_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.015
+    },
+    {
+      "case": "gen_031_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_m55axbwstxj3kozo3mnlrxbgvus6rwggqty23np7jbuq6uauqxta"
+      },
+      "margin": 0.068
+    },
+    {
+      "case": "gen_031_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.006
+    },
+    {
+      "case": "gen_034_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.074
+    },
+    {
+      "case": "gen_034_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.08
+    },
+    {
+      "case": "gen_034_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.074
+    },
+    {
+      "case": "gen_034_03_drift_wrapper",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.081
+    },
+    {
+      "case": "gen_034_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.074
+    },
+    {
+      "case": "gen_034_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.268
+    },
+    {
+      "case": "gen_034_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.07
+    },
+    {
+      "case": "gen_034_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.084
+    },
+    {
+      "case": "gen_034_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.017
+    },
+    {
+      "case": "gen_034_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "margin": 0.111
+    },
+    {
+      "case": "gen_040_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "margin": 0.006
+    },
+    {
+      "case": "gen_040_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "margin": 0.002
+    },
+    {
+      "case": "gen_040_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "margin": 0.002
+    },
+    {
+      "case": "gen_040_03_drift_add_optional",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "margin": 0.001
+    },
+    {
+      "case": "gen_040_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "margin": 0.004
+    },
+    {
+      "case": "gen_040_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_v5axhcerq2yu6xn5hjponuyh4czwa4vfu7yha5vp7e6amshp2d2a"
+      },
+      "margin": 0.258
+    },
+    {
+      "case": "gen_040_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.083
+    },
+    {
+      "case": "gen_040_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.072
+    },
+    {
+      "case": "gen_040_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.116
+    },
+    {
+      "case": "gen_040_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.079
+    },
+    {
+      "case": "gen_045_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.06
+    },
+    {
+      "case": "gen_045_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.053
+    },
+    {
+      "case": "gen_045_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.06
+    },
+    {
+      "case": "gen_045_03_drift_widen_nullability",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.054
+    },
+    {
+      "case": "gen_045_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.062
+    },
+    {
+      "case": "gen_045_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b6owfpplx7gjlqe5kufioza5kigknkp73546bbnowl6hpn6dgbuq"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b6owfpplx7gjlqe5kufioza5kigknkp73546bbnowl6hpn6dgbuq"
+      },
+      "margin": 0.286
+    },
+    {
+      "case": "gen_045_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.05
+    },
+    {
+      "case": "gen_045_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.042
+    },
+    {
+      "case": "gen_045_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "margin": 0.155
+    },
+    {
+      "case": "gen_045_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_6lewcyki7cb7q2sxjreseu425lohwgimcshggqr5hezwzcy4defq"
+      },
+      "margin": 0.088
+    },
+    {
+      "case": "gen_051_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.032
+    },
+    {
+      "case": "gen_051_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.036
+    },
+    {
+      "case": "gen_051_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.034
+    },
+    {
+      "case": "gen_051_03_drift_enum_value",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.036
+    },
+    {
+      "case": "gen_051_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_f2mgypteohzz3wxqvlidz4wwqp32vn2l7ymilzh5oaldedv5lhva"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_c5zss4h6pchphpv6feolkrkoxkfseessjo5saiz5xmvco3ms7zvq"
+      },
+      "margin": 0.034
+    },
+    {
+      "case": "gen_051_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_zapoejozzezr7f7t43rinamxhucbbxgquuuy5vrtozmay6nanura"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_zapoejozzezr7f7t43rinamxhucbbxgquuuy5vrtozmay6nanura"
+      },
+      "margin": 0.286
+    },
+    {
+      "case": "gen_051_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.05
+    },
+    {
+      "case": "gen_051_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.05
+    },
+    {
+      "case": "gen_051_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "margin": 0.144
+    },
+    {
+      "case": "gen_051_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.084
+    },
+    {
+      "case": "gen_052_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.057
+    },
+    {
+      "case": "gen_052_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.062
+    },
+    {
+      "case": "gen_052_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.066
+    },
+    {
+      "case": "gen_052_03_drift_add_optional",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.066
+    },
+    {
+      "case": "gen_052_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.049
+    },
+    {
+      "case": "gen_052_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_h4wn6ubd4fenbobx6tf4w4fquisx7clhhn2sgagxw4i4wljmp23q"
+      },
+      "margin": 0.257
+    },
+    {
+      "case": "gen_052_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.001
+    },
+    {
+      "case": "gen_052_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.074
+    },
+    {
+      "case": "gen_052_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "margin": 0.026
+    },
+    {
+      "case": "gen_052_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.055
+    },
+    {
+      "case": "gen_054_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.069
+    },
+    {
+      "case": "gen_054_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.069
+    },
+    {
+      "case": "gen_054_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.071
+    },
+    {
+      "case": "gen_054_03_drift_wrapper",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_awdyj7z5rm7cc5w6kdj7tjepnqzeooeull3qehfxzfyodvsi6cbq"
+      },
+      "margin": 0.083
+    },
+    {
+      "case": "gen_054_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_la5p3j3qrrroe2opmryjttpyw6545ckywkyjm6qe6o65q5k5rjnq"
+      },
+      "margin": 0.074
+    },
+    {
+      "case": "gen_054_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "margin": 0.282
+    },
+    {
+      "case": "gen_054_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.05
+    },
+    {
+      "case": "gen_054_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "pred": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "margin": 0.042
+    },
+    {
+      "case": "gen_054_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "pred": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "margin": 0.171
+    },
+    {
+      "case": "gen_054_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "pred": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_qmtqhvf246iktg4t5ccdtpucgdmjp7h7hoi33625ceilxlaccw6a"
+      },
+      "margin": 0.046
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "artifact_digests": {
+    "training_checkpoint": "sha256:047000fe0f708a0d2195771892083605a87e9efa2d34fbe8d30a8a2dd8d21068",
+    "quantized_weights": "sha256:quant-047000fe0f708a0d2195771892083605a87e9efa2d34fbe8d30a8a2dd8d21068"
+  },
+  "metrics": {
+    "sanity_checked_examples": 8,
+    "sanity_mean_loss": 3.088963657617569,
+    "decision_distribution": {
+      "original": {
+        "match_schema": 432,
+        "new_candidate": 144,
+        "abstain": 144
+      },
+      "balanced": {
+        "match_schema": 432,
+        "new_candidate": 432,
+        "abstain": 432
+      }
+    },
+    "original_train_n": 720,
+    "balanced_train_n": 1296,
+    "completion_only_examples": 421,
+    "final_loss": 0.02573432725730527
+  }
+}
