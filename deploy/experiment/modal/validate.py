@@ -29,7 +29,7 @@ def _build_text(prompt: str, gold) -> str:
     return f"{prompt}\n{json.dumps(gold, sort_keys=True)}"
 
 
-def _score(model, tok, test_lines) -> dict:
+def _score(model, tok, test_lines, collect: bool = False) -> tuple:
     """Greedy-generate a completion per test prompt. Measures, against
     EXTERNAL corpus gold (never the model's own predicate):
       - parse_rate: output is valid tool-call JSON with a `decision`
@@ -38,11 +38,13 @@ def _score(model, tok, test_lines) -> dict:
         (the semantically meaningful call; ignores the opaque schema_id
         hash the model cannot memorize)
       - exact_match: full {decision,relation,schema_id} byte-exact (strict)
+    If `collect`, also returns a per-example record list for display.
     """
     import torch
 
     model.eval()
     parsed = decision_ok = decrel_ok = exact_ok = 0
+    examples = []
     for line in test_lines:
         prompt = line["prompt"]
         gold = line["gold_tool_call"]
@@ -54,32 +56,50 @@ def _score(model, tok, test_lines) -> dict:
                 **inputs, max_new_tokens=96, do_sample=False, pad_token_id=tok.pad_token_id
             )
         gen = tok.decode(out[0][inputs["input_ids"].shape[1] :], skip_special_tokens=True).strip()
+        obj = None
         start = gen.find("{")
         end = gen.rfind("}")
-        if start == -1 or end == -1 or end <= start:
-            continue
-        try:
-            obj = json.loads(gen[start : end + 1])
-        except Exception:
-            continue
-        if not isinstance(obj, dict) or "decision" not in obj:
-            continue
-        parsed += 1
-        if obj.get("decision") == gold.get("decision"):
-            decision_ok += 1
-            if obj.get("relation") == gold.get("relation"):
-                decrel_ok += 1
-        if json.dumps(obj, sort_keys=True) == json.dumps(gold, sort_keys=True):
-            exact_ok += 1
+        if start != -1 and end != -1 and end > start:
+            try:
+                cand = json.loads(gen[start : end + 1])
+                if isinstance(cand, dict) and "decision" in cand:
+                    obj = cand
+            except Exception:
+                obj = None
+        d_ok = rel_ok = ex_ok = False
+        if obj is not None:
+            parsed += 1
+            if obj.get("decision") == gold.get("decision"):
+                decision_ok += 1
+                d_ok = True
+                if obj.get("relation") == gold.get("relation"):
+                    decrel_ok += 1
+                    rel_ok = True
+            if json.dumps(obj, sort_keys=True) == json.dumps(gold, sort_keys=True):
+                exact_ok += 1
+                ex_ok = True
+        if collect:
+            examples.append(
+                {
+                    "case_name": line.get("case_name", "?"),
+                    "gold": gold,
+                    "predicted": obj,
+                    "raw": gen[:160],
+                    "decision_ok": d_ok,
+                    "relation_ok": rel_ok,
+                    "exact_ok": ex_ok,
+                }
+            )
     n = len(test_lines)
     r = lambda x: round(x / n, 4) if n else 0.0
-    return {
+    metrics = {
         "n": n,
         "parse_rate": r(parsed),
         "decision_match": r(decision_ok),
         "decision_relation_match": r(decrel_ok),
         "exact_match": r(exact_ok),
     }
+    return (metrics, examples) if collect else (metrics, [])
 
 
 @app.function(image=IMAGE, gpu="T4", volumes={"/cache": CACHE}, timeout=60 * 45)
@@ -103,7 +123,7 @@ def train_and_eval(train_lines: list, test_lines: list, seed: int = 7) -> dict:
 
     # --- BEFORE: base model on held-out ---
     base = fresh_base()
-    before = _score(base, tok, test_lines)
+    before, _ = _score(base, tok, test_lines)
     del base
     torch.cuda.empty_cache()
 
@@ -133,8 +153,8 @@ def train_and_eval(train_lines: list, test_lines: list, seed: int = 7) -> dict:
             opt.zero_grad()
             losses.append(float(out.loss.detach().cpu()))
 
-    # --- AFTER: fine-tuned model on the SAME held-out ---
-    after = _score(model, tok, test_lines)
+    # --- AFTER: fine-tuned model on the SAME held-out (collect examples) ---
+    after, examples = _score(model, tok, test_lines, collect=True)
 
     return {
         "model": REPO,
@@ -149,6 +169,7 @@ def train_and_eval(train_lines: list, test_lines: list, seed: int = 7) -> dict:
             k: round(after[k] - before[k], 4)
             for k in ("parse_rate", "decision_match", "decision_relation_match", "exact_match")
         },
+        "examples": examples,
     }
 
 
@@ -164,5 +185,10 @@ def main(jsonl: str):
             (train_lines if o.get("partition") == "train" else test_lines).append(o)
     print(f"train={len(train_lines)} test={len(test_lines)} — launching T4 round...")
     result = train_and_eval.remote(train_lines, test_lines)
+    out_path = jsonl.replace(".jsonl", "") + "_result.json"
+    with open(out_path, "w") as f:
+        json.dump(result, f, indent=2)
+    summary = {k: v for k, v in result.items() if k != "examples"}
     print("=== ARM-C VALIDATION RESULT ===")
-    print(json.dumps(result, indent=2))
+    print(json.dumps(summary, indent=2))
+    print(f"=== wrote {len(result.get('examples', []))} examples to {out_path} ===")

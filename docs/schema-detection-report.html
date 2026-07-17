@@ -302,8 +302,114 @@
       <strong>96% valid output</strong> and gets the <strong>decision right 46%</strong> of the
       time on families it never trained on. The <code>schema_id</code> is a 50-character opaque
       hash the model <em>should not</em> memorize — that is precisely what Lane&nbsp;1's
-      retrieval supplies and the gate corroborates. The model's job is the semantic judgment;
-      46% from scratch is where the flywheel starts.</p>
+      retrieval supplies and the gate corroborates.</p>
+    <div class="callout warn" style="margin-top:16px">
+      <h3>Read it honestly</h3>
+      <p>One round on 320 examples taught <strong>format + the majority class</strong>: the
+        model now emits valid tool-calls and says <span class="num">match_schema</span> for
+        same-family events — but it <strong>over-predicts match</strong> (misses all new-family
+        and abstain cases), often gets <code>relation</code> wrong, and hallucinates the
+        <code>schema_id</code>. So the 46% is real recognition of same-family structure, not yet
+        discrimination. This is expected at 0.5B / 320 examples — and it is <em>why the raw SLM
+        is never trusted alone</em>: retrieval supplies identity, the gate rejects the
+        over-matching. More data + decision-weighted loss are the next levers.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Examples — what the fine-tuned SLM actually output</h2>
+    <p>Six real held-out cases. Each event is reduced to its <strong>redacted field shape</strong>
+      (names + types + nullability — never raw values); the model sees that plus retrieved
+      candidates and emits a decision. Gold is from Deblob's deterministic corpus.</p>
+    <div class="grid2">
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+          <h3 style="font-size:15px">Same-family, identical</h3><span class="tag good">recognized</span></div>
+        <p style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 12px">
+          obs 38 · created_at, description, kind, quantity, user_id</p>
+        <div class="num" style="font-size:12.5px;line-height:1.9">
+          <div>gold&nbsp;&nbsp;<span class="tag good">match_schema</span> exact</div>
+          <div>slm&nbsp;&nbsp;&nbsp;<span class="tag good">match_schema</span> <span style="color:var(--warn)">incompatible_similarity</span> · id&nbsp;<span style="color:var(--warn)">hallucinated</span></div>
+        </div>
+        <p class="sub" style="font-size:12.5px;color:var(--muted);margin-top:12px">Right call
+          (matches an existing schema); relation off; identity comes from retrieval, not the model.</p>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+          <h3 style="font-size:15px">Drift — optional field added</h3><span class="tag good">recognized</span></div>
+        <p style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 12px">
+          obs 71 · …+ <b>score</b> added to the same shape</p>
+        <div class="num" style="font-size:12.5px;line-height:1.9">
+          <div>gold&nbsp;&nbsp;<span class="tag good">match_schema</span> compatible_drift</div>
+          <div>slm&nbsp;&nbsp;&nbsp;<span class="tag good">match_schema</span> <span style="color:var(--warn)">incompatible_similarity</span></div>
+        </div>
+        <p class="sub" style="font-size:12.5px;color:var(--muted);margin-top:12px">Saw through an
+          added field — still the same family. The evolution case.</p>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+          <h3 style="font-size:15px">False-split — fields renamed</h3><span class="tag good">recognized</span></div>
+        <p style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 12px">
+          obs 88 · <b>vnd_</b>created_at, vnd_kind, vnd_quantity…</p>
+        <div class="num" style="font-size:12.5px;line-height:1.9">
+          <div>gold&nbsp;&nbsp;<span class="tag good">match_schema</span> compatible_drift</div>
+          <div>slm&nbsp;&nbsp;&nbsp;<span class="tag good">match_schema</span> <span style="color:var(--warn)">incompatible_similarity</span></div>
+        </div>
+        <p class="sub" style="font-size:12.5px;color:var(--muted);margin-top:12px">Vendor-prefixed
+          field names — did <em>not</em> wrongly split into a new family. Trap avoided.</p>
+      </div>
+
+      <div class="panel" style="border-color:var(--good)">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+          <h3 style="font-size:15px">Incompatible — unit swap</h3><span class="tag good">fully correct</span></div>
+        <p style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 12px">
+          obs 76 · active, currency, order_id, region, score, verified</p>
+        <div class="num" style="font-size:12.5px;line-height:1.9">
+          <div>gold&nbsp;&nbsp;<span class="tag warn">match_schema</span> incompatible_similarity</div>
+          <div>slm&nbsp;&nbsp;&nbsp;<span class="tag warn">match_schema</span> incompatible_similarity · id&nbsp;<span style="color:var(--good)">✓</span></div>
+        </div>
+        <p class="sub" style="font-size:12.5px;color:var(--muted);margin-top:12px">The safety-critical
+          one: structurally close but semantically different → flagged
+          <b>incompatible</b> (an <em>un-accepted</em> match). Decision, relation and id all right.</p>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+          <h3 style="font-size:15px">New family</h3><span class="tag risk">missed</span></div>
+        <p style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 12px">
+          obs 54 · calibration{offset,unit}, readings[], sensor_reading_id</p>
+        <div class="num" style="font-size:12.5px;line-height:1.9">
+          <div>gold&nbsp;&nbsp;<span class="tag good">new_candidate</span></div>
+          <div>slm&nbsp;&nbsp;&nbsp;<span class="tag risk">match_schema</span> — should be new</div>
+        </div>
+        <p class="sub" style="font-size:12.5px;color:var(--muted);margin-top:12px">A genuinely new
+          structure the model wrongly matched. Over-prediction — the gate's job to reject.</p>
+      </div>
+
+      <div class="panel">
+        <div style="display:flex;justify-content:space-between;align-items:start;gap:10px">
+          <h3 style="font-size:15px">Insufficient evidence</h3><span class="tag risk">missed</span></div>
+        <p style="font-family:var(--mono);font-size:11.5px;color:var(--muted);margin:0 0 12px">
+          obs 22 · address{city,street,zip}, amount, category</p>
+        <div class="num" style="font-size:12.5px;line-height:1.9">
+          <div>gold&nbsp;&nbsp;<span class="tag good">abstain</span></div>
+          <div>slm&nbsp;&nbsp;&nbsp;<span class="tag risk">match_schema</span> — should abstain</div>
+        </div>
+        <p class="sub" style="font-size:12.5px;color:var(--muted);margin-top:12px">Only 22 observations —
+          too few to be sure. Model matched anyway; the gate's obs-floor stops it.</p>
+      </div>
+
+    </div>
+    <p style="margin-top:16px">The pattern: the fine-tuned model is <strong>good at recognizing
+      same-family events</strong> (the top row) and — encouragingly — got the
+      <strong>incompatible-similarity safety case fully right</strong>, but it
+      <strong>over-matches</strong> on genuinely-new and low-evidence events. Every one of those
+      over-matches is caught downstream by the trust gate (rank, margin, observation floor,
+      deterministic corroboration) — which is exactly why a still-imperfect model can be used
+      without ever creating a false merge.</p>
   </section>
 
   <section>
