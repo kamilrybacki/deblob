@@ -21,10 +21,36 @@ discovery queue. No build step — `web/console.html` is self-contained
   mode, behind a confirm dialog — `POST /candidates/{id}/promote|reject`.
   Falls back to demo data if the API is unreachable.
 
-## Serving
-- **Static:** any static host, or behind the Caddy edge (Authelia-gated) — it
-  makes no external requests. The mgmt API must send permissive CORS or be
-  same-origin.
-- **Same-origin (recommended):** serve `console.html` from a `/ui` route on the
-  mgmt API listener so the browser's `Authorization` and CORS are trivial;
-  base URL then defaults to the current origin.
+## Views (updated)
+Nav order leads with the **Decision Explorer** (the fastest way to understand
+Deblob), then the learned data, then governance:
+Decision explorer · Schema catalogue · Discovery queue · Families · Similarity ·
+**Model & learning** (active bundle digest, promotion gate, feedback loop,
+rollback target) · **Operations** (health, deps, relay throughput/lag/txn) ·
+Quarantine.
+
+## Security
+- The bearer **token is held in `sessionStorage` (this tab only), never in
+  `localStorage` or on disk**; the API base URL (not secret) is in localStorage.
+- No inline event handlers — event delegation only, so a strict CSP
+  (`connect-src 'self'`, no `unsafe-inline` for scripts) works.
+- Promote/reject are enabled **only** when live AND a token is present; each
+  requires a typed reason, promotion additionally requires typing the candidate
+  id to confirm. A confirm dialog is UX protection, not authorization — the API
+  must still enforce auth, state-transition legality, and audit attribution.
+- Three-state banner: **DEMO DATA** / **LIVE · READ-ONLY** / **LIVE · MUTATION**.
+
+## Serving (recommended shape)
+Caddy-served static SPA with a same-origin API proxy, all behind Authelia:
+```
+browser → Cloudflare → Caddy + Authelia
+   ├── /            static console.html   (no-store while iterating)
+   └── /api/v1/*    reverse_proxy → Deblob management API
+```
+Same-origin avoids CORS/preflight and keeps the `Authorization` header simple.
+Gotchas: preserve `X-Forwarded-Proto: https` through the proxy chain (else
+Authelia may reject the target); never embed a token in the HTML/JS/Caddyfile;
+protect `/metrics` (it reveals topology); if UI and API are cross-origin,
+configure CORS narrowly — never `*` with `Authorization`. Serving from a `/ui`
+route on the mgmt API also works for a quick demo (naturally same-origin), but
+the Caddy split keeps UI deploys independent of API releases.
