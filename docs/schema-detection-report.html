@@ -1,0 +1,369 @@
+<title>Deblob — Schema Detection Effectiveness</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f6;
+    --ink:#161b23; --muted:#5b6676; --faint:#8a94a4;
+    --border:#dce1ea; --border-strong:#c6cedb;
+    --accent:#4f5fe0; --accent-soft:#e7e9fb;
+    --good:#0f9d63; --good-soft:#daf0e6;
+    --warn:#c6821a; --warn-soft:#f6ecd6;
+    --risk:#d33f42; --risk-soft:#f7dedf;
+    --track:#e6eaf1;
+    --shadow:0 1px 2px rgba(20,30,50,.05),0 8px 24px rgba(20,30,50,.06);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0c0f14; --surface:#151a22; --surface-2:#1b212b;
+      --ink:#e7ebf2; --muted:#9aa5b5; --faint:#6b7686;
+      --border:#252d39; --border-strong:#333d4d;
+      --accent:#8b97ff; --accent-soft:#20263c;
+      --good:#3ad696; --good-soft:#14261e;
+      --warn:#e6a94a; --warn-soft:#2a2113;
+      --risk:#f2686b; --risk-soft:#2c1618;
+      --track:#222a35;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f6;
+    --ink:#161b23; --muted:#5b6676; --faint:#8a94a4;
+    --border:#dce1ea; --border-strong:#c6cedb; --accent:#4f5fe0; --accent-soft:#e7e9fb;
+    --good:#0f9d63; --good-soft:#daf0e6; --warn:#c6821a; --warn-soft:#f6ecd6;
+    --risk:#d33f42; --risk-soft:#f7dedf; --track:#e6eaf1;
+    --shadow:0 1px 2px rgba(20,30,50,.05),0 8px 24px rgba(20,30,50,.06);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0c0f14; --surface:#151a22; --surface-2:#1b212b;
+    --ink:#e7ebf2; --muted:#9aa5b5; --faint:#6b7686;
+    --border:#252d39; --border-strong:#333d4d; --accent:#8b97ff; --accent-soft:#20263c;
+    --good:#3ad696; --good-soft:#14261e; --warn:#e6a94a; --warn-soft:#2a2113;
+    --risk:#f2686b; --risk-soft:#2c1618; --track:#222a35;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased;letter-spacing:.005em}
+  .wrap{max-width:920px;margin:0 auto;padding:clamp(20px,5vw,64px) clamp(16px,4vw,32px)}
+  .num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+  header .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;
+    text-transform:uppercase;color:var(--accent);margin:0 0 14px}
+  h1{font-size:clamp(30px,5.5vw,46px);line-height:1.05;margin:0 0 16px;
+    letter-spacing:-.02em;text-wrap:balance;font-weight:680}
+  .lede{font-size:clamp(17px,2.4vw,20px);color:var(--muted);max-width:60ch;margin:0}
+  .meta{margin-top:22px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip{font-family:var(--mono);font-size:11.5px;color:var(--muted);
+    background:var(--surface-2);border:1px solid var(--border);
+    padding:5px 10px;border-radius:999px}
+  section{margin-top:clamp(38px,6vw,60px)}
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);margin:0 0 18px;display:flex;align-items:center;gap:10px}
+  h2::after{content:"";flex:1;height:1px;background:var(--border)}
+  h3{font-size:20px;margin:0 0 6px;letter-spacing:-.01em;font-weight:640}
+  p{margin:0 0 14px;color:var(--muted)}
+  p strong,li strong{color:var(--ink);font-weight:620}
+  .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  @media(max-width:640px){.cards{grid-template-columns:1fr}}
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:14px;
+    padding:20px;box-shadow:var(--shadow)}
+  .card .k{font-family:var(--mono);font-size:11.5px;letter-spacing:.06em;
+    text-transform:uppercase;color:var(--faint);margin:0 0 12px}
+  .stat{display:flex;align-items:baseline;gap:8px}
+  .stat .from{font-family:var(--mono);font-size:19px;color:var(--faint)}
+  .stat .arrow{color:var(--faint);font-size:15px}
+  .stat .to{font-family:var(--mono);font-size:40px;font-weight:640;letter-spacing:-.02em;line-height:1}
+  .stat .to.good{color:var(--good)} .stat .to.accent{color:var(--accent)}
+  .card .sub{font-size:13px;color:var(--muted);margin:12px 0 0}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+    padding:clamp(18px,3vw,28px);box-shadow:var(--shadow)}
+  .bar-row{display:grid;grid-template-columns:132px 1fr 62px;align-items:center;
+    gap:14px;margin:0 0 11px}
+  @media(max-width:560px){.bar-row{grid-template-columns:104px 1fr 52px;gap:10px}}
+  .bar-row .lbl{font-size:13.5px;color:var(--ink)}
+  .bar-row .lbl small{display:block;color:var(--faint);font-family:var(--mono);font-size:11px}
+  .track{background:var(--track);border-radius:7px;height:26px;overflow:hidden;position:relative}
+  .fill{height:100%;border-radius:7px;transition:width .3s}
+  .fill.accent{background:linear-gradient(90deg,var(--accent),color-mix(in srgb,var(--accent) 72%,#fff))}
+  .fill.good{background:linear-gradient(90deg,var(--good),color-mix(in srgb,var(--good) 70%,#fff))}
+  .fill.risk{background:linear-gradient(90deg,var(--risk),color-mix(in srgb,var(--risk) 72%,#fff))}
+  .fill.muted{background:var(--border-strong)}
+  .bar-row .val{font-family:var(--mono);font-size:14px;text-align:right;font-variant-numeric:tabular-nums}
+  .val.good{color:var(--good)} .val.risk{color:var(--risk)}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:center}
+  @media(max-width:680px){.split{grid-template-columns:1fr;gap:16px}}
+  .callout{border-left:3px solid var(--accent);background:var(--accent-soft);
+    border-radius:0 12px 12px 0;padding:16px 20px}
+  .callout.warn{border-color:var(--warn);background:var(--warn-soft)}
+  .callout h3{font-size:16px}
+  .callout p{color:var(--ink);opacity:.85;margin:0}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  .tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px}
+  th,td{padding:11px 14px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--faint);background:var(--surface-2);font-weight:600}
+  tbody tr:last-child td{border-bottom:none}
+  td .num{font-size:13px}
+  .tag{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:5px;font-weight:600}
+  .tag.good{background:var(--good-soft);color:var(--good)}
+  .tag.risk{background:var(--risk-soft);color:var(--risk)}
+  .tag.warn{background:var(--warn-soft);color:var(--warn)}
+  svg{display:block;width:100%;height:auto}
+  .legend{display:flex;flex-wrap:wrap;gap:16px;margin-top:14px;font-size:12.5px;color:var(--muted)}
+  .legend span{display:inline-flex;align-items:center;gap:7px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  ul.clean{margin:0;padding:0 0 0 18px;color:var(--muted)}
+  ul.clean li{margin:0 0 8px}
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--border);
+    font-size:12.5px;color:var(--faint)}
+  footer code{font-family:var(--mono);color:var(--muted)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:640px){.grid2{grid-template-columns:1fr}}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Deblob · effectiveness report</p>
+    <h1>How well does Deblob detect schemas?</h1>
+    <p class="lede">Two lanes, measured on ground truth: a deterministic structural core that
+      finds the right schema family, a trust gate that refuses to guess, and a lightweight
+      model that — once fine-tuned — starts making the call itself.</p>
+    <div class="meta">
+      <span class="chip">deterministic arms · n=96</span>
+      <span class="chip">fine-tune · 320 train / 80 held-out</span>
+      <span class="chip">family-partitioned</span>
+      <span class="chip">ground truth by construction</span>
+      <span class="chip">2026-07-17</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>The headline</h2>
+    <div class="cards">
+      <div class="card">
+        <p class="k">Structural retrieval</p>
+        <div class="stat"><span class="to accent num">92%</span></div>
+        <p class="sub">correct family in the <strong>top&nbsp;3</strong> by pure structure —
+          no model. recall@1 = 86.5%, MRR = 0.89.</p>
+      </div>
+      <div class="card">
+        <p class="k">Trust gate · false merges</p>
+        <div class="stat"><span class="from num">39</span><span class="arrow">→</span>
+          <span class="to good num">1</span></div>
+        <p class="sub">wrong schemas merged, per 96 events — the gate cuts them from
+          <strong>39</strong> (retrieval alone) to <strong>1</strong>.</p>
+      </div>
+      <div class="card">
+        <p class="k">Fine-tuned model · decision</p>
+        <div class="stat"><span class="from num">0%</span><span class="arrow">→</span>
+          <span class="to good num">46%</span></div>
+        <p class="sub">correct 3-way call on <strong>unseen families</strong> after one small
+          LoRA round on a 0.5B model.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Lane 1 — deterministic structural detection</h2>
+    <p>Before any model runs, Deblob fingerprints each event and retrieves the nearest known
+      schema families by structural distance. This is the workhorse: fast, exact, and where
+      most correct detections come from.</p>
+    <div class="panel">
+      <div class="bar-row"><div class="lbl">recall@1<small>gold ranked #1</small></div>
+        <div class="track"><div class="fill accent" style="width:86.5%"></div></div>
+        <div class="val">86.5%</div></div>
+      <div class="bar-row"><div class="lbl">recall@3<small>gold in top 3</small></div>
+        <div class="track"><div class="fill accent" style="width:92.3%"></div></div>
+        <div class="val">92.3%</div></div>
+      <div class="bar-row"><div class="lbl">recall@5<small>gold in top 5</small></div>
+        <div class="track"><div class="fill accent" style="width:92.3%"></div></div>
+        <div class="val">92.3%</div></div>
+      <div class="bar-row"><div class="lbl">MRR<small>mean recip. rank</small></div>
+        <div class="track"><div class="fill accent" style="width:89.1%"></div></div>
+        <div class="val">0.891</div></div>
+      <div class="bar-row"><div class="lbl">candidate miss<small>gold absent</small></div>
+        <div class="track"><div class="fill muted" style="width:7.7%"></div></div>
+        <div class="val">7.7%</div></div>
+    </div>
+    <p style="margin-top:14px">Read: for <strong>92%</strong> of events the right family is
+      already among the top three candidates on structure alone. The remaining 7.7% never
+      surface the gold family — a retrieval ceiling no amount of model tuning can fix, so it
+      is <strong>gated and reported separately</strong>.</p>
+  </section>
+
+  <section>
+    <h2>Lane 2 — the trust gate: coverage vs. safety</h2>
+    <p>A detector that decides everything will merge unrelated schemas. Deblob's gate holds a
+      hard line — <strong>never merge on a guess</strong> — trading coverage for safety. Each
+      arm below sees the same 96 events; only the decider changes.</p>
+
+    <div class="split">
+      <div>
+        <svg viewBox="0 0 400 300" role="img" aria-label="Risk versus coverage per arm">
+          <!-- axes -->
+          <line x1="52" y1="20" x2="52" y2="252" stroke="var(--border-strong)" stroke-width="1"/>
+          <line x1="52" y1="252" x2="384" y2="252" stroke="var(--border-strong)" stroke-width="1"/>
+          <!-- y grid + labels (false merges 0..40) -->
+          <g font-family="var(--mono)" font-size="10" fill="var(--faint)">
+            <line x1="52" y1="252" x2="384" y2="252" stroke="var(--border)" stroke-width="1"/>
+            <line x1="52" y1="194" x2="384" y2="194" stroke="var(--border)" stroke-width=".5"/>
+            <line x1="52" y1="136" x2="384" y2="136" stroke="var(--border)" stroke-width=".5"/>
+            <line x1="52" y1="78" x2="384" y2="78" stroke="var(--border)" stroke-width=".5"/>
+            <text x="46" y="255" text-anchor="end">0</text>
+            <text x="46" y="197" text-anchor="end">10</text>
+            <text x="46" y="139" text-anchor="end">20</text>
+            <text x="46" y="81" text-anchor="end">39</text>
+            <text x="30" y="140" text-anchor="middle" transform="rotate(-90 30 140)"
+              fill="var(--muted)">false merges</text>
+            <text x="218" y="285" text-anchor="middle" fill="var(--muted)">coverage →</text>
+            <text x="60" y="270" text-anchor="start">54%</text>
+            <text x="360" y="270" text-anchor="end">100%</text>
+          </g>
+          <!-- points: x = coverage mapped 54..100 -> 60..372 ; y = fm mapped 0..39 -> 252..78 -->
+          <!-- A1/B1/B2 cluster at cov 54.17 fm 1 -->
+          <g>
+            <circle cx="60" cy="248" r="7" fill="var(--good)" opacity=".9"/>
+            <circle cx="60" cy="248" r="13" fill="none" stroke="var(--good)" stroke-width="1" opacity=".4"/>
+            <text x="78" y="245" font-family="var(--mono)" font-size="10.5" fill="var(--ink)">A1·B1·B2</text>
+            <text x="78" y="257" font-family="var(--mono)" font-size="9" fill="var(--faint)">54% cov · 1 fm</text>
+          </g>
+          <!-- B0 raw slm cov 60.42 fm 5 -->
+          <circle cx="103" cy="230" r="6" fill="var(--warn)"/>
+          <text x="113" y="228" font-family="var(--mono)" font-size="10.5" fill="var(--ink)">B0</text>
+          <text x="113" y="239" font-family="var(--mono)" font-size="9" fill="var(--faint)">60% · 5 fm</text>
+          <!-- A0 retrieval only cov 100 fm 39 -->
+          <circle cx="372" cy="80" r="7" fill="var(--risk)"/>
+          <text x="362" y="76" font-family="var(--mono)" font-size="10.5" fill="var(--ink)" text-anchor="end">A0</text>
+          <text x="362" y="66" font-family="var(--mono)" font-size="9" fill="var(--risk)" text-anchor="end">100% · 39 fm</text>
+        </svg>
+        <div class="legend">
+          <span><i class="dot" style="background:var(--good)"></i>gated (safe)</span>
+          <span><i class="dot" style="background:var(--warn)"></i>ungated SLM</span>
+          <span><i class="dot" style="background:var(--risk)"></i>retrieval only</span>
+        </div>
+      </div>
+      <div>
+        <p><strong>A0 — retrieval only</strong> takes every top-1: 100% coverage, but
+          <span class="tag risk">39 false merges</span> in 96. Reckless.</p>
+        <p><strong>The gate</strong> (A1 / B1 / B2) accepts only corroborated, unambiguous,
+          high-margin matches: coverage falls to <strong>54%</strong>, false merges to
+          <span class="tag good">1</span> (95% upper bound 10%). Everything else is handed to a
+          human, safely.</p>
+        <p style="margin:0">The gate blocks <strong>61%</strong> of retrieval's raw errors
+          before they can merge.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2>The honest finding — a zero-shot model earns nothing</h2>
+    <div class="callout warn">
+      <h3>B1 ≈ B2 ≈ A1</h3>
+      <p>Behind the gate, a <strong>zero-shot / mock</strong> SLM (B1) lands on the exact same
+        coverage and false-merge count as pure deterministic top-1 (B2) and the deterministic
+        policy (A1): <span class="num">54.17%</span> coverage, <span class="num">1</span> false
+        merge. The redundancy ablation is unambiguous — <strong>an un-tuned model adds no safe
+        coverage.</strong> McNemar isn't significant; the paired-bootstrap accuracy delta
+        straddles zero. Raw model accuracy alone does not justify the lane.</p>
+    </div>
+    <p style="margin-top:16px">This is the whole reason the continual-learning loop exists.
+      The intelligence lane only pays for itself once the model actually <em>learns Deblob's
+      decision</em> — which is what the next section measures.</p>
+  </section>
+
+  <section>
+    <h2>Lane 2, fine-tuned — the model learns the task</h2>
+    <p>One real LoRA round on <strong>Qwen2.5-0.5B</strong> (a lightweight, ungated model) on a
+      Modal T4: trained on 320 examples, evaluated on 80 <strong>held-out families it never
+      saw</strong>. Ground truth from Deblob's own deterministic corpus, never the gate's
+      predicate.</p>
+    <div class="panel">
+      <div class="grid2" style="margin-bottom:6px">
+        <div class="legend" style="margin:0"><span><i class="dot" style="background:var(--border-strong)"></i>base (zero-shot)</span></div>
+        <div class="legend" style="margin:0"><span><i class="dot" style="background:var(--good)"></i>fine-tuned</span></div>
+      </div>
+      <div class="bar-row"><div class="lbl">valid output<small>parses as tool-call</small></div>
+        <div class="track"><div class="fill muted" style="width:1%"></div>
+          <div class="fill good" style="width:96.3%;position:absolute;top:0;left:0;opacity:.92"></div></div>
+        <div class="val good">96.3%</div></div>
+      <div class="bar-row"><div class="lbl">decision correct<small>3-way classify</small></div>
+        <div class="track"><div class="fill muted" style="width:1%"></div>
+          <div class="fill good" style="width:46.3%;position:absolute;top:0;left:0;opacity:.92"></div></div>
+        <div class="val good">46.3%</div></div>
+      <div class="bar-row"><div class="lbl">+ relation<small>decision & relation</small></div>
+        <div class="track"><div class="fill good" style="width:6.3%"></div></div>
+        <div class="val">6.3%</div></div>
+      <div class="bar-row"><div class="lbl">exact<small>incl. schema-id hash</small></div>
+        <div class="track"><div class="fill good" style="width:6.3%"></div></div>
+        <div class="val">6.3%</div></div>
+    </div>
+    <p style="margin-top:14px">From <strong>0%</strong> on every metric, the tiny model reaches
+      <strong>96% valid output</strong> and gets the <strong>decision right 46%</strong> of the
+      time on families it never trained on. The <code>schema_id</code> is a 50-character opaque
+      hash the model <em>should not</em> memorize — that is precisely what Lane&nbsp;1's
+      retrieval supplies and the gate corroborates. The model's job is the semantic judgment;
+      46% from scratch is where the flywheel starts.</p>
+  </section>
+
+  <section>
+    <h2>Full detector comparison</h2>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Arm</th><th>Coverage</th><th>Accepted</th><th>Ext. risk</th>
+          <th>False merges</th><th>95% bound</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>A0 · retrieval only</td><td class="num">100.0%</td><td class="num">96</td>
+            <td class="num">75.0%</td><td class="num">39</td><td class="num">50.6%</td>
+            <td><span class="tag risk">reckless</span></td></tr>
+          <tr><td>A1 · deterministic policy</td><td class="num">54.2%</td><td class="num">52</td>
+            <td class="num">51.9%</td><td class="num">1</td><td class="num">10.1%</td>
+            <td><span class="tag good">safe</span></td></tr>
+          <tr><td>B0 · raw SLM, no gate</td><td class="num">60.4%</td><td class="num">58</td>
+            <td class="num">62.1%</td><td class="num">5</td><td class="num">18.6%</td>
+            <td><span class="tag warn">ungated</span></td></tr>
+          <tr><td>B1 · SLM + gate</td><td class="num">54.2%</td><td class="num">52</td>
+            <td class="num">57.7%</td><td class="num">1</td><td class="num">10.1%</td>
+            <td><span class="tag good">safe</span></td></tr>
+          <tr><td>B2 · det-top1 + gate</td><td class="num">54.2%</td><td class="num">52</td>
+            <td class="num">53.8%</td><td class="num">1</td><td class="num">10.1%</td>
+            <td><span class="tag warn">= B1</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p style="margin-top:12px">Every accepted match is scored against external construction
+      truth, so a gate-accepted-but-wrong merge counts as risk — the gate cannot hide its own
+      errors behind its own rule.</p>
+  </section>
+
+  <section>
+    <h2>What's measured, what's next</h2>
+    <div class="grid2">
+      <div class="panel">
+        <h3 style="font-size:15px">Real &amp; measured</h3>
+        <ul class="clean">
+          <li>Deterministic retrieval + gate arms on a ground-truth-by-construction corpus (n=96).</li>
+          <li>Real LoRA fine-tune on Modal T4, scored on family-held-out data (0→96% / 0→46%).</li>
+          <li>No-false-merge invariant is separately proven exhaustively in the test suite.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3 style="font-size:15px">Honest caveats &amp; next levers</h3>
+        <ul class="clean">
+          <li>The arm table's SLM (B0/B1) is a <strong>mock</strong> stand-in — real adapters wire in next.</li>
+          <li>Fine-tune was one small round; more data + decision-weighted loss should lift the 46%.</li>
+          <li>FunctionGemma-270M (lighter, FC-specialized) is gated — a follow-up once a token exists.</li>
+          <li>The loop's job: turn 46% into growing safe coverage, round over round.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Sources — deterministic arms: <code>deblob-experiment</code> runner (seed=42, n=96).
+    Fine-tune: <code>deploy/experiment/modal/validate.py</code> on Modal T4, corpus from
+    <code>deblob-eval generate</code>. Full write-up:
+    <code>docs/experiment-arm-c-validation-results.md</code>. Every label is derived from a
+    known deterministic transformation — no LLM in the ground truth.
+  </footer>
+</div>
