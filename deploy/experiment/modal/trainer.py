@@ -188,6 +188,7 @@ CACHE_MOUNT = "/cache"
 LORA_MODEL_REPOS = {
     "granite-3.1-moe-1b": "ibm-granite/granite-3.1-1b-a400m-instruct",
     "qwen2.5-1.5b-instruct": "Qwen/Qwen2.5-1.5B-Instruct",
+    "qwen2.5-0.5b-instruct": "Qwen/Qwen2.5-0.5B-Instruct",  # validated lightweight default
     "functiongemma-270m": "google/functiongemma-270m-it",
 }
 
