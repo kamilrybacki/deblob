@@ -1,0 +1,369 @@
+<title>Deblob — How It Works & How the Experiment Went</title>
+<style>
+  :root{
+    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f6;
+    --ink:#161b23; --muted:#5b6676; --faint:#8a94a4;
+    --border:#dce1ea; --border-strong:#c6cedb;
+    --accent:#4f5fe0; --accent-soft:#e7e9fb;
+    --good:#0f9d63; --good-soft:#daf0e6;
+    --warn:#c6821a; --warn-soft:#f6ecd6;
+    --risk:#d33f42; --risk-soft:#f7dedf;
+    --track:#e6eaf1;
+    --shadow:0 1px 2px rgba(20,30,50,.05),0 8px 24px rgba(20,30,50,.06);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){:root{
+    --bg:#0c0f14; --surface:#151a22; --surface-2:#1b212b;
+    --ink:#e7ebf2; --muted:#9aa5b5; --faint:#6b7686;
+    --border:#252d39; --border-strong:#333d4d; --accent:#8b97ff; --accent-soft:#20263c;
+    --good:#3ad696; --good-soft:#14261e; --warn:#e6a94a; --warn-soft:#2a2113;
+    --risk:#f2686b; --risk-soft:#2c1618; --track:#222a35;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="light"]{
+    --bg:#f4f6f9; --surface:#ffffff; --surface-2:#eef1f6; --ink:#161b23; --muted:#5b6676;
+    --faint:#8a94a4; --border:#dce1ea; --border-strong:#c6cedb; --accent:#4f5fe0; --accent-soft:#e7e9fb;
+    --good:#0f9d63; --good-soft:#daf0e6; --warn:#c6821a; --warn-soft:#f6ecd6; --risk:#d33f42;
+    --risk-soft:#f7dedf; --track:#e6eaf1; --shadow:0 1px 2px rgba(20,30,50,.05),0 8px 24px rgba(20,30,50,.06);
+  }
+  :root[data-theme="dark"]{
+    --bg:#0c0f14; --surface:#151a22; --surface-2:#1b212b; --ink:#e7ebf2; --muted:#9aa5b5;
+    --faint:#6b7686; --border:#252d39; --border-strong:#333d4d; --accent:#8b97ff; --accent-soft:#20263c;
+    --good:#3ad696; --good-soft:#14261e; --warn:#e6a94a; --warn-soft:#2a2113; --risk:#f2686b;
+    --risk-soft:#2c1618; --track:#222a35; --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;letter-spacing:.005em}
+  .wrap{max-width:860px;margin:0 auto;padding:clamp(20px,5vw,64px) clamp(16px,4vw,32px)}
+  .num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+  header .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--accent);margin:0 0 14px}
+  h1{font-size:clamp(28px,5vw,44px);line-height:1.06;margin:0 0 16px;letter-spacing:-.02em;
+    text-wrap:balance;font-weight:680}
+  .lede{font-size:clamp(16px,2.3vw,19px);color:var(--muted);max-width:62ch;margin:0}
+  .meta{margin-top:22px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--surface-2);
+    border:1px solid var(--border);padding:5px 10px;border-radius:999px}
+  section{margin-top:clamp(36px,6vw,58px)}
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;
+    color:var(--faint);margin:0 0 18px;display:flex;align-items:center;gap:10px}
+  h2::after{content:"";flex:1;height:1px;background:var(--border)}
+  h3{font-size:18px;margin:22px 0 8px;letter-spacing:-.01em;font-weight:640}
+  p{margin:0 0 14px;color:var(--muted)}
+  p strong,li strong{color:var(--ink);font-weight:620}
+  .lead-p{font-size:17px;color:var(--ink)}
+  code{font-family:var(--mono);font-size:.9em;background:var(--surface-2);border:1px solid var(--border);
+    padding:1px 5px;border-radius:5px;color:var(--ink)}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+    padding:clamp(18px,3vw,26px);box-shadow:var(--shadow)}
+  .lanes{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media(max-width:640px){.lanes{grid-template-columns:1fr}}
+  .lane{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;
+    box-shadow:var(--shadow)}
+  .lane .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;
+    padding:3px 8px;border-radius:6px;font-weight:600}
+  .tag.det{background:var(--accent-soft);color:var(--accent)}
+  .tag.slm{background:var(--warn-soft);color:var(--warn)}
+  .lane h3{margin:12px 0 8px;font-size:16px}
+  .lane p{font-size:13.5px;margin:0}
+  .flow{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;
+    color:var(--muted);margin:6px 0 0}
+  .flow b{color:var(--ink);font-weight:600}
+  .flow .arr{color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px}
+  .tblwrap{overflow-x:auto;border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow)}
+  th,td{padding:10px 13px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--border)}
+  th:first-child,td:first-child{text-align:left}
+  thead th{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--faint);background:var(--surface-2);font-weight:600}
+  tbody tr:last-child td{border-bottom:none}
+  td .num{font-size:13px}
+  tr.hi td{background:var(--good-soft)}
+  .tag2{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:5px;font-weight:600}
+  .tag2.good{background:var(--good-soft);color:var(--good)} .tag2.risk{background:var(--risk-soft);color:var(--risk)}
+  .tag2.warn{background:var(--warn-soft);color:var(--warn)} .tag2.ok{background:var(--accent-soft);color:var(--accent)}
+  ul.clean{margin:0;padding:0 0 0 20px;color:var(--muted)} ul.clean li{margin:0 0 9px}
+  ul.clean li strong{color:var(--ink)}
+  .callout{border-left:3px solid var(--accent);background:var(--accent-soft);border-radius:0 12px 12px 0;
+    padding:16px 20px;margin:18px 0}
+  .callout.warn{border-color:var(--warn);background:var(--warn-soft)}
+  .callout.good{border-color:var(--good);background:var(--good-soft)}
+  .callout h3{margin:0 0 6px;font-size:16px} .callout p{color:var(--ink);opacity:.9;margin:0;font-size:14px}
+  .split{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+  @media(max-width:680px){.split{grid-template-columns:1fr}}
+  .cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:640px){.cards3{grid-template-columns:1fr}}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;
+    box-shadow:var(--shadow)}
+  .stat .k{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--faint);margin:0 0 10px}
+  .stat .v{font-family:var(--mono);font-size:34px;font-weight:640;letter-spacing:-.02em;line-height:1}
+  .stat .v.good{color:var(--good)} .stat .v.accent{color:var(--accent)}
+  .stat .s{font-size:12.5px;color:var(--muted);margin:10px 0 0}
+  .verdict{background:linear-gradient(135deg,var(--accent-soft),var(--surface));
+    border:1px solid var(--border-strong);border-radius:16px;padding:24px;box-shadow:var(--shadow)}
+  footer{margin-top:56px;padding-top:22px;border-top:1px solid var(--border);font-size:12.5px;color:var(--faint)}
+  footer code{color:var(--muted)}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Deblob · technical report</p>
+    <h1>How Deblob works, and how the experiment went</h1>
+    <p class="lede">A Rust schema-tagging service for event streams: recognize which schema an
+      event belongs to — fast and deterministically — and discover genuinely new schemas without
+      ever wrongly merging two different ones. This is what it does, and what a real fine-tune of
+      its intelligence lane proved.</p>
+    <div class="meta">
+      <span class="chip">github.com/kamilrybacki/deblob</span>
+      <span class="chip">2026-07-17</span>
+      <span class="chip">real hook proven end-to-end</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>In one paragraph</h2>
+    <p class="lead-p">Deblob is built as <strong>two lanes</strong>: a deterministic hot path that
+      does the fast, certain work, and a small-language-model (SLM) discovery lane behind a
+      <strong>trust gate</strong> that structurally prevents an unproven model decision from ever
+      being applied. A continual-learning loop lets the SLM improve from human decisions under
+      strict governance — a bad model can't corrupt identity or auto-deploy. The recent work
+      fine-tuned that SLM lane on real hardware and proved the production training hook
+      end-to-end: a feedback snapshot went through the deployed trainer, produced a governed
+      adapter, and that exact adapter — loaded back — reproduced the evaluation numbers.</p>
+    <div class="verdict">
+      <h3 style="margin:0 0 8px;font-size:17px">The honest verdict</h3>
+      <p style="color:var(--ink);margin:0;font-size:14.5px">An <strong>advanced deterministic
+        schema-tagging prototype with a credible, safety-oriented semantic research lane</strong>
+        — pre-alpha, unreleased. Its core contribution isn't that a 0.5B model reaches a
+        particular accuracy; it's that <strong>model improvement raises coverage without
+        transferring identity authority away from deterministic policy.</strong></p>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it works — the two lanes</h2>
+    <div class="lanes">
+      <div class="lane">
+        <span class="tag det">deterministic · hot path</span>
+        <h3>Structure decides the certain cases</h3>
+        <p>Parse (fuzz-hardened) → canonical <strong>fingerprint</strong> → <strong>monoid</strong>
+          profile → structural neighbor <strong>retrieval</strong>. Exactly-once Kafka relay
+          (chaos-tested, tuned 14→598 rec/s); Redis vault (atomic, immutable, health-gated). Fast,
+          deterministic — most correct detections come from here (retrieval recall@3 ≈ 92%).</p>
+      </div>
+      <div class="lane">
+        <span class="tag slm">SLM · cold discovery</span>
+        <h3>A model handles the subtle middle</h3>
+        <p>For the ambiguous cases (same-structure-different-meaning, drift, renamed fields), a
+          small model proposes a 3-way decision — <code>match_schema</code>,
+          <code>new_candidate</code>, or <code>abstain</code> — and never runs on the latency-critical
+          path. It can fail closed without taking down the relay.</p>
+      </div>
+    </div>
+
+    <h3>The trust gate — the load-bearing safety property</h3>
+    <p>An SLM proposal is applied <strong>only</strong> if a deterministic gate corroborates it —
+      <code>rank==1</code>, <code>distance ≤ 0.15</code>, <code>margin ≥ 0.10</code>,
+      <code>observations ≥ 20</code>, deterministic-compat, no redaction collision — with
+      <strong>no model confidence in the decision</strong>. The gate structurally prevents
+      uncorroborated model outputs from being applied. The honest safety claim: the gate prevented
+      application and produced <em>zero observed false-merges over a stated, externally-labeled
+      sample</em> — with a sample size and an upper confidence bound (the model registry already
+      enforces Wilson bounds, per-family floors, and non-inferiority).</p>
+
+    <h3>The continual-learning control plane</h3>
+    <p>Stronger than "collect feedback + periodically fine-tune": immutable provenance-bearing
+      feedback, family + near-duplicate partitioning, reason-coded rejections (a policy denial is
+      not a model error), stable-base retraining, replay strata for retention, immutable composite
+      model bundles, a statistical offline gate, a live-shadow hold, and full-bundle rollback. The
+      most valuable property is <strong>separation of duties</strong>: the training hook can
+      produce an artifact digest but <em>cannot move the active alias</em> — containing training
+      bugs, budget failures, and accidental regressions. The main residual risk is label quality.</p>
+
+    <div class="callout">
+      <h3>Homelab fit</h3>
+      <p>k3s workers run the Rust relay + discovery + API; Redpanda for transactional transport;
+        Redis (persistent) as vault + feedback + registry; NAS for immutable corpora/adapters/rollback
+        bundles; <strong>Modal T4 for intermittent, scale-to-zero LoRA training</strong> instead of a
+        local GPU; ArgoCD for digest-pinned deploys; Grafana for observability. Training is the one
+        sensible exception to otherwise-local operation — infrequent, digest-addressed, off the
+        latency-critical path.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>What it does — functionality</h2>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Capability</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr><td>Parse + fingerprint + monoid-profile + structural retrieval</td>
+            <td><span class="tag2 good">production-grade</span></td></tr>
+          <tr><td>Exactly-once Kafka relay (transactional, chaos-proven, 598 rec/s)</td>
+            <td><span class="tag2 good">done</span></td></tr>
+          <tr><td>Redis schema vault (atomic, immutable, health-gated)</td>
+            <td><span class="tag2 good">done</span></td></tr>
+          <tr><td>Semantic fingerprint + weighted-Jaccard similarity</td>
+            <td><span class="tag2 good">done</span></td></tr>
+          <tr><td>SLM shadow lane + trusted-apply gate (no-false-merge proven in tests)</td>
+            <td><span class="tag2 ok">governance</span></td></tr>
+          <tr><td>Continual-learning loop → gated model registry (canary, rollback, real-Redis IT)</td>
+            <td><span class="tag2 ok">implemented</span></td></tr>
+          <tr><td>Experiment harness: arms A0–B2, four-layer eval, leak-guard, real-corpus ingest</td>
+            <td><span class="tag2 ok">offline</span></td></tr>
+          <tr><td>Remote fine-tune hook (provider-neutral; Modal T4 default)</td>
+            <td><span class="tag2 good">wired + proven</span></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <h2>How the experiment went</h2>
+    <p>The goal: prove the SLM lane can be fine-tuned to <strong>correctly infer new schemas with
+      a good score</strong>, and that the whole arm-C flow runs on real hardware. The first
+      fine-tune (v1) mode-collapsed — it always said <code>match_schema</code>, missed every
+      new-family and abstain case, and hallucinated schema ids. Five cumulative interventions
+      turned that around (Qwen2.5-0.5B, family-held-out — no sibling of a test family in training):</p>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Iteration</th><th>new-schema</th><th>decision</th><th>match</th>
+          <th>schema-id</th><th></th></tr></thead>
+        <tbody>
+          <tr><td>v1 baseline (full-seq loss)</td><td><span class="tag2 risk">0%</span></td>
+            <td class="num">46%</td><td class="num">~all</td><td class="num">6%</td>
+            <td>collapsed; hallucinated ids</td></tr>
+          <tr><td>v2 + completion-only loss + balance</td><td class="num">50%</td>
+            <td class="num">46%</td><td class="num">27%</td><td class="num">19%</td>
+            <td>collapse fixed</td></tr>
+          <tr><td>v3 + finite hypothesis scoring</td><td class="num">37%</td><td class="num">55%</td>
+            <td class="num">54%</td><td class="num">29%</td><td>zero hallucination</td></tr>
+          <tr class="hi"><td>v3b + more data</td><td class="num">33%</td>
+            <td class="num"><strong>78%</strong></td><td class="num">100%</td><td class="num">47%</td>
+            <td>best all-round</td></tr>
+          <tr class="hi"><td>v4 + deterministic distance veto</td>
+            <td class="num"><strong>100%</strong></td><td class="num">61%</td><td class="num">58%</td>
+            <td class="num">24%</td><td>safe discovery</td></tr>
+          <tr><td>v5 tuned veto (0.40)</td><td class="num">33%</td><td class="num">56%</td>
+            <td class="num">67%</td><td class="num">29%</td><td>no clean threshold</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>What each fix did</h3>
+    <ul class="clean">
+      <li><strong>Completion-only loss</strong> — mask the long prompt, loss only on the tool-call.
+        The #1 lever; the prompt was drowning the decision signal.</li>
+      <li><strong>Balanced sampling</strong> — <code>match_schema</code> was 64% of decisions, so the
+        model could emit new/abstain at all.</li>
+      <li><strong>Finite hypothesis scoring</strong> — score every <em>legal</em> completion by
+        likelihood and pick the best, instead of free generation → higher accuracy and
+        <strong>out-of-catalog identifiers become impossible</strong> (an inference invariant).</li>
+      <li><strong>More data</strong> → decision 55% → 78%.</li>
+      <li><strong>Deterministic distance veto</strong> — force <code>new_candidate</code> when nothing
+        sits within the gate distance → new-schema recall → 100%.</li>
+    </ul>
+
+    <div class="callout">
+      <h3>The key finding</h3>
+      <p>Structural distance <strong>cannot cleanly separate a genuinely new family from a
+        drifted/renamed one</strong> — both sit at ~0.29 distance. That is a semantic judgment (the
+        model's job, improving with data), while the deterministic layer safely handles the
+        far-and-obvious. The negative result matters more than any headline number: the deterministic
+        lane is <strong>necessary but insufficient</strong>, and the model has a non-redundant role in
+        the middle. Two honest operating points result — <strong>v4</strong> (100% new-recall,
+        conservative) and <strong>v3b</strong> (78% all-round) — neither universally superior without
+        an explicit error-cost model.</p>
+    </div>
+
+    <h3>The real-hook proof</h3>
+    <p>The "training ran standalone" gap is now closed for the training half. A feedback snapshot was
+      exported to the model Volume with a content-addressed manifest; the <strong>deployed production
+      trainer</strong> (now running the winning recipe) resolved the manifest, trained on real data
+      (balanced 432/432/432; 421 completion-only examples; final loss 0.026), and returned
+      <strong>digests only</strong> — separation of duties held. The resulting adapter, loaded back
+      and run through finite-scoring + veto, reproduced the numbers exactly:</p>
+    <div class="cards3">
+      <div class="stat"><p class="k">new-schema recall</p><div class="v good num">100%</div>
+        <p class="s">production adapter, held-out families</p></div>
+      <div class="stat"><p class="k">decision accuracy</p><div class="v accent num">60.8%</div>
+        <p class="s">matches validation v4 exactly</p></div>
+      <div class="stat"><p class="k">hallucinated ids</p><div class="v good num">0</div>
+        <p class="s">only legal catalog ids selectable</p></div>
+    </div>
+    <div class="flow" style="margin-top:16px"><b>feedback</b><span class="arr">→</span>
+      <b>Modal trainer</b><span class="arr">→</span><b>adapter + digests</b><span class="arr">→</span>
+      <b>Volume</b><span class="arr">→</span><b>finite-scoring decisions</b></div>
+  </section>
+
+  <section>
+    <h2>Honest assessment — solid vs. overclaimed</h2>
+    <div class="split">
+      <div class="panel">
+        <h3 style="margin-top:0;font-size:15px;color:var(--good)">Established solidly</h3>
+        <ul class="clean" style="font-size:13.5px">
+          <li>The v1 diagnosis was right — prompt-loss + class imbalance, not parameter count.</li>
+          <li>Finite scoring is a genuine improvement, cleanly isolated (same weights, same inputs).</li>
+          <li>Family-held-out + evaluator-only-sidecar leak-guard is rigorous — kills the earlier
+            tautological-evaluation problem.</li>
+          <li>The negative distance result is honest and important.</li>
+        </ul>
+      </div>
+      <div class="panel">
+        <h3 style="margin-top:0;font-size:15px;color:var(--warn)">Currently overclaimed</h3>
+        <ul class="clean" style="font-size:13.5px">
+          <li>"External gold" → evaluator-side gold on a <strong>synthetic</strong> (construction-truth)
+            corpus. Not yet production-feedback validation.</li>
+          <li>The held-out set became a <strong>dev/calibration set</strong> (inspected across v1→v5).
+            A fresh sealed audit set is required.</li>
+          <li>Figures lack <strong>uncertainty</strong> — single seed. Need multi-seed, CIs, macro-F1,
+            confusion matrices, recall@k.</li>
+          <li>A <strong>deterministic veto's gain is not an SLM gain</strong> — report raw / override /
+            gated separately.</li>
+          <li>Zero observed false-merges is <strong>not</strong> production safety evidence yet.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="callout warn">
+      <h3>Documentation drift — fix before any release</h3>
+      <p>The README still describes the SLM lane as unsupported and an older go-live doc calls the
+        gate descriptive-only, while newer code implements trust-application + governed model-registry
+        transitions. Reconcile the README, runbooks, and state diagrams with shipped behavior.</p>
+    </div>
+    <p style="margin-top:14px"><strong>Methodological verdict:</strong> rigorous for an early
+      controlled engineering experiment — real LoRA on a real T4, family partitioning, evaluator-side
+      gold, finite closed-set scoring, per-class failure analysis, a deterministic-policy ablation,
+      and an honestly-reported failed distance separator. <em>Not yet a confirmatory benchmark</em>
+      — repeated test-set consultation + single seed + synthetic data keep it exploratory.</p>
+  </section>
+
+  <section>
+    <h2>What's genuinely next</h2>
+    <ul class="clean">
+      <li><strong>Freeze v3b + v4</strong>; build a <strong>sealed audit corpus</strong> (new families,
+        near-dup clustering, independent seed, no threshold inspection).</li>
+      <li><strong>Multi-seed</strong> runs with paired confidence intervals.</li>
+      <li>Complete <strong>A1/B1/B2</strong> — the decisive question: does the SLM add safe coverage
+        over a strong deterministic policy at the same risk bound? If B1≈B2, it isn't yet justified.</li>
+      <li>Separate <strong>retrieval from semantic accuracy</strong> (recall@k, oracle-candidate,
+        end-to-end, gated coverage).</li>
+      <li>Add <strong>genuine external data</strong> (source-native GitHub Archive / Wikimedia labels,
+        adjudicated homelab feedback).</li>
+      <li>Calibrate operating points into <strong>risk-coverage curves</strong>, not one threshold.</li>
+      <li>Exercise a <strong>complete real trajectory</strong> to promotion + forced rollback (training
+        half now done; gate → shadow-hold → promote → rollback remain).</li>
+      <li><strong>Failure drills</strong> + <strong>poisoning/forgetting</strong> validation; reconcile
+        documentation.</li>
+    </ul>
+  </section>
+
+  <footer>
+    Deterministic + gate metrics from the <code>deblob-experiment</code> runner; fine-tune from
+    <code>deploy/experiment/modal/</code> on Modal T4; corpus from <code>deblob-eval generate</code>.
+    Full write-up: <code>docs/joint-report-deblob-2026-07-17.md</code>. Every training label derives
+    from a known deterministic transformation — no LLM in the ground truth.
+  </footer>
+</div>
