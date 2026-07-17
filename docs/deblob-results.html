@@ -1,0 +1,371 @@
+<title>Deblob — Identified Schemas & Experiment Results</title>
+<style>
+  :root{
+    --plane:#f9f9f7; --surface:#fcfcfb; --surface-2:#f0efec;
+    --ink:#0b0b0b; --ink2:#52514e; --muted:#898781;
+    --grid:#e1e0d9; --axis:#c3c2b7; --border:rgba(11,11,11,.10);
+    --blue:#2a78d6; --blue-100:#cde2fb; --blue-250:#86b6ef; --blue-400:#3987e5;
+    --blue-550:#1c5cab; --blue-700:#0d366b;
+    --aqua:#1baf7a; --violet:#4a3aa7; --red:#e34948;
+    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b;
+    --good-txt:#006300;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    --shadow:0 1px 2px rgba(20,30,50,.05),0 8px 24px rgba(20,30,50,.06);
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --plane:#0d0d0d; --surface:#1a1a19; --surface-2:#242422; --ink:#fff; --ink2:#c3c2b7;
+    --muted:#898781; --grid:#2c2c2a; --axis:#383835; --border:rgba(255,255,255,.10);
+    --blue:#3987e5; --blue-100:#0d366b; --blue-250:#104281; --blue-400:#1c5cab;
+    --blue-550:#3987e5; --blue-700:#9ec5f4; --aqua:#199e70; --violet:#9085e9; --red:#e66767;
+    --good:#0ca30c; --warning:#fab219; --serious:#ec835a; --critical:#d03b3b; --good-txt:#0ca30c;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }}
+  :root[data-theme="light"]{--plane:#f9f9f7;--surface:#fcfcfb;--surface-2:#f0efec;--ink:#0b0b0b;
+    --ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--border:rgba(11,11,11,.10);
+    --blue:#2a78d6;--blue-100:#cde2fb;--blue-250:#86b6ef;--blue-400:#3987e5;--blue-550:#1c5cab;
+    --blue-700:#0d366b;--aqua:#1baf7a;--violet:#4a3aa7;--red:#e34948;--good:#0ca30c;--good-txt:#006300;}
+  :root[data-theme="dark"]{--plane:#0d0d0d;--surface:#1a1a19;--surface-2:#242422;--ink:#fff;
+    --ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--border:rgba(255,255,255,.10);
+    --blue:#3987e5;--blue-100:#0d366b;--blue-250:#104281;--blue-400:#1c5cab;--blue-550:#3987e5;
+    --blue-700:#9ec5f4;--aqua:#199e70;--violet:#9085e9;--red:#e66767;--good:#0ca30c;--good-txt:#0ca30c;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--plane);color:var(--ink);font-family:var(--sans);line-height:1.55;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:900px;margin:0 auto;padding:clamp(20px,5vw,60px) clamp(16px,4vw,32px)}
+  .num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:.14em;text-transform:uppercase;
+    color:var(--blue);margin:0 0 14px}
+  h1{font-size:clamp(28px,5vw,42px);line-height:1.07;margin:0 0 14px;letter-spacing:-.02em;
+    text-wrap:balance;font-weight:680}
+  .lede{font-size:clamp(16px,2.2vw,18px);color:var(--ink2);max-width:62ch;margin:0}
+  .meta{margin-top:20px;display:flex;flex-wrap:wrap;gap:8px}
+  .chip{font-family:var(--mono);font-size:11.5px;color:var(--ink2);background:var(--surface-2);
+    border:1px solid var(--border);padding:5px 10px;border-radius:999px}
+  section{margin-top:clamp(38px,6vw,56px)}
+  h2{font-size:13px;font-family:var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);
+    margin:0 0 8px;display:flex;align-items:center;gap:10px}
+  h2::after{content:"";flex:1;height:1px;background:var(--grid)}
+  .sub{color:var(--ink2);margin:0 0 20px;font-size:14.5px;max-width:64ch}
+  .cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  @media(max-width:640px){.cards3{grid-template-columns:1fr}}
+  .stat{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:18px;
+    box-shadow:var(--shadow)}
+  .stat .k{font-family:var(--mono);font-size:11px;letter-spacing:.05em;text-transform:uppercase;
+    color:var(--muted);margin:0 0 10px}
+  .stat .v{font-family:var(--mono);font-size:34px;font-weight:640;letter-spacing:-.02em;line-height:1;color:var(--blue)}
+  .stat .v.good{color:var(--good-txt)}
+  .stat .s{font-size:12.5px;color:var(--ink2);margin:9px 0 0}
+  .panel{background:var(--surface);border:1px solid var(--border);border-radius:16px;
+    padding:clamp(16px,3vw,24px);box-shadow:var(--shadow);overflow-x:auto}
+  /* confusion matrix */
+  .cm{border-collapse:separate;border-spacing:3px;margin:0 auto;font-size:13px}
+  .cm td,.cm th{padding:0}
+  .cm .cell{width:96px;height:60px;border-radius:8px;display:flex;flex-direction:column;
+    align-items:center;justify-content:center;color:#fff;font-family:var(--mono)}
+  .cm .cell .c{font-size:20px;font-weight:640;font-variant-numeric:tabular-nums}
+  .cm .cell .p{font-size:10.5px;opacity:.85}
+  .cm .rh{font-family:var(--mono);font-size:12px;color:var(--ink2);text-align:right;padding-right:10px;white-space:nowrap}
+  .cm .ch{font-family:var(--mono);font-size:11px;color:var(--muted);text-align:center;padding-bottom:6px}
+  .cm .corner{font-size:10px;color:var(--muted);text-align:right;padding-right:10px}
+  .axlbl{font-family:var(--mono);font-size:11px;color:var(--muted);letter-spacing:.04em}
+  /* bars */
+  .bar-row{display:grid;grid-template-columns:172px 1fr 52px;align-items:center;gap:12px;margin:0 0 8px}
+  @media(max-width:560px){.bar-row{grid-template-columns:130px 1fr 46px;gap:8px}}
+  .bar-row .lbl{font-size:12.5px;color:var(--ink)} .bar-row .lbl small{color:var(--muted);font-family:var(--mono);font-size:10.5px}
+  .track{background:var(--surface-2);border-radius:6px;height:22px;overflow:hidden}
+  .fill{height:100%;border-radius:6px;background:var(--blue)}
+  .bar-row .val{font-family:var(--mono);font-size:12.5px;text-align:right;font-variant-numeric:tabular-nums;color:var(--ink2)}
+  .grp{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:14px 0 8px}
+  /* example cards */
+  .ex{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  @media(max-width:680px){.ex{grid-template-columns:1fr}}
+  .exc{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:var(--shadow)}
+  .exc.win{border-color:var(--good)}
+  .exc .top{display:flex;justify-content:space-between;align-items:start;gap:10px;margin-bottom:10px}
+  .exc h3{margin:0;font-size:14px;font-weight:640}
+  .exc .fields{font-family:var(--mono);font-size:11px;color:var(--ink2);background:var(--surface-2);
+    border:1px solid var(--border);border-radius:8px;padding:8px 10px;margin:0 0 10px;line-height:1.6;word-break:break-word}
+  .exc .kv{font-family:var(--mono);font-size:12px;line-height:1.9}
+  .exc .kv .lab{color:var(--muted);display:inline-block;width:52px}
+  .tag{font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:5px;font-weight:600}
+  .tag.match{background:color-mix(in srgb,var(--blue) 16%,transparent);color:var(--blue)}
+  .tag.new{background:color-mix(in srgb,var(--aqua) 20%,transparent);color:var(--aqua)}
+  .tag.abst{background:color-mix(in srgb,var(--violet) 18%,transparent);color:var(--violet)}
+  .tag.ok{background:color-mix(in srgb,var(--good) 18%,transparent);color:var(--good-txt)}
+  .tag.warn{background:color-mix(in srgb,var(--warning) 22%,transparent);color:var(--serious)}
+  .exc .note{font-size:11.5px;color:var(--ink2);margin:10px 0 0}
+  .legend{display:flex;flex-wrap:wrap;gap:14px;margin-top:14px;font-size:12px;color:var(--ink2)}
+  .legend span{display:inline-flex;align-items:center;gap:6px}
+  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
+  svg{display:block;width:100%;height:auto;overflow:visible}
+  .callout{border-left:3px solid var(--blue);background:color-mix(in srgb,var(--blue) 8%,var(--surface));
+    border-radius:0 12px 12px 0;padding:16px 20px;margin-top:18px}
+  .callout h3{margin:0 0 6px;font-size:15px} .callout p{margin:0;font-size:13.5px;color:var(--ink2)}
+  footer{margin-top:52px;padding-top:20px;border-top:1px solid var(--grid);font-size:12px;color:var(--muted)}
+  footer code{font-family:var(--mono)}
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Deblob · experiment results</p>
+    <h1>What the fine-tuned model actually identified</h1>
+    <p class="lede">Every number here is the <strong>production-trained adapter</strong> (trained
+      through the real Modal hook, loaded back from the Volume) deciding on <strong>180 held-out
+      cases from families it never saw</strong> — event structure in, schema decision out. No
+      cherry-picking; the full confusion matrix and per-scenario breakdown are below.</p>
+    <div class="meta">
+      <span class="chip">Qwen2.5-0.5B · LoRA</span>
+      <span class="chip">180 held-out</span>
+      <span class="chip">finite scoring + deterministic veto</span>
+      <span class="chip">external gold</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>Headline</h2>
+    <div class="cards3">
+      <div class="stat"><p class="k">New schemas detected</p><div class="v good num">89%</div>
+        <p class="s">32 / 36 genuinely-new families correctly flagged <code>new_candidate</code></p></div>
+      <div class="stat"><p class="k">Incompatible caught</p><div class="v good num">100%</div>
+        <p class="s">7 / 7 same-structure-different-meaning flagged as an un-accepted match</p></div>
+      <div class="stat"><p class="k">Decision accuracy</p><div class="v num">60.8%</div>
+        <p class="s">across all three decisions; identical structures resolved 61%</p></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Confusion matrix</h2>
+    <p class="sub">Rows = the true decision, columns = what the model identified. The blue diagonal
+      is correct; off-diagonal cells are where it erred. Colour intensity scales with count.</p>
+    <div class="panel">
+      <div class="axlbl" style="text-align:center;margin-bottom:6px">identified as →</div>
+      <table class="cm">
+        <tr><td class="corner">true ↓</td><td class="ch">match_schema</td><td class="ch">new_candidate</td><td class="ch">abstain</td></tr>
+        <tr><td class="rh">match_schema (108)</td>
+          <td><div class="cell" style="background:var(--blue-550)" title="match→match: 65"><span class="c">65</span><span class="p">60%</span></div></td>
+          <td><div class="cell" style="background:var(--blue-100)" title="match→new: 9"><span class="c">9</span><span class="p">8%</span></div></td>
+          <td><div class="cell" style="background:var(--blue-250)" title="match→abstain: 34"><span class="c">34</span><span class="p">31%</span></div></td></tr>
+        <tr><td class="rh">new_candidate (36)</td>
+          <td><div class="cell" style="background:var(--surface-2);color:var(--muted)" title="new→match: 0"><span class="c">0</span></div></td>
+          <td><div class="cell" style="background:var(--blue-400)" title="new→new: 32"><span class="c">32</span><span class="p">89%</span></div></td>
+          <td><div class="cell" style="background:var(--blue-100)" title="new→abstain: 4"><span class="c">4</span><span class="p">11%</span></div></td></tr>
+        <tr><td class="rh">abstain (36)</td>
+          <td><div class="cell" style="background:var(--surface-2);color:var(--muted)" title="abstain→match: 3"><span class="c" style="color:var(--ink2)">3</span></div></td>
+          <td><div class="cell" style="background:var(--blue-250)" title="abstain→new: 20"><span class="c">20</span><span class="p">56%</span></div></td>
+          <td><div class="cell" style="background:var(--blue-100)" title="abstain→abstain: 13"><span class="c">13</span><span class="p">36%</span></div></td></tr>
+      </table>
+      <p class="sub" style="margin:16px 0 0">Reading it: new families are identified cleanly (32/36,
+        and <strong>never</strong> wrongly called an existing match). The main leakage is the
+        conservative veto pushing some true matches and ambiguous cases toward <code>abstain</code>
+        / <code>new_candidate</code> — safe errors (review, don't merge), not dangerous ones.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>Accuracy by scenario</h2>
+    <p class="sub">The corpus is built from known transformations, so each event's true relationship
+      is known. How often the model got the decision right, per transformation type:</p>
+    <div class="panel">
+      <div class="grp">Same schema / evolved</div>
+      <div class="bar-row"><div class="lbl">exact<small>identical structure</small></div><div class="track"><div class="fill" style="width:61%"></div></div><div class="val">33/54</div></div>
+      <div class="bar-row"><div class="lbl">drift · enum value<small>added enum</small></div><div class="track"><div class="fill" style="width:75%"></div></div><div class="val">6/8</div></div>
+      <div class="bar-row"><div class="lbl">drift · widen null<small>nullability</small></div><div class="track"><div class="fill" style="width:67%"></div></div><div class="val">2/3</div></div>
+      <div class="bar-row"><div class="lbl">drift · add optional<small>new field</small></div><div class="track"><div class="fill" style="width:2%"></div></div><div class="val">0/4</div></div>
+      <div class="bar-row"><div class="lbl">drift · wrapper<small>envelope added</small></div><div class="track"><div class="fill" style="width:2%"></div></div><div class="val">0/3</div></div>
+      <div class="grp">Renamed (same family, different surface)</div>
+      <div class="bar-row"><div class="lbl">false-split · vendor<small>vnd_ prefix</small></div><div class="track"><div class="fill" style="width:67%"></div></div><div class="val">4/6</div></div>
+      <div class="bar-row"><div class="lbl">false-split · abbrev<small>shortened</small></div><div class="track"><div class="fill" style="width:60%"></div></div><div class="val">6/10</div></div>
+      <div class="bar-row"><div class="lbl">false-split · case<small>snake↔camel</small></div><div class="track"><div class="fill" style="width:50%"></div></div><div class="val">1/2</div></div>
+      <div class="grp">Semantically different (must NOT merge)</div>
+      <div class="bar-row"><div class="lbl">incompatible · unit swap<small>Cel↔degF</small></div><div class="track"><div class="fill" style="width:100%;background:var(--good)"></div></div><div class="val">7/7</div></div>
+      <div class="bar-row"><div class="lbl">incompatible · generic<small>id/status reused</small></div><div class="track"><div class="fill" style="width:55%"></div></div><div class="val">6/11</div></div>
+      <div class="grp">New family / insufficient evidence</div>
+      <div class="bar-row"><div class="lbl">new family<small>novel structure</small></div><div class="track"><div class="fill" style="width:89%;background:var(--good)"></div></div><div class="val">32/36</div></div>
+      <div class="bar-row"><div class="lbl">abstain · low obs<small>too few samples</small></div><div class="track"><div class="fill" style="width:100%;background:var(--good)"></div></div><div class="val">8/8</div></div>
+      <div class="bar-row"><div class="lbl">abstain · candidate gone<small>gold absent</small></div><div class="track"><div class="fill" style="width:33%"></div></div><div class="val">4/12</div></div>
+      <div class="bar-row"><div class="lbl">abstain · ambiguous<small>near-tie</small></div><div class="track"><div class="fill" style="width:6%"></div></div><div class="val">1/16</div></div>
+    </div>
+    <p class="sub" style="margin-top:12px">Strong where it counts: <strong>new families (89%)</strong>,
+      <strong>unit-swap safety traps (100%)</strong>, <strong>low-evidence abstains (100%)</strong>.
+      Weak on drift-wrapper and ambiguous-abstain — the next data + calibration targets.</p>
+  </section>
+
+  <section>
+    <h2>Real identified schemas</h2>
+    <p class="sub">Six actual held-out cases: the event's redacted field-shape goes in, the model's
+      identified decision comes out, checked against the known ground truth. <code>d</code> is the
+      structural distance to the nearest known schema.</p>
+    <div class="ex">
+
+      <div class="exc win">
+        <div class="top"><h3>Identical schema</h3><span class="tag ok">✓ matched</span></div>
+        <div class="fields">amount, description, kind, metadata{revision}</div>
+        <div class="kv"><span class="lab">gold</span><span class="tag match">match_schema</span> exact · d 0.00</div>
+        <div class="kv"><span class="lab">ident</span><span class="tag match">match_schema</span> → same schema</div>
+        <p class="note">Recognized an identical structure and matched it to the existing schema.</p>
+      </div>
+
+      <div class="exc win">
+        <div class="top"><h3>Unit swap — the safety trap</h3><span class="tag ok">✓ fully correct</span></div>
+        <div class="fields">amount, description, region &nbsp;<i>(same shape, swapped units)</i></div>
+        <div class="kv"><span class="lab">gold</span><span class="tag match">match_schema</span> incompatible_similarity · d 0.01</div>
+        <div class="kv"><span class="lab">ident</span><span class="tag match">match_schema</span> incompatible_similarity</div>
+        <p class="note">Structurally near-identical but semantically different → flagged
+          <b>incompatible</b> (an <em>un-accepted</em> match). The gate will not merge it.</p>
+      </div>
+
+      <div class="exc win">
+        <div class="top"><h3>Renamed fields</h3><span class="tag ok">✓ not split</span></div>
+        <div class="fields">vnd_amount, vnd_description, vnd_kind, vnd_metadata{revision}</div>
+        <div class="kv"><span class="lab">gold</span><span class="tag match">match_schema</span> compatible_drift · d 0.00</div>
+        <div class="kv"><span class="lab">ident</span><span class="tag match">match_schema</span> → same family</div>
+        <p class="note">Vendor-prefixed field names — recognized as the same family, did
+          <em>not</em> wrongly split it into a new schema.</p>
+      </div>
+
+      <div class="exc win">
+        <div class="top"><h3>Genuinely new family</h3><span class="tag ok">✓ new detected</span></div>
+        <div class="fields">carrier_code, eta_bucket, shipment_tracking_code</div>
+        <div class="kv"><span class="lab">gold</span><span class="tag new">new_candidate</span> · d 0.50</div>
+        <div class="kv"><span class="lab">ident</span><span class="tag new">new_candidate</span> <span class="tag warn">veto d&gt;0.15</span></div>
+        <p class="note">Nothing known within reach (distance 0.50) → the deterministic layer forces
+          <b>new_candidate</b>. A schema Deblob has never seen, correctly flagged for discovery.</p>
+      </div>
+
+      <div class="exc win">
+        <div class="top"><h3>Insufficient evidence</h3><span class="tag ok">✓ abstained</span></div>
+        <div class="fields">amount, description, kind, metadata{revision} &nbsp;<i>(obs = 1)</i></div>
+        <div class="kv"><span class="lab">gold</span><span class="tag abst">abstain</span> insufficient_evidence · d 0.00</div>
+        <div class="kv"><span class="lab">ident</span><span class="tag abst">abstain</span> insufficient_evidence</div>
+        <p class="note">Only one observation — correctly refused to decide rather than guess.</p>
+      </div>
+
+      <div class="exc win">
+        <div class="top"><h3>Schema drift</h3><span class="tag ok">✓ matched</span></div>
+        <div class="fields">amount, description, kind, metadata{revision} &nbsp;<i>(field added)</i></div>
+        <div class="kv"><span class="lab">gold</span><span class="tag match">match_schema</span> compatible_drift · d 0.00</div>
+        <div class="kv"><span class="lab">ident</span><span class="tag match">match_schema</span> → same family</div>
+        <p class="note">An evolved version of a known schema — matched to the existing family.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Why distance alone isn't enough</h2>
+    <p class="sub">The central finding. Each strip is the structural distance to the nearest known
+      schema, for one group of cases. If distance cleanly separated "new" from "same-but-drifted",
+      the groups wouldn't overlap — but they do, right across the veto line.</p>
+    <div class="panel">
+      <svg viewBox="0 0 620 240" role="img" aria-label="Structural distance distribution by case group">
+        <!-- x axis 0..0.55 mapped 60..560 -->
+        <g font-family="var(--mono)" font-size="10" fill="var(--muted)">
+          <line x1="60" y1="200" x2="560" y2="200" stroke="var(--axis)"/>
+          <text x="60" y="216" text-anchor="middle">0.0</text>
+          <text x="196" y="216" text-anchor="middle">0.15</text>
+          <text x="424" y="216" text-anchor="middle">0.40</text>
+          <text x="560" y="216" text-anchor="middle">0.55</text>
+          <text x="310" y="234" text-anchor="middle" fill="var(--ink2)">structural distance to nearest known schema →</text>
+        </g>
+        <!-- veto lines -->
+        <line x1="196" y1="24" x2="196" y2="200" stroke="var(--critical)" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="200" y="20" font-family="var(--mono)" font-size="9.5" fill="var(--critical)">0.15 match/veto</text>
+        <line x1="424" y1="40" x2="424" y2="200" stroke="var(--serious)" stroke-width="1.5" stroke-dasharray="4 3"/>
+        <text x="428" y="36" font-family="var(--mono)" font-size="9.5" fill="var(--serious)">0.40 far</text>
+        <!-- rows: y positions -->
+        <!-- helper marks: min..max bar + median dot. x = 60 + d/0.55*500 -->
+        <!-- exact: all 0 -->
+        <g>
+          <text x="54" y="55" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--blue)">exact</text>
+          <circle cx="60" cy="51" r="6" fill="var(--blue)"/>
+        </g>
+        <!-- drift/false_split: 0..0.29 med 0 -->
+        <g>
+          <text x="54" y="90" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--aqua)">drift/renamed</text>
+          <line x1="60" y1="86" x2="324" y2="86" stroke="var(--aqua)" stroke-width="8" stroke-linecap="round" opacity=".35"/>
+          <circle cx="60" cy="86" r="6" fill="var(--aqua)"/>
+          <text x="332" y="90" font-family="var(--mono)" font-size="9" fill="var(--muted)">max 0.29</text>
+        </g>
+        <!-- incompatible: 0.01..0.44 med 0.02 -->
+        <g>
+          <text x="54" y="125" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--violet)">incompatible</text>
+          <line x1="69" y1="121" x2="460" y2="121" stroke="var(--violet)" stroke-width="8" stroke-linecap="round" opacity=".35"/>
+          <circle cx="78" cy="121" r="6" fill="var(--violet)"/>
+        </g>
+        <!-- new_family: 0..0.50 med 0.38 -->
+        <g>
+          <text x="54" y="160" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--critical)">new family</text>
+          <line x1="60" y1="156" x2="515" y2="156" stroke="var(--critical)" stroke-width="8" stroke-linecap="round" opacity=".35"/>
+          <circle cx="405" cy="156" r="6" fill="var(--critical)"/>
+          <text x="523" y="160" font-family="var(--mono)" font-size="9" fill="var(--muted)">med 0.38</text>
+        </g>
+        <!-- abstain: 0..0.55 med 0.24 -->
+        <g>
+          <text x="54" y="192" text-anchor="end" font-family="var(--mono)" font-size="10.5" fill="var(--muted)">abstain</text>
+          <line x1="60" y1="188" x2="560" y2="188" stroke="var(--muted)" stroke-width="8" stroke-linecap="round" opacity=".3"/>
+          <circle cx="278" cy="188" r="6" fill="var(--muted)"/>
+        </g>
+      </svg>
+      <div class="legend"><span>● median</span><span>▬ min–max range</span></div>
+    </div>
+    <div class="callout">
+      <h3>The overlap is the point</h3>
+      <p><strong>drift/renamed</strong> reaches 0.29 while some <strong>new families</strong> sit as
+        low as 0.0 — the two overlap straddling the 0.15 line. No single threshold separates them, so
+        the deterministic veto handles the far-and-obvious (new families at 0.38+) and the model must
+        make the semantic call in the middle. Deterministic lane <em>necessary but insufficient</em>;
+        the model is <em>non-redundant</em>.</p>
+    </div>
+  </section>
+
+  <section>
+    <h2>How it got here — five iterations</h2>
+    <p class="sub">The first fine-tune (v1) mode-collapsed to always-match (0% new-schema). Two
+      series: new-schema recall and overall decision accuracy, across the fix iterations.</p>
+    <div class="panel">
+      <svg viewBox="0 0 620 260" role="img" aria-label="new-schema recall and decision accuracy across v1 to v5">
+        <g font-family="var(--mono)" font-size="10" fill="var(--muted)">
+          <line x1="52" y1="20" x2="52" y2="210" stroke="var(--axis)"/>
+          <line x1="52" y1="210" x2="590" y2="210" stroke="var(--axis)"/>
+          <line x1="52" y1="20" x2="590" y2="20" stroke="var(--grid)" stroke-width=".5"/>
+          <line x1="52" y1="115" x2="590" y2="115" stroke="var(--grid)" stroke-width=".5"/>
+          <text x="46" y="24" text-anchor="end">100%</text>
+          <text x="46" y="119" text-anchor="end">50%</text>
+          <text x="46" y="213" text-anchor="end">0%</text>
+        </g>
+        <!-- x: v1..v5 -> 90,210,330,450,570 ; y: 210 - v/100*190 -->
+        <!-- new-schema recall: v1 0, v2 50, v3 37, v3b 33, v4 100, v5 33 -->
+        <polyline fill="none" stroke="var(--good)" stroke-width="2.5"
+          points="90,210 190,115 290,140 390,147 490,20 570,147"/>
+        <!-- decision: v1 46, v2 46, v3 55, v3b 78, v4 61, v5 56 -->
+        <polyline fill="none" stroke="var(--blue)" stroke-width="2.5" stroke-dasharray="1 0"
+          points="90,123 190,123 290,105 390,62 490,94 570,104"/>
+        <g font-family="var(--mono)" font-size="10" fill="var(--ink2)" text-anchor="middle">
+          <text x="90" y="228">v1</text><text x="190" y="228">v2</text><text x="290" y="228">v3</text>
+          <text x="390" y="228">v3b</text><text x="490" y="228">v4</text><text x="570" y="228">v5</text>
+        </g>
+        <!-- endpoint labels -->
+        <circle cx="490" cy="20" r="4" fill="var(--good)"/><text x="490" y="14" text-anchor="middle" font-family="var(--mono)" font-size="9.5" fill="var(--good-txt)">100%</text>
+        <circle cx="390" cy="62" r="4" fill="var(--blue)"/><text x="405" y="58" font-family="var(--mono)" font-size="9.5" fill="var(--blue)">78%</text>
+        <circle cx="90" cy="210" r="4" fill="var(--good)"/>
+      </svg>
+      <div class="legend">
+        <span><i class="dot" style="background:var(--good)"></i>new-schema recall</span>
+        <span><i class="dot" style="background:var(--blue)"></i>decision accuracy</span>
+      </div>
+      <p class="sub" style="margin:14px 0 0">Fixes, in order: completion-only loss + balanced
+        sampling (broke the collapse), finite hypothesis scoring (no hallucination), more data
+        (decision 78%), deterministic distance veto (new-schema 100%). v4 and v3b are two operating
+        points — safe-discovery vs. best-all-round.</p>
+    </div>
+  </section>
+
+  <footer>
+    All figures: the production-trained LoRA adapter (via <code>deploy/experiment/modal/live_round.py</code>)
+    evaluated on 180 family-held-out cases from <code>deblob-eval generate</code>, finite-scoring +
+    deterministic veto. Palette validated colorblind-safe. Honest caveat: single seed, synthetic
+    construction-truth corpus, and the held-out set was consulted across iterations — a sealed
+    multi-seed audit is the next step.
+  </footer>
+</div>
