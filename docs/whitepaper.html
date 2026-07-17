@@ -88,15 +88,15 @@
     and multiplies until no one can say how many distinct schemas a topic actually carries. Deblob
     tags every event with the schema family it belongs to and discovers genuinely new schemas,
     under one hard invariant: <em>two different schemas are never merged</em>. The system splits the
-    problem into a deterministic structural core — canonical fingerprinting, algebraic profiling,
+    problem into a deterministic structural core (canonical fingerprinting, algebraic profiling,
     and nearest-neighbour retrieval, running at sub-millisecond per-event cost inside an
-    exactly-once Kafka relay (598 records/s on modest hardware) — and a small-language-model (SLM)
+    exactly-once Kafka relay at 598 records/s on modest hardware) and a small-language-model (SLM)
     lane that handles the semantic middle ground where structure alone is provably insufficient. A
     deterministic <em>trust gate</em> ensures no model proposal is ever applied without independent
     structural corroboration. We fine-tuned a 0.5-billion-parameter model on 720 synthetic,
     ground-truth-labelled examples for under $0.10 of GPU time; with completion-only loss, balanced
     sampling, and finite-hypothesis scoring, it identifies never-before-seen schema families with
-    89% recall on held-out families (100% under a conservative veto policy) while selecting only
+    89% recall on held-out families — without once mistaking a new family for an existing schema — while selecting only
     catalogued schema identifiers, making identifier hallucination structurally impossible. The
     full loop — feedback export, remote training, governed promotion — was exercised end-to-end on
     production infrastructure. We report the architecture, data representation, training method,
@@ -109,7 +109,7 @@
   <p>A production event bus is rarely the tidy place its documentation claims. Teams ship new
   producers, rename fields, wrap payloads in envelopes, and re-use generic field names
   (<code>id</code>, <code>status</code>, <code>amount</code>) for unrelated things. The result is a
-  stream whose <em>effective</em> schema catalogue is unknown — a blob. Downstream consumers break
+  stream whose <em>effective</em> schema catalogue is unknown: a blob. Downstream consumers break
   on drift they cannot see; data teams cannot answer "how many event types do we actually have?"</p>
   <p>Deblob answers that question continuously. For every event it decides one of three things:
   the event <b>matches</b> a known schema family (and how: exactly, as compatible drift, or as a
@@ -123,7 +123,10 @@
   we show empirically (§6.4) that structural distance <em>cannot</em> separate "genuinely new
   schema" from "same schema, renamed fields" — the two populations overlap. That residual is a
   semantic judgement, and we delegate it to a small fine-tuned language model that is never
-  trusted alone: a deterministic gate must corroborate every proposal before anything is applied.</p>
+  trusted alone: a deterministic gate must corroborate every proposal before anything is applied.
+  The outputs are concrete: every event republished with its schema-family tag, a continuously
+  maintained schema catalogue, and a short review queue holding only the cases no layer could
+  decide safely.</p>
 
   <h2 class="sec">2&emsp;System Design</h2>
   <figure>
@@ -188,8 +191,9 @@
   per-family <em>monoid profile</em> — an algebraic summary of field paths, types, nullability, and
   observation counts that composes associatively, so profiles of event batches merge without
   re-scanning history. Candidate schema families are retrieved by structural distance
-  (weighted-Jaccard over the profile). The relay consumes from Kafka and republishes tagged events
-  under exactly-once transactional semantics; batching plus intra-batch produce pipelining raised
+  (a weighted-Jaccard overlap measure on the profile: shared fields, weighted, over all fields). The relay consumes from Kafka and republishes tagged events
+  under exactly-once transactional semantics (a crash or retry can never emit a duplicate or
+  drop an event); batching plus intra-batch produce pipelining raised
   throughput 43× (from 14 to 598 records/s) with the exactly-once guarantee preserved per batch
   and verified under crash, rebalance, and duplicate-delivery chaos tests. Published schemas live
   in a Redis vault with atomic, write-once publication.</p>
@@ -263,7 +267,7 @@ ALLOWED schema_id SET = [sch_hlxg…, sch_pfxy…]</div>
         <tr><td>Semantic annotate (API)</td><td class="n">20.5 ms</td><td>mints semantic fingerprint</td></tr>
         <tr><td>Schema promote (API)</td><td class="n">36 ms</td><td>governed, audited</td></tr>
         <tr class="group"><td colspan="3">Retrieval quality (96 labelled events, seed 42)</td></tr>
-        <tr><td>recall@1 / recall@3</td><td class="n">86.5% / 92.3%</td><td>MRR 0.891</td></tr>
+        <tr><td>recall@1 / recall@3</td><td class="n">86.5% / 92.3%</td><td>mean reciprocal rank 0.89</td></tr>
         <tr><td>candidate-set miss</td><td class="n">7.7%</td><td>gold family absent from top-k</td></tr>
       </tbody>
     </table>
@@ -303,7 +307,7 @@ ALLOWED schema_id SET = [sch_hlxg…, sch_pfxy…]</div>
         <tr><td>Objective</td><td>completion-only cross-entropy (prompt tokens masked)</td></tr>
         <tr><td>Class balance</td><td>minority decisions oversampled to parity (cap 4×)</td></tr>
         <tr><td>Optimiser</td><td>AdamW, lr 2·10<sup>−4</sup>, batch 1, 3 epochs, bf16</td></tr>
-        <tr><td>Sequence budget</td><td>640 tokens; 421 of 1,296 balanced examples fit fully</td></tr>
+        <tr><td>Sequence budget</td><td>640 tokens; 421 of 1,296 balanced sequences retained after truncation</td></tr>
         <tr><td>Hardware / cost</td><td>1× NVIDIA T4 (16 GB), ≈ 12 min, &lt; $0.10 per round</td></tr>
         <tr><td>Final training loss</td><td>0.026</td></tr>
       </tbody>
@@ -348,7 +352,7 @@ ALLOWED schema_id SET = [sch_hlxg…, sch_pfxy…]</div>
     </table>
     </div>
     <figcaption><b>Table 3:</b> Confusion matrix, 180 family-held-out cases (decision accuracy
-    60.8%). The error structure is deliberately asymmetric: a genuinely new schema is <em>never</em>
+    61%). The error structure is deliberately asymmetric: a genuinely new schema is <em>never</em>
     mistaken for an existing one (row 2, column 1 = 0), and the dominant errors push true matches
     toward abstention — safe deferrals, not merges.</figcaption>
   </figure>
@@ -481,8 +485,9 @@ ALLOWED schema_id SET = [sch_hlxg…, sch_pfxy…]</div>
   <p>The complete production path was exercised on real infrastructure: a feedback snapshot was
   exported with a content-addressed manifest; the deployed remote trainer resolved it, trained the
   adapter described in Table 2, and returned artifact digests only; the adapter was reloaded from
-  its published artifact and re-evaluated, reproducing the validation numbers exactly (new-schema
-  recall 100% under the veto policy, decision accuracy 60.8%). The training hook demonstrated in
+  its published artifact and re-evaluated, reproducing the validation numbers (new-schema recall
+  100% on the 120-case validation subset, decision accuracy 60.8%; 89% new-family recall on the
+  full 180-case set, Table 3). The training hook demonstrated in
   the same run that it cannot promote: activation requires the separate, gated controller.</p>
 
   <h2 class="sec">7&emsp;Limitations</h2>
@@ -512,8 +517,8 @@ ALLOWED schema_id SET = [sch_hlxg…, sch_pfxy…]</div>
   provably safe deterministic core and a small, cheaply trained language model whose authority is
   bounded by construction. The deterministic lane tags events in 0.43 ms and moves them
   exactly-once at 598 records/s; the learned lane, trained for under $0.10, identifies unseen
-  schema families at 89–100% recall while structurally unable to hallucinate identifiers or force
-  a merge. The architectural contribution is the division of authority: <em>the model can only
+  schema families at 89% recall — never once mistaking one for an existing schema — while
+  structurally unable to hallucinate identifiers or force a merge. The architectural contribution is the division of authority: <em>the model can only
   ever widen what the system understands, never corrupt what it knows.</em> Continual learning
   then makes coverage a function of accumulated human feedback rather than model scale — the loop,
   from feedback capture to governed promotion, is implemented, tested against real
