@@ -304,15 +304,14 @@
       hash the model <em>should not</em> memorize — that is precisely what Lane&nbsp;1's
       retrieval supplies and the gate corroborates.</p>
     <div class="callout warn" style="margin-top:16px">
-      <h3>Read it honestly</h3>
-      <p>One round on 320 examples taught <strong>format + the majority class</strong>: the
-        model now emits valid tool-calls and says <span class="num">match_schema</span> for
-        same-family events — but it <strong>over-predicts match</strong> (misses all new-family
-        and abstain cases), often gets <code>relation</code> wrong, and hallucinates the
-        <code>schema_id</code>. So the 46% is real recognition of same-family structure, not yet
-        discrimination. This is expected at 0.5B / 320 examples — and it is <em>why the raw SLM
-        is never trusted alone</em>: retrieval supplies identity, the gate rejects the
-        over-matching. More data + decision-weighted loss are the next levers.</p>
+      <h3>Read it honestly — then fixed</h3>
+      <p>This <em>first</em> round (v1) mode-collapsed: it learned <strong>format + the majority
+        class</strong>, over-predicted <code>match_schema</code> (missed <em>all</em> new-family
+        and abstain cases), and hallucinated the <code>schema_id</code>. A joint Claude×Hermes
+        fix cycle — completion-only loss, balanced sampling, finite hypothesis scoring, more
+        data, a deterministic distance veto — took new-schema recall from <strong>0% → 100%</strong>
+        and decision accuracy to <strong>78%</strong>, with zero hallucination. See
+        <em>"Fixing new-schema inference"</em> below.</p>
     </div>
   </section>
 
@@ -410,6 +409,64 @@
       over-matches is caught downstream by the trust gate (rank, margin, observation floor,
       deterministic corroboration) — which is exactly why a still-imperfect model can be used
       without ever creating a false merge.</p>
+  </section>
+
+  <section>
+    <h2>Fixing new-schema inference — five iterations</h2>
+    <p>v1's fine-tune mode-collapsed to always-<code>match_schema</code> (new-schema recall
+      <strong>0%</strong>). A joint Claude×Hermes fix cycle turned that around. Each row is the
+      same 0.5B on family-held-out data; the intervention is cumulative.</p>
+    <div class="tblwrap">
+      <table>
+        <thead><tr><th>Version</th><th>Fix added</th><th>new-schema</th><th>decision</th>
+          <th>match</th><th>schema-id</th></tr></thead>
+        <tbody>
+          <tr><td>v1</td><td>baseline (full-seq loss)</td><td><span class="tag risk">0%</span></td>
+            <td class="num">46%</td><td class="num">~all</td><td class="num">6%</td></tr>
+          <tr><td>v2</td><td>+ completion-only loss + balance</td>
+            <td><span class="tag warn">50%</span></td><td class="num">46%</td>
+            <td class="num">27%</td><td class="num">19%</td></tr>
+          <tr><td>v3</td><td>+ finite hypothesis scoring</td>
+            <td class="num">37%</td><td class="num">55%</td><td class="num">54%</td>
+            <td class="num">29%</td></tr>
+          <tr><td>v3b</td><td>+ more data (720)</td><td class="num">33%</td>
+            <td><span class="tag good">78%</span></td><td class="num">100%</td>
+            <td class="num">47%</td></tr>
+          <tr><td>v4</td><td>+ deterministic distance veto</td>
+            <td><span class="tag good">100%</span></td><td class="num">61%</td>
+            <td class="num">58%</td><td class="num">24%</td></tr>
+          <tr><td>v5</td><td>tuned veto (0.40)</td><td class="num">33%</td>
+            <td class="num">56%</td><td class="num">67%</td><td class="num">29%</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="split" style="margin-top:20px">
+      <div class="panel" style="border-color:var(--good)">
+        <h3 style="font-size:15px">Operating point A — safe discovery (v4)</h3>
+        <div class="stat" style="margin:4px 0 10px"><span class="to good num">100%</span></div>
+        <p class="sub" style="font-size:13px;color:var(--muted);margin:0">new-schema recall.
+          Forces <code>new_candidate</code> whenever nothing sits within the gate's distance
+          threshold — <strong>never misses a new schema</strong>. Over-flagging new is safe in
+          Deblob (the discovery lane investigates; zero-false-merge still holds). Overall 61%.</p>
+      </div>
+      <div class="panel">
+        <h3 style="font-size:15px">Operating point B — best all-round (v3b)</h3>
+        <div class="stat" style="margin:4px 0 10px"><span class="to accent num">78%</span></div>
+        <p class="sub" style="font-size:13px;color:var(--muted);margin:0">decision accuracy,
+          match recall 100%, schema-id 47%. new-schema 33%. Best when precision across all
+          three decisions matters more than never missing a novel family.</p>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:18px">
+      <h3>The core insight</h3>
+      <p>No single distance threshold cleanly separates a <em>genuinely new</em> family from a
+        <em>drifted / renamed</em> one — both sit at ~0.29 structural distance. That
+        discrimination is a <strong>semantic</strong> judgment (the SLM's job, and it improves
+        with data), while the deterministic layer safely handles the far-and-obvious cases.
+        That division of labour <em>is</em> Deblob's two-lane design: structure + gate for the
+        certain, the model for the subtle, and the trust gate underneath so an imperfect model
+        never merges wrongly.</p>
+    </div>
   </section>
 
   <section>
