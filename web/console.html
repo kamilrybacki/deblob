@@ -1,0 +1,355 @@
+<title>Deblob — Console</title>
+<style>
+  :root{
+    --bg:#f5f6f8; --panel:#ffffff; --panel-2:#eef0f4; --sunk:#f0f2f6;
+    --ink:#151922; --ink2:#4a5262; --faint:#8a92a2; --line:#e2e5ec; --line2:#cdd2dc;
+    --accent:#4b5bd6; --accent-soft:#e7e9fb; --accent-ink:#3644b8;
+    --good:#0f9d63; --good-soft:#dcf1e7; --warn:#c07d16; --warn-soft:#f6ecd6;
+    --risk:#d13f42; --risk-soft:#f8dedf; --track:#e5e8ef;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --sh:0 1px 2px rgba(20,25,40,.05),0 6px 18px rgba(20,25,40,.05);
+    --sh2:0 8px 40px rgba(20,25,40,.14);
+  }
+  @media(prefers-color-scheme:dark){:root{
+    --bg:#0c0e13; --panel:#14171e; --panel-2:#1b1f28; --sunk:#101319;
+    --ink:#e8ebf1; --ink2:#9aa3b4; --faint:#5f6878; --line:#252a34; --line2:#333a47;
+    --accent:#8b95f0; --accent-soft:#20263c; --accent-ink:#aab2f6;
+    --good:#3ad696; --good-soft:#122820; --warn:#e6a94a; --warn-soft:#2a2113;
+    --risk:#f2686b; --risk-soft:#2c1618; --track:#222834;
+    --sh:0 1px 2px rgba(0,0,0,.3),0 8px 22px rgba(0,0,0,.3); --sh2:0 12px 50px rgba(0,0,0,.5);
+  }}
+  :root[data-theme="light"]{--bg:#f5f6f8;--panel:#fff;--panel-2:#eef0f4;--sunk:#f0f2f6;--ink:#151922;--ink2:#4a5262;--faint:#8a92a2;--line:#e2e5ec;--line2:#cdd2dc;--accent:#4b5bd6;--accent-soft:#e7e9fb;--accent-ink:#3644b8;--good:#0f9d63;--good-soft:#dcf1e7;--warn:#c07d16;--warn-soft:#f6ecd6;--risk:#d13f42;--risk-soft:#f8dedf;--track:#e5e8ef;}
+  :root[data-theme="dark"]{--bg:#0c0e13;--panel:#14171e;--panel-2:#1b1f28;--sunk:#101319;--ink:#e8ebf1;--ink2:#9aa3b4;--faint:#5f6878;--line:#252a34;--line2:#333a47;--accent:#8b95f0;--accent-soft:#20263c;--accent-ink:#aab2f6;--good:#3ad696;--good-soft:#122820;--warn:#e6a94a;--warn-soft:#2a2113;--risk:#f2686b;--risk-soft:#2c1618;--track:#222834;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
+  code{font-family:var(--mono);font-size:.88em}
+  /* layout */
+  .app{display:grid;grid-template-columns:230px 1fr;grid-template-rows:auto 1fr;min-height:100vh}
+  .top{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:11px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
+  .brand{display:flex;align-items:center;gap:10px;font-weight:680;letter-spacing:-.01em;font-size:16px}
+  .brand .mk{width:26px;height:26px;border-radius:7px;background:var(--accent);color:#fff;display:grid;place-items:center;font-family:var(--mono);font-weight:700;font-size:15px}
+  .pill{font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 9px;border-radius:999px;display:inline-flex;align-items:center;gap:6px}
+  .pill .led{width:7px;height:7px;border-radius:50%}
+  .pill.demo{background:var(--warn-soft);color:var(--warn)} .pill.demo .led{background:var(--warn)}
+  .pill.live{background:var(--good-soft);color:var(--good)} .pill.live .led{background:var(--good)}
+  .top .sp{flex:1}
+  .iconbtn{background:none;border:1px solid var(--line);color:var(--ink2);border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer;font-family:var(--sans)}
+  .iconbtn:hover{border-color:var(--line2);color:var(--ink)}
+  /* sidebar */
+  nav{background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:2px}
+  nav a{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:9px;color:var(--ink2);text-decoration:none;font-size:13.5px;font-weight:500;cursor:pointer}
+  nav a:hover{background:var(--panel-2);color:var(--ink)}
+  nav a.on{background:var(--accent-soft);color:var(--accent-ink);font-weight:620}
+  nav a .ic{width:17px;text-align:center;opacity:.85}
+  nav .grp{font-size:10.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:14px 12px 5px}
+  nav .foot{margin-top:auto;font-size:11px;color:var(--faint);padding:10px 12px;line-height:1.5}
+  nav .foot a{display:inline;padding:0;color:var(--accent);font-weight:500}
+  /* main */
+  main{padding:22px clamp(16px,3vw,30px);min-width:0;overflow-x:hidden}
+  .pagehead{margin:0 0 18px}
+  .pagehead h1{font-size:21px;margin:0 0 4px;letter-spacing:-.01em;font-weight:660}
+  .pagehead p{margin:0;color:var(--ink2);font-size:13px}
+  /* cards */
+  .grid{display:grid;gap:14px}
+  .cols4{grid-template-columns:repeat(4,1fr)} .cols3{grid-template-columns:repeat(3,1fr)} .cols2{grid-template-columns:1fr 1fr}
+  @media(max-width:900px){.cols4{grid-template-columns:1fr 1fr}.cols3,.cols2{grid-template-columns:1fr}}
+  @media(max-width:640px){.app{grid-template-columns:1fr}nav{display:none}.cols4{grid-template-columns:1fr 1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px;box-shadow:var(--sh)}
+  .stat .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin:0 0 9px}
+  .stat .v{font-family:var(--mono);font-size:27px;font-weight:640;letter-spacing:-.02em;line-height:1}
+  .stat .s{font-size:11.5px;color:var(--ink2);margin:8px 0 0}
+  .stat .v.good{color:var(--good)} .stat .v.risk{color:var(--risk)} .stat .v.accent{color:var(--accent)}
+  h2.sec{font-size:12px;font-family:var(--mono);letter-spacing:.09em;text-transform:uppercase;color:var(--faint);margin:26px 0 12px;display:flex;align-items:center;gap:10px}
+  h2.sec::after{content:"";flex:1;height:1px;background:var(--line)}
+  /* list + detail split */
+  .split{display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start}
+  @media(max-width:820px){.split{grid-template-columns:1fr}}
+  .listcard{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:var(--sh)}
+  .search{padding:10px;border-bottom:1px solid var(--line)}
+  .search input{width:100%;border:1px solid var(--line);background:var(--sunk);border-radius:8px;padding:8px 11px;font-size:13px;color:var(--ink);font-family:var(--sans)}
+  .search input:focus{outline:none;border-color:var(--accent)}
+  .rowlist{max-height:70vh;overflow-y:auto}
+  .row{padding:11px 14px;border-bottom:1px solid var(--line);cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:8px}
+  .row:hover{background:var(--panel-2)} .row.on{background:var(--accent-soft)}
+  .row .lab{font-weight:580;font-size:13.5px}
+  .row .meta{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+  .row .cnt{font-family:var(--mono);font-size:11px;color:var(--ink2);background:var(--sunk);padding:2px 7px;border-radius:6px}
+  /* field tree */
+  .field{display:grid;grid-template-columns:1fr auto auto;gap:10px;align-items:center;padding:7px 0;border-bottom:1px solid var(--line);font-size:13px}
+  .field:last-child{border-bottom:none}
+  .field .fp{font-family:var(--mono);font-size:12.5px}
+  .field .fp .dot{color:var(--faint)}
+  .ty{font-family:var(--mono);font-size:10.5px;padding:2px 7px;border-radius:5px;background:var(--sunk);color:var(--ink2)}
+  .ty.string{color:var(--accent)} .ty.number{color:var(--good)} .ty.object{color:var(--warn)} .ty.array{color:var(--risk)}
+  .tag{font-family:var(--mono);font-size:10px;font-weight:600;padding:2px 7px;border-radius:5px}
+  .tag.public{background:var(--good-soft);color:var(--good)} .tag.internal{background:var(--accent-soft);color:var(--accent-ink)} .tag.restricted{background:var(--risk-soft);color:var(--risk)}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;font-size:12.5px;margin:12px 0}
+  .kv dt{color:var(--faint);font-family:var(--mono);font-size:11px}
+  .kv dd{margin:0;font-family:var(--mono);font-size:11.5px;word-break:break-all}
+  .muted{color:var(--faint)}
+  /* neighbor bars */
+  .nb{display:grid;grid-template-columns:150px 1fr 52px;gap:10px;align-items:center;margin:0 0 8px}
+  .nb .lab{font-size:12.5px} .nb .tk{background:var(--track);height:18px;border-radius:5px;overflow:hidden}
+  .nb .fl{height:100%;background:var(--accent);border-radius:5px} .nb .fl.close{background:var(--good)}
+  .nb .v{font-family:var(--mono);font-size:11.5px;text-align:right;color:var(--ink2)}
+  /* candidate cards */
+  .cand{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px;box-shadow:var(--sh);margin-bottom:14px}
+  .cand .h{display:flex;justify-content:space-between;align-items:start;gap:12px;margin-bottom:10px}
+  .cand .fields{display:flex;flex-wrap:wrap;gap:6px;margin:6px 0 12px}
+  .chip{font-family:var(--mono);font-size:11px;background:var(--sunk);border:1px solid var(--line);padding:3px 8px;border-radius:6px;color:var(--ink2)}
+  .verdict{border-radius:9px;padding:10px 13px;font-size:12.5px;display:flex;gap:10px;align-items:start}
+  .verdict.apply{background:var(--good-soft)} .verdict.new{background:var(--accent-soft)} .verdict.human{background:var(--warn-soft)} .verdict.block{background:var(--risk-soft)}
+  .verdict .icn{font-family:var(--mono);font-weight:700}
+  .dec{font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 9px;border-radius:6px}
+  .dec.match{background:var(--accent-soft);color:var(--accent-ink)} .dec.new{background:var(--good-soft);color:var(--good)} .dec.abstain{background:var(--warn-soft);color:var(--warn)}
+  .actions{display:flex;gap:8px;margin-top:12px}
+  .btn{border:1px solid var(--line2);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:560;cursor:pointer;font-family:var(--sans)}
+  .btn:hover{background:var(--panel-2)} .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn.good{border-color:var(--good);color:var(--good)} .btn.good:hover{background:var(--good-soft)}
+  .btn.risk{border-color:var(--risk);color:var(--risk)} .btn.risk:hover{background:var(--risk-soft)}
+  /* table */
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  .tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--sh)}
+  th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
+  thead th{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);background:var(--panel-2);font-weight:600}
+  tbody tr:last-child td{border-bottom:none}
+  td .num{font-size:12.5px}
+  /* graph */
+  svg{display:block;width:100%;height:auto;overflow:visible} svg text{font-family:var(--mono)}
+  .glegend{display:flex;gap:16px;margin-top:12px;font-size:12px;color:var(--ink2);flex-wrap:wrap}
+  .glegend span{display:inline-flex;align-items:center;gap:7px} .glegend .ln{width:20px;height:2px;display:inline-block}
+  /* modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(10,12,18,.5);display:grid;place-items:center;z-index:50;padding:16px}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px;max-width:460px;width:100%;box-shadow:var(--sh2)}
+  .modal h3{margin:0 0 8px;font-size:17px} .modal p{margin:0 0 8px;color:var(--ink2);font-size:13px}
+  .modal label{display:block;font-size:12px;color:var(--faint);margin:12px 0 5px;font-family:var(--mono)}
+  .modal input{width:100%;border:1px solid var(--line);background:var(--sunk);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--ink);font-family:var(--mono)}
+  .modal .row2{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:11px 18px;border-radius:10px;font-size:13px;z-index:60;box-shadow:var(--sh2);opacity:0;transition:opacity .2s,transform .2s}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
+  .empty{text-align:center;color:var(--faint);padding:40px;font-size:13px}
+</style>
+
+<div class="app">
+  <div class="top">
+    <div class="brand"><span class="mk">D</span>Deblob <span style="color:var(--faint);font-weight:400;font-size:13px">Console</span></div>
+    <span id="mode" class="pill demo"><span class="led"></span>DEMO DATA</span>
+    <div class="sp"></div>
+    <button class="iconbtn" id="theme">◐ Theme</button>
+    <button class="iconbtn" id="connect">⚙ Connect</button>
+  </div>
+  <nav>
+    <div class="grp">Overview</div>
+    <a data-v="overview" class="on"><span class="ic">▤</span>Dashboard</a>
+    <a data-v="decisions"><span class="ic">◈</span>How it decides</a>
+    <div class="grp">Learned data</div>
+    <a data-v="schemas"><span class="ic">≡</span>Schema catalogue</a>
+    <a data-v="families"><span class="ic">⑂</span>Families &amp; versions</a>
+    <a data-v="similarity"><span class="ic">✧</span>Similarity graph</a>
+    <div class="grp">Operations</div>
+    <a data-v="discovery"><span class="ic">◔</span>Discovery queue</a>
+    <a data-v="quarantine"><span class="ic">⚠</span>Quarantine</a>
+    <a data-v="health"><span class="ic">♥</span>Health &amp; metrics</a>
+    <div class="foot">Reads Deblob's <code>/api/v1</code>. In demo mode, data is bundled and mutations are disabled.<br><a href="https://github.com/kamilrybacki/deblob" target="_blank">source ↗</a></div>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="overlay"></div>
+<div class="toast" id="toast"></div>
+
+<script>window.DEMO={"families":[{"family_id":"fam_3eeb7e96-e59ce40f-9cb1a089-daba079f","label":"Orders","schema_id":"sch_ffb0e4fd0a24d28ded0d3140aa2a15862ae24b89","version":1,"observation_count":83,"fields":[{"path":"order_id","type":"string","nullable":true},{"path":"amount","type":"number","nullable":false},{"path":"currency","type":"string","nullable":true},{"path":"status","type":"string","nullable":false},{"path":"created_at","type":"string","nullable":false}],"semantic_fingerprint":"sem_93f21c4fc8cd1882b778c261b615f1c107f8c119d6f79d","privacy_class":"public","canonicalizer":"deblob-canon-v1"},{"family_id":"fam_04f8996d-a763b7a9-69b1028e-e3007569","label":"User events","schema_id":"sch_6025d18fe48abd45168528f18a82e265dd98d421","version":2,"observation_count":54,"fields":[{"path":"user_id","type":"string","nullable":true},{"path":"kind","type":"string","nullable":false},{"path":"description","type":"string","nullable":true},{"path":"metadata.revision","type":"number","nullable":false}],"semantic_fingerprint":null,"privacy_class":"internal","canonicalizer":"deblob-canon-v1"},{"family_id":"fam_ca73f610-34afc26d-96c85c0d-2285e1f0","label":"Sensor readings","schema_id":"sch_acdbe59f64c8dce52ee49ecb396eb8fb9629ae90","version":3,"observation_count":76,"fields":[{"path":"sensor_reading_id","type":"string","nullable":false},{"path":"calibration.offset","type":"number","nullable":true},{"path":"calibration.unit","type":"string","nullable":false},{"path":"readings","type":"array","nullable":false}],"semantic_fingerprint":"sem_eb39d70ca5e99c7deb8ba9967e81b8d76a339187e0b820","privacy_class":"internal","canonicalizer":"deblob-canon-v1"},{"family_id":"fam_59f9076b-c5008c4d-07960fa3-4352b228","label":"Shipments","schema_id":"sch_366eb92cc5aff2fa8e50c12619a89d5e433b4b9b","version":1,"observation_count":16,"fields":[{"path":"shipment_tracking_code","type":"string","nullable":false},{"path":"carrier_code","type":"string","nullable":false},{"path":"eta_bucket","type":"string","nullable":false}],"semantic_fingerprint":null,"privacy_class":"public","canonicalizer":"deblob-canon-v1"},{"family_id":"fam_040ffd59-25d40e11-c67b7238-a7fc9957","label":"Payments","schema_id":"sch_c04ac688c7d3ac341314f4a46b4496578cd13a20","version":2,"observation_count":124,"fields":[{"path":"payment_id","type":"string","nullable":false},{"path":"amount","type":"number","nullable":false},{"path":"currency","type":"string","nullable":true},{"path":"region","type":"string","nullable":false},{"path":"verified","type":"string","nullable":true}],"semantic_fingerprint":"sem_6a75f5ca15aa0fdcdddae9f8c73c888a02ba51411a9327","privacy_class":"restricted","canonicalizer":"deblob-canon-v1"},{"family_id":"fam_d80c9bf9-10f14473-8ef98372-4bc04bd6","label":"Addresses","schema_id":"sch_b1ea39e7dc4e0cb35307d10079db803d3702c842","version":3,"observation_count":22,"fields":[{"path":"address.city","type":"string","nullable":false},{"path":"address.street","type":"string","nullable":false},{"path":"address.zip","type":"number","nullable":true},{"path":"category","type":"string","nullable":false},{"path":"amount","type":"number","nullable":false}],"semantic_fingerprint":null,"privacy_class":"restricted","canonicalizer":"deblob-canon-v1"}],"neighbors":{"sch_ffb0e4fd0a24d28ded0d3140aa2a15862ae24b89":[{"schema_id":"sch_c04ac688c7d3ac341314f4a46b4496578cd13a20","family_id":"fam_040ffd59-25d40e11-c67b7238-a7fc9957","label":"Payments","distance":0.75},{"schema_id":"sch_b1ea39e7dc4e0cb35307d10079db803d3702c842","family_id":"fam_d80c9bf9-10f14473-8ef98372-4bc04bd6","label":"Addresses","distance":0.857},{"schema_id":"sch_6025d18fe48abd45168528f18a82e265dd98d421","family_id":"fam_04f8996d-a763b7a9-69b1028e-e3007569","label":"User events","distance":1.0},{"schema_id":"sch_acdbe59f64c8dce52ee49ecb396eb8fb9629ae90","family_id":"fam_ca73f610-34afc26d-96c85c0d-2285e1f0","label":"Sensor readings","distance":1.0}],"sch_6025d18fe48abd45168528f18a82e265dd98d421":[{"schema_id":"sch_ffb0e4fd0a24d28ded0d3140aa2a15862ae24b89","family_id":"fam_3eeb7e96-e59ce40f-9cb1a089-daba079f","label":"Orders","distance":1.0},{"schema_id":"sch_acdbe59f64c8dce52ee49ecb396eb8fb9629ae90","family_id":"fam_ca73f610-34afc26d-96c85c0d-2285e1f0","label":"Sensor readings","distance":1.0},{"schema_id":"sch_366eb92cc5aff2fa8e50c12619a89d5e433b4b9b","family_id":"fam_59f9076b-c5008c4d-07960fa3-4352b228","label":"Shipments","distance":1.0},{"schema_id":"sch_c04ac688c7d3ac341314f4a46b4496578cd13a20","family_id":"fam_040ffd59-25d40e11-c67b7238-a7fc9957","label":"Payments","distance":1.0}],"sch_acdbe59f64c8dce52ee49ecb396eb8fb9629ae90":[{"schema_id":"sch_ffb0e4fd0a24d28ded0d3140aa2a15862ae24b89","family_id":"fam_3eeb7e96-e59ce40f-9cb1a089-daba079f","label":"Orders","distance":1.0},{"schema_id":"sch_6025d18fe48abd45168528f18a82e265dd98d421","family_id":"fam_04f8996d-a763b7a9-69b1028e-e3007569","label":"User events","distance":1.0},{"schema_id":"sch_366eb92cc5aff2fa8e50c12619a89d5e433b4b9b","family_id":"fam_59f9076b-c5008c4d-07960fa3-4352b228","label":"Shipments","distance":1.0},{"schema_id":"sch_c04ac688c7d3ac341314f4a46b4496578cd13a20","family_id":"fam_040ffd59-25d40e11-c67b7238-a7fc9957","label":"Payments","distance":1.0}],"sch_366eb92cc5aff2fa8e50c12619a89d5e433b4b9b":[{"schema_id":"sch_ffb0e4fd0a24d28ded0d3140aa2a15862ae24b89","family_id":"fam_3eeb7e96-e59ce40f-9cb1a089-daba079f","label":"Orders","distance":1.0},{"schema_id":"sch_6025d18fe48abd45168528f18a82e265dd98d421","family_id":"fam_04f8996d-a763b7a9-69b1028e-e3007569","label":"User events","distance":1.0},{"schema_id":"sch_acdbe59f64c8dce52ee49ecb396eb8fb9629ae90","family_id":"fam_ca73f610-34afc26d-96c85c0d-2285e1f0","label":"Sensor readings","distance":1.0},{"schema_id":"sch_c04ac688c7d3ac341314f4a46b4496578cd13a20","family_id":"fam_040ffd59-25d40e11-c67b7238-a7fc9957","label":"Payments","distance":1.0}],"sch_c04ac688c7d3ac341314f4a46b4496578cd13a20":[{"schema_id":"sch_ffb0e4fd0a24d28ded0d3140aa2a15862ae24b89","family_id":"fam_3eeb7e96-e59ce40f-9cb1a089-daba079f","label":"Orders","distance":0.75},{"schema_id":"sch_b1ea39e7dc4e0cb35307d10079db803d3702c842","family_id":"fam_d80c9bf9-10f14473-8ef98372-4bc04bd6","label":"Addresses","distance":0.857},{"schema_id":"sch_6025d18fe48abd45168528f18a82e265dd98d421","family_id":"fam_04f8996d-a763b7a9-69b1028e-e3007569","label":"User events","distance":1.0},{"schema_id":"sch_acdbe59f64c8dce52ee49ecb396eb8fb9629ae90","family_id":"fam_ca73f610-34afc26d-96c85c0d-2285e1f0","label":"Sensor readings","distance":1.0}],"sch_b1ea39e7dc4e0cb35307d10079db803d3702c842":[{"schema_id":"sch_ffb0e4fd0a24d28ded0d3140aa2a15862ae24b89","family_id":"fam_3eeb7e96-e59ce40f-9cb1a089-daba079f","label":"Orders","distance":0.857},{"schema_id":"sch_c04ac688c7d3ac341314f4a46b4496578cd13a20","family_id":"fam_040ffd59-25d40e11-c67b7238-a7fc9957","label":"Payments","distance":0.857},{"schema_id":"sch_6025d18fe48abd45168528f18a82e265dd98d421","family_id":"fam_04f8996d-a763b7a9-69b1028e-e3007569","label":"User events","distance":1.0},{"schema_id":"sch_acdbe59f64c8dce52ee49ecb396eb8fb9629ae90","family_id":"fam_ca73f610-34afc26d-96c85c0d-2285e1f0","label":"Sensor readings","distance":1.0}]},"candidates":[{"candidate_id":"cand_d0f631ca1ddb","observation_count":31,"fields":[{"path":"invoice_id","type":"string"},{"path":"amount","type":"number"},{"path":"tax_rate","type":"number"},{"path":"currency","type":"string"}],"slm_decision":"new_candidate","slm_novelty":"structural","top1_distance":0.42,"margin":0.16,"gate":"deferred_new","reason":"nearest family too far (0.42 > 0.15)"},{"candidate_id":"cand_9c0abe51c6e6","observation_count":88,"fields":[{"path":"vnd_order_id","type":"string"},{"path":"vnd_amount","type":"number"},{"path":"vnd_currency","type":"string"},{"path":"vnd_status","type":"string"}],"slm_decision":"match_schema","slm_relation":"compatible_drift","match_family":"fam_3eeb7e96-e59ce40f-9cb1a089-daba079f","match_label":"Orders","top1_distance":0.11,"margin":0.22,"gate":"apply_ready","reason":"renamed fields, same family \u2014 corroborated (dist 0.11 \u2264 0.15, margin 0.22 \u2265 0.10, obs 88 \u2265 20)"},{"candidate_id":"cand_7c1c97df17c0","observation_count":14,"fields":[{"path":"amount","type":"number"},{"path":"description","type":"string"},{"path":"kind","type":"string"}],"slm_decision":"abstain","slm_cause":"insufficient_evidence","top1_distance":0.03,"margin":0.05,"gate":"deferred_human","reason":"too few observations (14 < 20) and low margin (0.05 < 0.10)"}],"quarantine":[{"raw_digest":"blob_c75de8c1b7c3ae52","reason":"malformed JSON (unterminated string)","count":7,"first_seen":"2026-07-17T22:14:00Z"}],"metrics":{"schemas":6,"families":6,"candidates_pending":3,"quarantined":7,"hot_path_ms":0.43,"relay_rec_s":598,"retrieval_recall3":0.923,"false_merges_gated":1,"false_merges_ungated":39},"decision_demo":[{"in":"amount, description, kind, metadata{revision}","dist":0.0,"decision":"match_schema","relation":"exact","gate":"applied"},{"in":"amount, description, region (units swapped)","dist":0.01,"decision":"match_schema","relation":"incompatible_similarity","gate":"blocked \u2014 not merged"},{"in":"vnd_amount, vnd_kind, vnd_status (renamed)","dist":0.0,"decision":"match_schema","relation":"compatible_drift","gate":"applied"},{"in":"carrier_code, eta_bucket, shipment_tracking_code","dist":0.5,"decision":"new_candidate","relation":"\u2014","gate":"new family"},{"in":"amount, description (1 observation)","dist":0.0,"decision":"abstain","relation":"insufficient_evidence","gate":"deferred to human"}]};</script>
+<script>
+const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
+const store={get:k=>localStorage.getItem('deblob.'+k),set:(k,v)=>localStorage.setItem('deblob.'+k,v),del:k=>localStorage.removeItem('deblob.'+k)};
+const state={live:false,base:store.get('base')||'',token:store.get('token')||'',data:null,sel:{}};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const shortId=s=>s?(s.length>18?s.slice(0,14)+'…':s):'—';
+function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2400);}
+
+// --- data layer: live API or demo fallback ---
+async function api(path,opts){
+  if(!state.base) throw new Error('no base');
+  const h={'Accept':'application/json'};
+  if(state.token) h['Authorization']='Bearer '+state.token;
+  if(opts&&opts.body) h['Content-Type']='application/json';
+  const r=await fetch(state.base.replace(/\/$/,'')+path,{...opts,headers:h});
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  return r.status===204?null:r.json();
+}
+async function loadData(){
+  // try live: pull schema list; build the model. On any failure -> demo.
+  if(state.base){
+    try{
+      const [sch,cand]=await Promise.all([api('/api/v1/schemas?limit=200'),api('/api/v1/candidates').catch(()=>({data:[]}))]);
+      const fams=(sch.data||[]).map(r=>({family_id:r.family_id,schema_id:r.schema_id,version:r.version,
+        label:(r.provenance&&r.provenance.label)||r.family_id.slice(4,14),
+        observation_count:(r.provenance&&r.provenance.observation_count)||0,
+        fields:canonToFields(r.canonical),semantic_fingerprint:r.semantic_fingerprint||null,
+        privacy_class:r.privacy_class||'internal',canonicalizer:r.canonicalizer}));
+      state.data={families:fams,neighbors:{},candidates:cand.data||[],quarantine:[],
+        metrics:{schemas:fams.length,families:new Set(fams.map(f=>f.family_id)).size,candidates_pending:(cand.data||[]).length,quarantined:0,hot_path_ms:null,relay_rec_s:null,retrieval_recall3:null,false_merges_gated:null,false_merges_ungated:null},
+        decision_demo:window.DEMO.decision_demo};
+      state.live=true; return;
+    }catch(e){ /* fall through */ }
+  }
+  state.data=JSON.parse(JSON.stringify(window.DEMO)); state.live=false;
+}
+function canonToFields(canon){
+  try{const o=typeof canon==='string'?JSON.parse(canon):canon;const out=[];
+    (function walk(v,p){if(v&&typeof v==='object'&&!Array.isArray(v)){for(const k in v){const np=p?p+'.'+k:k;const t=Array.isArray(v[k])?'array':typeof v[k]==='object'?'object':(v[k]==='number'||v[k]==='int'?'number':'string');out.push({path:np,type:t,nullable:false});if(t==='object')walk(v[k],np);}}})(o,'');
+    return out.slice(0,30);}catch(e){return[];}
+}
+function setMode(){const el=$('#mode');if(state.live){el.className='pill live';el.innerHTML='<span class="led"></span>LIVE · '+esc(state.base.replace(/^https?:\/\//,''));}else{el.className='pill demo';el.innerHTML='<span class="led"></span>DEMO DATA';}}
+
+// --- views ---
+const V={};
+V.overview=()=>{const m=state.data.metrics;
+  const card=(k,v,s,cls='')=>`<div class="card stat"><p class="k">${k}</p><div class="v ${cls} num">${v}</div><p class="s">${s}</p></div>`;
+  return `<div class="pagehead"><h1>Dashboard</h1><p>Schemas Deblob has learned from the stream, and how safely it's deciding.</p></div>
+  <div class="grid cols4">
+    ${card('Learned schemas',m.schemas,'distinct canonical shapes in the vault')}
+    ${card('Families',m.families,'grouped identities across versions')}
+    ${card('Discovery queue',m.candidates_pending,'pending candidates awaiting a decision','accent')}
+    ${card('Quarantined',m.quarantined??'—','events that failed to parse','')}
+  </div>
+  <h2 class="sec">Safety &amp; performance</h2>
+  <div class="grid cols4">
+    ${card('False merges — gated',m.false_merges_gated??'—','with the trust gate (per 96 events)','good')}
+    ${card('False merges — ungated',m.false_merges_ungated??'—','retrieval top-1 alone','risk')}
+    ${card('Hot-path latency',m.hot_path_ms!=null?m.hot_path_ms+' ms':'—','tag &amp; resolve, mean')}
+    ${card('Relay throughput',m.relay_rec_s!=null?m.relay_rec_s+'/s':'—','exactly-once records')}
+  </div>
+  <h2 class="sec">The safety trade, visualized</h2>
+  <div class="card"><p style="margin:0 0 14px;color:var(--ink2);font-size:13px">Accepting every structural top-1 match is reckless; the trust gate cuts false merges to near zero by deferring what it can't corroborate.</p>
+    ${barCompare('retrieval only (ungated)',m.false_merges_ungated||39,39,'risk')}
+    ${barCompare('with trust gate',m.false_merges_gated||1,39,'good')}
+    <p style="margin:12px 0 0;font-size:11.5px;color:var(--faint)">false merges per 96 events · lower is safer</p>
+  </div>`;
+};
+function barCompare(lab,val,max,cls){const w=Math.max(2,val/max*100);return `<div class="nb"><div class="lab">${lab}</div><div class="tk"><div class="fl ${cls==='good'?'close':''}" style="width:${w}%;background:var(--${cls})"></div></div><div class="v">${val}</div></div>`;}
+
+V.decisions=()=>{const rows=state.data.decision_demo.map(d=>{
+  const dc=d.decision==='match_schema'?'match':d.decision==='new_candidate'?'new':'abstain';
+  const gcls=/block|not merged/.test(d.gate)?'style="color:var(--risk)"':/human|defer/.test(d.gate)?'style="color:var(--warn)"':/new/.test(d.gate)?'style="color:var(--accent)"':'style="color:var(--good)"';
+  return `<tr><td><code>${esc(d.in)}</code></td><td class="num">${d.dist.toFixed(2)}</td><td><span class="dec ${dc}">${esc(d.decision)}</span></td><td>${esc(d.relation)}</td><td ${gcls}>${esc(d.gate)}</td></tr>`;}).join('');
+  return `<div class="pagehead"><h1>How Deblob decides</h1><p>For each event's structural shape, the model proposes a decision; the deterministic gate corroborates or defers. It never merges two different schemas.</p></div>
+  <div class="tw"><table><thead><tr><th>Event shape (redacted)</th><th>distance</th><th>decision</th><th>relation / cause</th><th>gate outcome</th></tr></thead><tbody>${rows}</tbody></table></div>
+  <div class="grid cols3" style="margin-top:16px">
+    <div class="card"><p class="k" style="font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:0 0 8px">MATCH</p><p style="margin:0;font-size:12.5px;color:var(--ink2)">Same family — exact, drifted, or a semantically <b>incompatible</b> lookalike (flagged, never merged).</p></div>
+    <div class="card"><p class="k" style="font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:0 0 8px">NEW</p><p style="margin:0;font-size:12.5px;color:var(--ink2)">Nothing known is close enough — a genuinely new schema family, flagged for discovery.</p></div>
+    <div class="card"><p class="k" style="font-family:var(--mono);font-size:10.5px;color:var(--faint);margin:0 0 8px">ABSTAIN</p><p style="margin:0;font-size:12.5px;color:var(--ink2)">Too few observations or too ambiguous — deferred to a human rather than guessed.</p></div>
+  </div>`;
+};
+
+V.schemas=()=>{
+  const list=state.data.families;
+  if(!state.sel.schema&&list[0])state.sel.schema=list[0].schema_id;
+  return `<div class="pagehead"><h1>Schema catalogue</h1><p>${list.length} learned schemas. Select one to inspect its canonical field shape.</p></div>
+  <div class="split">
+    <div class="listcard"><div class="search"><input id="schsearch" placeholder="Search schemas…"></div><div class="rowlist" id="schrows">${schemaRows(list)}</div></div>
+    <div id="schdetail">${schemaDetail(list.find(f=>f.schema_id===state.sel.schema))}</div>
+  </div>`;
+};
+function schemaRows(list){return list.map(f=>`<div class="row ${f.schema_id===state.sel.schema?'on':''}" data-sch="${f.schema_id}"><div><div class="lab">${esc(f.label)}</div><div class="meta">${shortId(f.schema_id)}</div></div><span class="cnt">${f.observation_count} obs</span></div>`).join('')||'<div class="empty">No schemas</div>';}
+function schemaDetail(f){if(!f)return '<div class="card empty">Select a schema</div>';
+  const fields=f.fields.map(x=>`<div class="field"><span class="fp">${x.path.split('.').map((p,i)=>i?'<span class="dot">.</span>'+esc(p):esc(p)).join('')}</span><span class="ty ${x.type}">${x.type}</span><span class="muted" style="font-size:11px">${x.nullable?'nullable':'required'}</span></div>`).join('');
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin-bottom:4px"><div><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2><div class="muted num" style="font-size:11px;margin-top:3px">${esc(f.schema_id)}</div></div><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div>
+    <dl class="kv"><dt>family</dt><dd>${esc(f.family_id)}</dd><dt>version</dt><dd>v${f.version}</dd><dt>observations</dt><dd>${f.observation_count}</dd><dt>semantic</dt><dd>${f.semantic_fingerprint?esc(f.semantic_fingerprint):'<span class="muted">not annotated</span>'}</dd><dt>canonicalizer</dt><dd>${esc(f.canonicalizer)}</dd></dl>
+    <h2 class="sec" style="margin:16px 0 10px">Canonical shape · ${f.fields.length} fields</h2>${fields}
+  </div>`;}
+
+V.families=()=>{const fams=state.data.families;
+  const rows=fams.map(f=>`<tr><td><b>${esc(f.label)}</b><div class="muted num" style="font-size:10.5px">${esc(f.family_id)}</div></td><td class="num">v${f.version}</td><td class="num">${f.observation_count}</td><td class="num">${f.fields.length}</td><td><span class="tag ${f.privacy_class}">${f.privacy_class}</span></td></tr>`).join('');
+  return `<div class="pagehead"><h1>Families &amp; versions</h1><p>Each family groups the evolving versions of one logical event type. Structural drift bumps the version; identity is preserved.</p></div>
+  <div class="tw"><table><thead><tr><th>Family</th><th>current version</th><th>observations</th><th>fields</th><th>privacy</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+};
+
+V.similarity=()=>{
+  return `<div class="pagehead"><h1>Similarity graph</h1><p>Schemas linked by structural distance (weighted-Jaccard). Closer = more similar. This is what retrieval sees before any model runs.</p></div>
+  <div class="card">${simGraph()}<div class="glegend"><span><i class="ln" style="background:var(--good)"></i>close (&lt; 0.5)</span><span><i class="ln" style="background:var(--line2)"></i>distant</span><span>node size = observations</span></div></div>
+  <h2 class="sec">Nearest neighbours</h2>${simList()}`;
+};
+function simGraph(){const fams=state.data.families;const N=fams.length;const cx=300,cy=190,R=150;
+  const pos={};fams.forEach((f,i)=>{const a=-Math.PI/2+i*2*Math.PI/N;pos[f.schema_id]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a),f};});
+  let edges='';const seen=new Set();
+  fams.forEach(f=>{(state.data.neighbors[f.schema_id]||[]).forEach(n=>{if(n.distance>=0.99)return;const key=[f.schema_id,n.schema_id].sort().join();if(seen.has(key))return;seen.add(key);const a=pos[f.schema_id],b=pos[n.schema_id];if(!a||!b)return;const close=n.distance<0.5;edges+=`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--${close?'good':'line2'})" stroke-width="${close?2.2:1}" opacity="${close?.9:.5}"/><text x="${(a.x+b.x)/2}" y="${(a.y+b.y)/2}" font-size="8.5" fill="var(--faint)" text-anchor="middle">${n.distance.toFixed(2)}</text>`;});});
+  let nodes='';fams.forEach(f=>{const p=pos[f.schema_id];const r=9+Math.min(14,f.observation_count/12);nodes+=`<g><circle cx="${p.x}" cy="${p.y}" r="${r}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"/><text x="${p.x}" y="${p.y+r+13}" font-size="10.5" fill="var(--ink)" text-anchor="middle" font-family="var(--sans)">${esc(f.label)}</text></g>`;});
+  return `<svg viewBox="0 0 600 400" role="img" aria-label="schema similarity graph">${edges}${nodes}</svg>`;}
+function simList(){return state.data.families.map(f=>{const ns=(state.data.neighbors[f.schema_id]||[]).slice(0,3);
+  return `<div class="card" style="margin-bottom:12px"><div style="font-weight:600;margin-bottom:10px">${esc(f.label)} <span class="muted num" style="font-weight:400;font-size:11px">${shortId(f.schema_id)}</span></div>${ns.map(n=>`<div class="nb"><div class="lab">${esc(n.label)}</div><div class="tk"><div class="fl ${n.distance<0.5?'close':''}" style="width:${(1-n.distance)*100}%"></div></div><div class="v">${n.distance.toFixed(2)}</div></div>`).join('')||'<div class="muted" style="font-size:12px">no close neighbours</div>'}</div>`;}).join('');}
+
+V.discovery=()=>{const cs=state.data.candidates;
+  const body=cs.length?cs.map(candCard).join(''):'<div class="card empty">No pending candidates. The discovery queue is clear.</div>';
+  return `<div class="pagehead"><h1>Discovery queue</h1><p>Stable clusters the model has proposed a decision for. The gate marks which are safe to apply; promote/reject writes to the registry.</p></div>
+  ${state.live?'':'<div class="verdict human" style="margin-bottom:14px"><span class="icn">i</span><div>Demo mode — promote/reject are disabled. Connect a live Deblob instance with a token to enable governed actions.</div></div>'}
+  ${body}`;
+};
+function candCard(c){
+  const dc=c.slm_decision==='match_schema'?'match':c.slm_decision==='new_candidate'?'new':'abstain';
+  const sub=c.slm_relation||c.slm_novelty||c.slm_cause||'';
+  const vcls=c.gate==='apply_ready'?'apply':c.gate==='deferred_new'?'new':/human/.test(c.gate)?'human':'human';
+  const vic=c.gate==='apply_ready'?'✓':c.gate==='deferred_new'?'✧':'⏸';
+  return `<div class="cand"><div class="h"><div><div class="num muted" style="font-size:11px">${esc(c.candidate_id)}</div><div style="margin-top:4px"><span class="dec ${dc}">${esc(c.slm_decision)}</span> <span class="muted" style="font-size:12px">${esc(sub)}${c.match_label?' → '+esc(c.match_label):''}</span></div></div><span class="chip">${c.observation_count} obs</span></div>
+    <div class="fields">${c.fields.map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')}</div>
+    <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(c.gate.replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason)}</span><br><span class="muted num" style="font-size:11px">dist ${c.top1_distance} · margin ${c.margin}</span></div></div>
+    <div class="actions"><button class="btn good" ${state.live&&c.gate==='apply_ready'?'':'disabled'} onclick="act('promote','${c.candidate_id}')">Promote</button><button class="btn risk" ${state.live?'':'disabled'} onclick="act('reject','${c.candidate_id}')">Reject</button></div></div>`;
+}
+window.act=(kind,id)=>{
+  confirmModal(`${kind==='promote'?'Promote':'Reject'} candidate?`,
+    `${kind==='promote'?'This publishes the candidate as a governed schema in the registry.':'This drops the candidate from the discovery queue.'} Candidate <code>${esc(id)}</code>.`,
+    async()=>{try{await api(`/api/v1/candidates/${id}/${kind}`,{method:'POST',body:'{}'});toast(`Candidate ${kind}d.`);state.data.candidates=state.data.candidates.filter(c=>c.candidate_id!==id);render();}catch(e){toast('Failed: '+e.message);}});
+};
+
+V.quarantine=()=>{const q=state.data.quarantine||[];
+  const rows=q.map(x=>`<tr><td class="num">${esc(x.raw_digest)}</td><td>${esc(x.reason)}</td><td class="num">${x.count}</td><td class="num muted">${esc(x.first_seen||'')}</td></tr>`).join('');
+  return `<div class="pagehead"><h1>Quarantine</h1><p>Events that failed bounded parsing. They never enter the schema vault; they're isolated for inspection.</p></div>
+  ${q.length?`<div class="tw"><table><thead><tr><th>digest</th><th>reason</th><th>count</th><th>first seen</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="card empty">Quarantine is empty — all ingested events parsed cleanly.</div>'}`;
+};
+
+V.health=()=>{const m=state.data.metrics;
+  const ok=state.live?'checking…':'demo';
+  return `<div class="pagehead"><h1>Health &amp; metrics</h1><p>Liveness, readiness, and the Prometheus metrics endpoint the operator dashboards scrape.</p></div>
+  <div class="grid cols3">
+    <div class="card stat"><p class="k">/healthz</p><div class="v good" id="hz" style="font-size:20px">${state.live?'…':'200 OK'}</div><p class="s">process liveness</p></div>
+    <div class="card stat"><p class="k">/readyz</p><div class="v good" id="rz" style="font-size:20px">${state.live?'…':'200 OK'}</div><p class="s">Redis + Kafka reachable</p></div>
+    <div class="card stat"><p class="k">/metrics</p><div class="v accent" style="font-size:20px">Prom</div><p class="s">scrape target</p></div>
+  </div>
+  <h2 class="sec">Deterministic core (measured)</h2>
+  <div class="tw"><table><tbody>
+    <tr><td>Hot-path tag &amp; resolve</td><td class="num">${m.hot_path_ms??'0.43'} ms</td><td class="muted">99.9% ≤ 5 ms</td></tr>
+    <tr><td>Relay throughput (exactly-once)</td><td class="num">${m.relay_rec_s??'598'} rec/s</td><td class="muted">43× over per-record</td></tr>
+    <tr><td>Retrieval recall@3</td><td class="num">${((m.retrieval_recall3??0.923)*100).toFixed(1)}%</td><td class="muted">MRR 0.89</td></tr>
+  </tbody></table></div>`;
+};
+
+// --- confirm modal + connect modal ---
+function confirmModal(title,html,onyes){
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>${title}</h3><p>${html}</p><div class="row2"><button class="btn" id="mno">Cancel</button><button class="btn risk" id="myes">Confirm</button></div></div></div>`;
+  $('#mno').onclick=()=>$('#overlay').innerHTML='';$('#myes').onclick=()=>{$('#overlay').innerHTML='';onyes();};
+}
+function connectModal(){
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>Connect to Deblob</h3><p>Point the console at a running Deblob management API. Leave blank to use bundled demo data.</p>
+    <label>API base URL</label><input id="cbase" placeholder="https://deblob.your-domain" value="${esc(state.base)}">
+    <label>Bearer token (optional)</label><input id="ctok" type="password" placeholder="mgmt API token" value="${esc(state.token)}">
+    <div class="row2"><button class="btn" id="cclear">Use demo</button><button class="btn good" id="csave">Connect</button></div></div></div>`;
+  $('#cclear').onclick=()=>{store.del('base');store.del('token');state.base='';state.token='';$('#overlay').innerHTML='';boot();};
+  $('#csave').onclick=async()=>{state.base=$('#cbase').value.trim();state.token=$('#ctok').value.trim();store.set('base',state.base);store.set('token',state.token);$('#overlay').innerHTML='';toast('Connecting…');await boot();toast(state.live?'Connected.':'Could not reach API — showing demo data.');};
+}
+
+// --- router + boot ---
+function render(){const v=location.hash.replace('#','')||'overview';$$('nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));$('#main').innerHTML=(V[v]||V.overview)();afterRender(v);}
+function afterRender(v){
+  if(v==='schemas'){const s=$('#schsearch');if(s)s.oninput=()=>{const q=s.value.toLowerCase();$('#schrows').innerHTML=schemaRows(state.data.families.filter(f=>f.label.toLowerCase().includes(q)||f.schema_id.includes(q)));bindRows();};bindRows();}
+  if(v==='health'&&state.live){['healthz','rz'].forEach(()=>{});api('/healthz').then(()=>$('#hz').textContent='200 OK').catch(()=>{$('#hz').textContent='down';$('#hz').className='v risk';});api('/readyz').then(()=>$('#rz').textContent='200 OK').catch(()=>{$('#rz').textContent='not ready';$('#rz').className='v warn';});}
+}
+function bindRows(){$$('#schrows .row').forEach(r=>r.onclick=()=>{state.sel.schema=r.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===r.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x===r));});}
+async function boot(){await loadData();setMode();render();}
+$$('nav a').forEach(a=>a.onclick=e=>{e.preventDefault();location.hash=a.dataset.v;});
+window.addEventListener('hashchange',render);
+$('#connect').onclick=connectModal;
+$('#theme').onclick=()=>{const r=document.documentElement;const cur=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');const nx=cur==='dark'?'light':'dark';r.setAttribute('data-theme',nx);store.set('theme',nx);};
+const th=store.get('theme');if(th)document.documentElement.setAttribute('data-theme',th);
+boot();
+</script>
