@@ -5,14 +5,28 @@ Authoritative source: `docs/superpowers/plans/deblob-p2ab-hermes-review.md`
 place for operators and reviewers; the plan doc remains authoritative if
 the two ever disagree.
 
-**This document is DESCRIPTIVE, not automated.** Nothing in P2 enforces the
-go-live gate below — no code path in `crates/deblob/src/shadow.rs` (or
-anywhere else in this repository) currently checks these numbers or flips
-any switch. The gate exists so a *human* reviewing the shadow log later
-(P3) has a written, agreed-upon bar to check the data against before any
-SLM decision is ever applied to live registry/candidate/schema state. The
-shadow classifier's only job in P2 is to accumulate the labeled decisions
-this gate will eventually be evaluated against.
+**This document was written as DESCRIPTIVE (P2), and parts of that framing
+are now stale — status update 2026-07-17:**
+
+- The metric-computing harness this document deferred to now exists:
+  `crates/deblob-eval` (corpus, metrics, synthetic generator) and
+  `crates/deblob-experiment` (arms, four-layer evaluation).
+- A statistical gate in the spirit of this document IS now enforced in code
+  for **model promotion**: `crates/deblob/src/model_registry.rs` requires a
+  minimum test N, zero false merges, per-family precision floors with Wilson
+  bounds, and non-inferiority versus the active model, followed by a
+  two-stage shadow-candidate canary, before a model can be activated.
+- The **decision-level** trust gate is implemented in
+  `crates/deblob/src/shadow.rs::evaluate_policy` and
+  `crates/deblob/src/trusted.rs` (exhaustively tested: no uncorroborated
+  proposal can reach Apply). The runtime, however, remains
+  **observation-only**: `serve.rs` wires the shadow classifier and sweep
+  (opt-in via `[slm]`), and no code path applies an SLM decision to live
+  registry/candidate/schema state.
+- Therefore the original purpose of this document still stands for the one
+  step that remains human-gated: the go-live bar below is the agreed,
+  written standard that accumulated shadow-log evidence must meet before
+  proposal-to-apply is ever wired into the serve path.
 
 ## Where the data comes from
 
@@ -101,14 +115,12 @@ following must hold, computed over the shadow log's labeled decisions:
 
 ## What this checkpoint does NOT do
 
-- It does not compute any of the numbers above. That is Task 7's job
-  (`crates/deblob-eval`) plus an offline labeling pipeline neither of which
-  exist yet in this repository at this commit.
+- It does not compute any of the numbers above. (`crates/deblob-eval` now
+  exists and computes the decision metrics; an adjudicated offline labeling
+  pipeline for live traffic still does not.)
 - It does not gate, block, or otherwise affect promotion, publication, or
-  any hot/cold-lane behavior. `ShadowClassifier::maybe_classify` is called
-  by nothing in `crates/deblob/src/serve.rs` or `main.rs` as of this
-  commit — it is available to be wired into a periodic sweep or the
-  discovery-consumer pipeline by a follow-up task, once an operator has
-  configured a `SemanticInferencer` endpoint to shadow against. See
+  any hot/cold-lane behavior. (Status 2026-07-17: `serve.rs` now constructs the
+  classifier and runs `run_shadow_sweep` when `[slm]` is configured —
+  shadow classification is live-wired but remains observation-only.) See
   `crates/deblob/src/shadow.rs` module docs for the exact zero-mutation
   invariant this checkpoint DOES prove.

@@ -38,4 +38,4 @@ A handful of short T4 runs (model downloaded once, then Volume-cached), well und
 - Decision-focused loss (mask the prompt, weight the tool-call tokens) instead of full-sequence LM loss.
 - **FunctionGemma-270M** once an HF token is available — an FC-specialized base may beat generic Qwen at fewer params.
 - Feed real accepted/rejected human decisions (the actual feedback store) alongside the synthetic corpus.
-- Wire the production hook (`ModalBackend` → `trainer.py`) so gate + two-stage canary govern promotion (this validation ran the training half standalone; the gate/canary already exist + are tested).
+- ~~Wire the production hook~~ **Done 2026-07-17**: the deployed trainer was driven end-to-end on real data (`deploy/experiment/modal/live_round.py`) — manifest resolved from the Volume, adapter + digests returned, artifact reloaded and re-evaluated reproducing these numbers (`docs/artifacts/`). Promotion remains a separate gated controller operation, by design.

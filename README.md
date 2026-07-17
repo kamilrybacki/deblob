@@ -208,11 +208,19 @@ real Kafka and Redis (not just mocks/unit tests):
   operations exist (`RedisRegistry::rebuild_index`/`verify_index`) but are
   library-only today; see the [runbook](docs/runbook.md#index-rebuild)
 
-**Not yet supported (P2+):**
-- The semantic discovery lane and small-language-model classification —
-  provider-agnostic behind an OpenAI-compatible HTTP adapter, with in-process
-  llama.cpp as an opt-in
-- The HTTP push reverse proxy
+**Implemented, disabled by default (opt-in via config):**
+- The semantic discovery lane — shadow SLM classification of stable candidate
+  clusters behind a provider-agnostic OpenAI-compatible HTTP adapter
+  (`[slm]` config). In the runtime this lane is observation-only: decisions
+  are logged to the shadow log, never applied. The governed apply path
+  (deterministic trust gate, `trusted.rs`), the model registry with
+  statistical promotion gating, the continual-learning loop, and the remote
+  LoRA training hook are implemented and tested at library level; wiring
+  proposal-to-apply into the serve path is a tracked follow-up. See
+  `docs/whitepaper.html` for the current capability and its measured limits.
+- The HTTP push reverse proxy (`[http_proxy]`, off unless configured)
+
+**Not yet supported:**
 - Formats other than strict JSON
 
 There is no subcommand tree (`deblob relay kafka`, `deblob schema show`,
