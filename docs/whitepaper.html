@@ -1,0 +1,545 @@
+<title>Deblob: Emergent Schema Identification for Event Streams</title>
+<style>
+  :root{
+    --page:#3c3c3c; --sheet:#ffffff; --ink:#111111; --ink2:#333333; --muted:#555555;
+    --faint:#777777; --rule:#111111; --hairline:#cccccc; --shade:#f2f2f2; --shade2:#e0e0e0;
+    --g1:#111; --g2:#444; --g3:#777; --g4:#aaa; --g5:#d5d5d5;
+    --serif:"Latin Modern Roman","Computer Modern Serif","STIX Two Text",Charter,Georgia,"Times New Roman",serif;
+    --mono:"Latin Modern Mono",ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  @media (prefers-color-scheme:dark){ :root{ --page:#1b1b1b; } }
+  :root[data-theme="dark"]{ --page:#1b1b1b; }
+  :root[data-theme="light"]{ --page:#3c3c3c; }
+  *{box-sizing:border-box}
+  html{background:var(--page)}
+  body{margin:0;padding:clamp(8px,3vw,40px) 8px;background:var(--page);
+    font-family:var(--serif);color:var(--ink);font-size:15.5px;line-height:1.5}
+  .sheet{max-width:770px;margin:0 auto;background:var(--sheet);
+    padding:clamp(34px,7vw,84px) clamp(22px,7vw,86px);
+    box-shadow:0 2px 24px rgba(0,0,0,.45)}
+  /* title block */
+  .titleblock{text-align:center;margin:0 0 34px}
+  h1.title{font-size:24px;font-weight:700;line-height:1.28;margin:0 0 18px;letter-spacing:.01em}
+  .authors{font-size:14.5px;margin:0 0 4px}
+  .affil{font-size:12.5px;font-style:italic;color:var(--ink2);margin:0 0 4px}
+  .date{font-size:12.5px;color:var(--ink2);margin:0}
+  /* abstract */
+  .abstract{margin:0 auto 8px;max-width:600px}
+  .abstract h2{font-size:13.5px;text-align:center;font-weight:700;margin:0 0 8px;letter-spacing:.02em}
+  .abstract p{font-size:13.4px;line-height:1.5;text-align:justify;hyphens:auto;margin:0}
+  .keywords{max-width:600px;margin:12px auto 0;font-size:12.5px;color:var(--ink2)}
+  .keywords b{font-style:italic;font-weight:600}
+  /* sections */
+  h2.sec{font-size:16.5px;font-weight:700;margin:30px 0 10px}
+  h3.sub{font-size:14.5px;font-weight:700;font-style:italic;margin:20px 0 7px}
+  p{margin:0 0 11px;text-align:justify;hyphens:auto}
+  .noindent{text-indent:0}
+  b{font-weight:700}
+  em{font-style:italic}
+  code,.mono{font-family:var(--mono);font-size:.86em}
+  /* figures & tables */
+  figure{margin:20px 0 22px;padding:0}
+  figcaption{font-size:12.6px;line-height:1.45;margin-top:9px;text-align:justify}
+  figcaption b{font-weight:700}
+  .figbox{border:none;padding:0;overflow-x:auto}
+  table{border-collapse:collapse;margin:0 auto;font-size:13px;line-height:1.4}
+  table.booktab{width:auto;min-width:70%}
+  .booktab th,.booktab td{padding:4px 12px;text-align:right;border:none}
+  .booktab th:first-child,.booktab td:first-child{text-align:left}
+  .booktab thead th{border-top:1.6px solid var(--rule);border-bottom:.8px solid var(--rule);
+    font-weight:700;font-style:normal}
+  .booktab tbody tr:last-child td{border-bottom:1.6px solid var(--rule)}
+  .booktab .group td{border-top:.6px solid var(--hairline);font-style:italic;color:var(--ink2)}
+  .booktab td.n,.booktab th.n{font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.3px}
+  .tabwrap{overflow-x:auto}
+  /* code / data listings */
+  .listing{background:var(--shade);border-left:2.5px solid var(--ink);
+    font-family:var(--mono);font-size:11.6px;line-height:1.5;padding:11px 14px;margin:14px 0;
+    white-space:pre;overflow-x:auto;color:var(--ink)}
+  .listing i{font-style:normal;color:var(--faint)}
+  /* svg figures */
+  svg{display:block;margin:0 auto;max-width:100%;height:auto;overflow:visible}
+  svg text{font-family:var(--mono)}
+  .svglab{font-size:10px;fill:var(--muted)}
+  /* footnote-ish */
+  .fnote{font-size:12.3px;color:var(--ink2);border-top:.8px solid var(--hairline);
+    padding-top:8px;margin-top:26px;line-height:1.45}
+  .refs{font-size:12.8px;line-height:1.5}
+  .refs p{margin:0 0 7px;text-indent:-1.4em;padding-left:1.4em;text-align:left}
+  ol.compact{margin:0 0 11px;padding-left:24px}
+  ol.compact li{margin:0 0 5px;text-align:justify}
+  .checkrow{margin:0 0 5px}
+  @media(max-width:560px){ body{font-size:14.5px} .sheet{padding:26px 16px} table{font-size:12px} }
+</style>
+
+<div class="sheet">
+
+  <div class="titleblock">
+    <h1 class="title">Deblob: Emergent Schema Identification for Event Streams<br>
+      via a Deterministic Structural Core and a Trust-Gated Language-Model Lane</h1>
+    <p class="authors">Kamil Rybacki</p>
+    <p class="affil">with Claude (Anthropic) and Hermes — homelab agent collaboration</p>
+    <p class="date">Technical whitepaper · July 17, 2026 · <span class="mono" style="font-size:12px">github.com/kamilrybacki/deblob</span></p>
+  </div>
+
+  <div class="abstract">
+    <h2>Abstract</h2>
+    <p>Event streams accumulate schema "blobs": producers emit JSON whose structure drifts, forks,
+    and multiplies until no one can say how many distinct schemas a topic actually carries. Deblob
+    tags every event with the schema family it belongs to and discovers genuinely new schemas,
+    under one hard invariant: <em>two different schemas are never merged</em>. The system splits the
+    problem into a deterministic structural core — canonical fingerprinting, algebraic profiling,
+    and nearest-neighbour retrieval, running at sub-millisecond per-event cost inside an
+    exactly-once Kafka relay (598 records/s on modest hardware) — and a small-language-model (SLM)
+    lane that handles the semantic middle ground where structure alone is provably insufficient. A
+    deterministic <em>trust gate</em> ensures no model proposal is ever applied without independent
+    structural corroboration. We fine-tuned a 0.5-billion-parameter model on 720 synthetic,
+    ground-truth-labelled examples for under $0.10 of GPU time; with completion-only loss, balanced
+    sampling, and finite-hypothesis scoring, it identifies never-before-seen schema families with
+    89% recall on held-out families (100% under a conservative veto policy) while selecting only
+    catalogued schema identifiers, making identifier hallucination structurally impossible. The
+    full loop — feedback export, remote training, governed promotion — was exercised end-to-end on
+    production infrastructure. We report the architecture, data representation, training method,
+    and honest limitations.</p>
+  </div>
+  <p class="keywords"><b>Keywords:</b> schema inference, event streams, exactly-once processing,
+    small language models, LoRA fine-tuning, selective prediction, human-in-the-loop</p>
+
+  <h2 class="sec">1&emsp;Introduction</h2>
+  <p>A production event bus is rarely the tidy place its documentation claims. Teams ship new
+  producers, rename fields, wrap payloads in envelopes, and re-use generic field names
+  (<code>id</code>, <code>status</code>, <code>amount</code>) for unrelated things. The result is a
+  stream whose <em>effective</em> schema catalogue is unknown — a blob. Downstream consumers break
+  on drift they cannot see; data teams cannot answer "how many event types do we actually have?"</p>
+  <p>Deblob answers that question continuously. For every event it decides one of three things:
+  the event <b>matches</b> a known schema family (and how: exactly, as compatible drift, or as a
+  structurally similar but <em>semantically incompatible</em> lookalike), it belongs to a
+  <b>new</b> family never seen before, or the evidence is insufficient and the system
+  <b>abstains</b>, deferring to a human. Two properties are non-negotiable: the hot path must be
+  fast and deterministic, and the system must never <em>falsely merge</em> two different schemas —
+  a merge poisons every downstream consumer and is far costlier than a deferred decision.</p>
+  <p>The central design claim is that these goals need two different tools. Structure is cheap and
+  reliable: canonical fingerprints and structural distance settle most events in microseconds. But
+  we show empirically (§6.4) that structural distance <em>cannot</em> separate "genuinely new
+  schema" from "same schema, renamed fields" — the two populations overlap. That residual is a
+  semantic judgement, and we delegate it to a small fine-tuned language model that is never
+  trusted alone: a deterministic gate must corroborate every proposal before anything is applied.</p>
+
+  <h2 class="sec">2&emsp;System Design</h2>
+  <figure>
+    <div class="figbox">
+    <svg viewBox="0 0 660 258" role="img" aria-label="Deblob architecture: deterministic lane and gated SLM lane">
+      <defs>
+        <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path d="M0,0 L10,5 L0,10 z" fill="#111"/>
+        </marker>
+      </defs>
+      <!-- deterministic lane box -->
+      <rect x="8" y="14" width="644" height="104" fill="none" stroke="#111" stroke-width="1.4"/>
+      <text x="16" y="30" font-size="10.5" font-weight="bold" fill="#111">DETERMINISTIC HOT PATH (exactly-once Kafka relay · 0.43 ms/event · 598 rec/s)</text>
+      <g font-size="10.5" fill="#111" text-anchor="middle">
+        <rect x="22"  y="46" width="88" height="40" fill="#f2f2f2" stroke="#111"/>
+        <text x="66" y="63">bounded</text><text x="66" y="76">parse</text>
+        <rect x="140" y="46" width="94" height="40" fill="#f2f2f2" stroke="#111"/>
+        <text x="187" y="63">canonical</text><text x="187" y="76">fingerprint</text>
+        <rect x="264" y="46" width="94" height="40" fill="#f2f2f2" stroke="#111"/>
+        <text x="311" y="63">monoid</text><text x="311" y="76">profile</text>
+        <rect x="388" y="46" width="104" height="40" fill="#f2f2f2" stroke="#111"/>
+        <text x="440" y="63">structural</text><text x="440" y="76">retrieval</text>
+        <rect x="522" y="46" width="112" height="40" fill="#fff" stroke="#111" stroke-width="1.6"/>
+        <text x="578" y="63">tag event /</text><text x="578" y="76">schema vault</text>
+      </g>
+      <g stroke="#111" stroke-width="1.1" marker-end="url(#arr)">
+        <line x1="110" y1="66" x2="136" y2="66"/><line x1="234" y1="66" x2="260" y2="66"/>
+        <line x1="358" y1="66" x2="384" y2="66"/><line x1="492" y1="66" x2="518" y2="66"/>
+      </g>
+      <!-- flow down for ambiguous -->
+      <line x1="440" y1="86" x2="440" y2="140" stroke="#111" stroke-width="1.1" stroke-dasharray="4 3" marker-end="url(#arr)"/>
+      <text x="447" y="118" font-size="9.5" fill="#555">ambiguous middle only</text>
+      <!-- slm lane -->
+      <rect x="180" y="144" width="300" height="46" fill="#fff" stroke="#111" stroke-dasharray="5 3" stroke-width="1.2"/>
+      <text x="330" y="162" font-size="10.5" text-anchor="middle" fill="#111">SLM lane (off hot path, CPU or fails closed)</text>
+      <text x="330" y="177" font-size="10" text-anchor="middle" fill="#555">match / new_candidate / abstain proposal</text>
+      <!-- trust gate -->
+      <line x1="330" y1="190" x2="330" y2="212" stroke="#111" stroke-width="1.1" marker-end="url(#arr)"/>
+      <rect x="196" y="214" width="268" height="34" fill="#e0e0e0" stroke="#111" stroke-width="1.6"/>
+      <text x="330" y="230" font-size="10.5" font-weight="bold" text-anchor="middle" fill="#111">TRUST GATE — deterministic corroboration</text>
+      <text x="330" y="243" font-size="9.5" text-anchor="middle" fill="#333">rank=1 · dist ≤ 0.15 · margin ≥ 0.10 · obs ≥ 20 · else defer to human</text>
+      <!-- side: continual learning -->
+      <g font-size="9.5" fill="#555">
+        <text x="530" y="160">human accept / reject</text>
+        <text x="530" y="173">→ feedback store</text>
+        <text x="530" y="186">→ remote LoRA round</text>
+        <text x="530" y="199">→ statistical gate</text>
+        <text x="530" y="212">→ shadow → promote</text>
+      </g>
+      <line x1="480" y1="167" x2="524" y2="167" stroke="#777" stroke-width="1" marker-end="url(#arr)"/>
+    </svg>
+    </div>
+    <figcaption><b>Figure 1:</b> Architecture. Every event traverses the deterministic lane;
+    only the ambiguous middle reaches the SLM, and no SLM proposal is applied without passing the
+    deterministic trust gate. Human decisions feed a governed continual-learning loop whose
+    training hook can produce model artifacts but can never activate them.</figcaption>
+  </figure>
+
+  <h3 class="sub">2.1&emsp;Deterministic core</h3>
+  <p>Events are parsed with bounded, fuzz-hardened parsing, reduced to a <em>canonical structural
+  fingerprint</em> (key order, whitespace, and value content do not affect it), and folded into a
+  per-family <em>monoid profile</em> — an algebraic summary of field paths, types, nullability, and
+  observation counts that composes associatively, so profiles of event batches merge without
+  re-scanning history. Candidate schema families are retrieved by structural distance
+  (weighted-Jaccard over the profile). The relay consumes from Kafka and republishes tagged events
+  under exactly-once transactional semantics; batching plus intra-batch produce pipelining raised
+  throughput 43× (from 14 to 598 records/s) with the exactly-once guarantee preserved per batch
+  and verified under crash, rebalance, and duplicate-delivery chaos tests. Published schemas live
+  in a Redis vault with atomic, write-once publication.</p>
+
+  <h3 class="sub">2.2&emsp;The trust gate</h3>
+  <p>The SLM lane may only <em>propose</em>. A proposal to match an existing schema is applied
+  only when the deterministic evidence independently corroborates it: the proposed family is the
+  top-ranked retrieval candidate, its structural distance is at most 0.15, the margin to the
+  runner-up is at least 0.10, and the family has at least 20 observations. Model confidence plays
+  no role in the decision. Everything else routes to a human. In an exhaustive test over all
+  gate-condition combinations, no configuration exists in which an uncorroborated model proposal
+  is applied — the no-false-merge property is structural, not statistical.</p>
+
+  <h3 class="sub">2.3&emsp;Governed continual learning</h3>
+  <p>Human decisions (promotions, accepted and rejected proposals) are captured as immutable,
+  provenance-bearing training examples — with reason codes, so a rejection caused by a policy
+  denial is not mislabelled as a model error. Retraining runs remotely from a stable base
+  checkpoint; a candidate model must pass a statistical offline gate (zero false merges on a
+  held-out corpus, per-family precision floors with Wilson confidence bounds, non-inferiority
+  versus the active model) and a live-shadow hold before an explicit, separate promotion step
+  activates it. The training hook returns artifact digests only; by construction it cannot move
+  the active-model alias. Full-bundle rollback (weights, tokenizer, prompt template, quantization,
+  retrieval index) is retained.</p>
+
+  <h2 class="sec">3&emsp;Input Data and Schema Representation</h2>
+  <p>Deblob ingests ordinary JSON events. A representative GitHub Archive event:</p>
+  <div class="listing">{
+  "id": "2489651045",
+  "type": "PushEvent",                     <i>&#8592; never shown to the model</i>
+  "actor": {"id": 91, "login": "octocat"},
+  "repo":  {"id": 3, "name": "octocat/hello-world"},
+  "payload": {
+    "push_id": 536390, "size": 1,
+    "ref": "refs/heads/master",
+    "head": "0e5bfe237a11f2c9…"
+  },
+  "created_at": "2015-01-01T00:00:00Z"
+}</div>
+  <p>The model never sees raw events. Each event contributes to a <em>redacted structural
+  profile</em>: field paths, types, presence and null counts, and numeric range buckets — no
+  values. The decision input concatenates that profile with the retrieved candidates and their
+  structural distances:</p>
+  <div class="listing">observation_count: 54          field_count: 6
+path=["calibration"]          types=["object"]  present=54/54
+path=["calibration">"offset"] types=["number"]  numeric=["11-100"]
+path=["calibration">"unit"]   types=["string"]
+path=["readings"]             types=["array"]
+path=["sensor_reading_id"]    types=["string"]
+
+RETRIEVED CANDIDATES (structural distance only)
+rank=1  family=fam_b128…  schema=sch_pfxy…  distance=0.286
+rank=2  family=fam_8c91…  schema=sch_hlxg…  distance=0.444
+ALLOWED schema_id SET = [sch_hlxg…, sch_pfxy…]</div>
+  <p>This representation has two roles. It is a <em>privacy boundary</em> — field values, secrets,
+  and personal data cannot reach a model prompt, a log, or a training set, which a test suite
+  enforces end-to-end — and it is the <em>learning target</em>: the shape statistics carry exactly
+  the evidence a schema decision needs. Label-revealing fields (<code>type</code>,
+  <code>$schema</code>, topic names) are stripped before inference and kept in an evaluator-only
+  sidecar, so evaluation gold can never leak into the input.</p>
+
+  <h2 class="sec">4&emsp;Deterministic Core: Measured Performance</h2>
+  <figure>
+    <div class="tabwrap">
+    <table class="booktab">
+      <thead><tr><th>Operation</th><th class="n">Latency / rate</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Hot-path tag &amp; resolve</td><td class="n">0.43 ms mean</td><td>10,732 ops; 99.9% ≤ 5 ms</td></tr>
+        <tr><td>Relay, per-record transactions</td><td class="n">14 rec/s</td><td>commit-latency bound (~73 ms/txn)</td></tr>
+        <tr><td>Relay, batched + pipelined</td><td class="n">598 rec/s</td><td>43×; exactly-once preserved</td></tr>
+        <tr><td>Neighbour query (API)</td><td class="n">8 ms</td><td>Redis-backed, off relay</td></tr>
+        <tr><td>Semantic annotate (API)</td><td class="n">20.5 ms</td><td>mints semantic fingerprint</td></tr>
+        <tr><td>Schema promote (API)</td><td class="n">36 ms</td><td>governed, audited</td></tr>
+        <tr class="group"><td colspan="3">Retrieval quality (96 labelled events, seed 42)</td></tr>
+        <tr><td>recall@1 / recall@3</td><td class="n">86.5% / 92.3%</td><td>MRR 0.891</td></tr>
+        <tr><td>candidate-set miss</td><td class="n">7.7%</td><td>gold family absent from top-k</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <figcaption><b>Table 1:</b> Deterministic-lane measurements on the k3s benchmark deployment
+    (CPU-only worker nodes; Redpanda single broker). The tagging logic itself is never the
+    bottleneck; the original per-record transaction commit was, and batching removed it.</figcaption>
+  </figure>
+  <p>Retrieval alone, however, is a reckless decider: accepting every top-1 candidate on the
+  benchmark corpus yields 100% coverage with <b>39 false merges</b> in 96 events. Passing the same
+  events through the trust gate cuts coverage to 54% and false merges to <b>1</b> (upper 95%
+  bound 10.1%), with the remainder deferred to a human. That trade — coverage for a hard safety
+  floor — is the system's operating philosophy: everything the gate cannot corroborate is a
+  <em>safe</em> error (a review), never a dangerous one (a merge).</p>
+
+  <h2 class="sec">5&emsp;Learning the Semantic Decision</h2>
+  <h3 class="sub">5.1&emsp;Task and corpus</h3>
+  <p>The SLM's task is a bounded classification rendered as a tool call: given the redacted
+  profile and candidates, emit <code>match_schema</code> (with a relation: <code>exact</code>,
+  <code>compatible_drift</code>, or <code>incompatible_similarity</code>),
+  <code>new_candidate</code>, or <code>abstain</code>. Training and evaluation use a synthetic
+  corpus whose labels are <em>true by construction</em>: 90 base schema families, each expanded by
+  known transformations — 30% exact re-encounters, 20% compatible drift (added optional fields,
+  widened nullability, wrappers), 10% incompatible lookalikes (unit swaps, generic-name re-use —
+  the false-merge traps), 20% genuinely new families, 20% ambiguous or low-evidence cases (900
+  cases total). The split is <em>family-partitioned</em>: all variants of a family land on the
+  same side, so a held-out family's siblings never appear in training (720 train / 180 test).</p>
+
+  <h3 class="sub">5.2&emsp;Training method</h3>
+  <figure>
+    <div class="tabwrap">
+    <table class="booktab">
+      <thead><tr><th>Component</th><th>Setting</th></tr></thead>
+      <tbody>
+        <tr><td>Base model</td><td>Qwen2.5-0.5B-Instruct [2]</td></tr>
+        <tr><td>Adapter</td><td>LoRA [1], r = 16, α = 32, dropout 0.05</td></tr>
+        <tr><td>Objective</td><td>completion-only cross-entropy (prompt tokens masked)</td></tr>
+        <tr><td>Class balance</td><td>minority decisions oversampled to parity (cap 4×)</td></tr>
+        <tr><td>Optimiser</td><td>AdamW, lr 2·10<sup>−4</sup>, batch 1, 3 epochs, bf16</td></tr>
+        <tr><td>Sequence budget</td><td>640 tokens; 421 of 1,296 balanced examples fit fully</td></tr>
+        <tr><td>Hardware / cost</td><td>1× NVIDIA T4 (16 GB), ≈ 12 min, &lt; $0.10 per round</td></tr>
+        <tr><td>Final training loss</td><td>0.026</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <figcaption><b>Table 2:</b> Training configuration of the production round, executed through
+    the deployed remote training hook (Modal, scale-to-zero).</figcaption>
+  </figure>
+  <p>Two training choices carry most of the improvement. First, <b>completion-only loss</b>: the
+  decision prompt is hundreds of tokens and the answer roughly thirty; with a naive full-sequence
+  objective over 90% of the gradient teaches the model to reproduce the prompt, and the first
+  attempt duly collapsed to always answering <code>match_schema</code> (0/16 new families
+  detected). Masking the prompt concentrates all learning on the decision. Second, <b>balanced
+  sampling</b>: matches dominate the natural distribution (60/20/20), so minority decisions are
+  oversampled to parity before training.</p>
+
+  <h3 class="sub">5.3&emsp;Finite-hypothesis scoring</h3>
+  <p>At inference the model does not generate freely. The legal decision space is finite — each
+  allowed schema identifier crossed with three relations, two novelty labels, three abstain causes
+  — so Deblob enumerates every legal completion, scores each by length-normalised conditional
+  log-likelihood under the model, and selects the argmax. On identical weights this nearly doubled
+  decision accuracy versus free generation (30% → 55%) and makes identifier hallucination
+  <em>structurally impossible</em>: an identifier outside the retrieved catalogue can never be
+  selected, only scored against. A deterministic veto completes the policy: if the nearest known
+  family is beyond the gate distance, the decision is forced to <code>new_candidate</code>
+  regardless of the model's preference.</p>
+
+  <h2 class="sec">6&emsp;Results</h2>
+  <h3 class="sub">6.1&emsp;Overall</h3>
+  <p>All numbers below are the <em>production-trained</em> adapter — trained through the real
+  remote hook, reloaded from its published artifact — evaluated on the 180 held-out cases from
+  families it never saw, under finite scoring with the veto policy.</p>
+  <figure>
+    <div class="tabwrap">
+    <table class="booktab">
+      <thead><tr><th>True decision (n)</th><th class="n">→ match</th><th class="n">→ new</th><th class="n">→ abstain</th><th class="n">recall</th></tr></thead>
+      <tbody>
+        <tr><td>match_schema (108)</td><td class="n"><b>65</b></td><td class="n">9</td><td class="n">34</td><td class="n">60%</td></tr>
+        <tr><td>new_candidate (36)</td><td class="n">0</td><td class="n"><b>32</b></td><td class="n">4</td><td class="n">89%</td></tr>
+        <tr><td>abstain (36)</td><td class="n">3</td><td class="n">20</td><td class="n"><b>13</b></td><td class="n">36%</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <figcaption><b>Table 3:</b> Confusion matrix, 180 family-held-out cases (decision accuracy
+    60.8%). The error structure is deliberately asymmetric: a genuinely new schema is <em>never</em>
+    mistaken for an existing one (row 2, column 1 = 0), and the dominant errors push true matches
+    toward abstention — safe deferrals, not merges.</figcaption>
+  </figure>
+
+  <h3 class="sub">6.2&emsp;What the system actually identified</h3>
+  <figure>
+    <div class="tabwrap">
+    <table class="booktab">
+      <thead><tr><th>Held-out event (field shape)</th><th class="n">dist</th><th>Ground truth</th><th>Identified</th></tr></thead>
+      <tbody>
+        <tr><td class="mono">amount, description, kind, metadata{revision}</td><td class="n">0.00</td><td>match · exact</td><td>match ✓</td></tr>
+        <tr><td class="mono">amount, description, region <em>(units swapped)</em></td><td class="n">0.01</td><td>match · incompatible</td><td>match · incompatible ✓</td></tr>
+        <tr><td class="mono">vnd_amount, vnd_description, vnd_kind, …</td><td class="n">0.00</td><td>match · drift (renamed)</td><td>match ✓ (not split)</td></tr>
+        <tr><td class="mono">carrier_code, eta_bucket, shipment_tracking_code</td><td class="n">0.50</td><td>new family</td><td>new_candidate ✓</td></tr>
+        <tr><td class="mono">amount, description, … <em>(1 observation)</em></td><td class="n">0.00</td><td>abstain</td><td>abstain ✓</td></tr>
+        <tr><td class="mono">amount, description, kind <em>(field added)</em></td><td class="n">0.00</td><td>match · drift</td><td>match ✓</td></tr>
+      </tbody>
+    </table>
+    </div>
+    <figcaption><b>Table 4:</b> Six real held-out decisions. The second row is the safety-critical
+    case — structurally near-identical events whose <em>meaning</em> differs (a unit swap):
+    identified as an incompatible match, which the gate refuses to merge (7/7 such traps caught).
+    The fourth row is a shipping-domain family the system had never seen, correctly flagged as new.</figcaption>
+  </figure>
+
+  <h3 class="sub">6.3&emsp;Progression</h3>
+  <figure>
+    <div class="figbox">
+    <svg viewBox="0 0 620 240" role="img" aria-label="New-schema recall and decision accuracy across five training iterations">
+      <g font-size="10" fill="#555">
+        <line x1="56" y1="16" x2="56" y2="196" stroke="#111" stroke-width="1"/>
+        <line x1="56" y1="196" x2="590" y2="196" stroke="#111" stroke-width="1"/>
+        <line x1="56" y1="16" x2="590" y2="16" stroke="#ccc" stroke-width=".6"/>
+        <line x1="56" y1="106" x2="590" y2="106" stroke="#ccc" stroke-width=".6"/>
+        <text x="50" y="20" text-anchor="end">100</text>
+        <text x="50" y="110" text-anchor="end">50</text>
+        <text x="50" y="200" text-anchor="end">0</text>
+        <text x="30" y="110" text-anchor="middle" transform="rotate(-90 30 110)">% on held-out</text>
+      </g>
+      <!-- x: 100,200,300,400,500,580 ; y = 196 - v*1.8 -->
+      <!-- new-schema: 0,50,37,33,100,33 -->
+      <polyline fill="none" stroke="#111" stroke-width="2"
+        points="100,196 200,106 300,129.4 400,136.6 500,16 580,136.6"/>
+      <!-- decision: 46,46,55,78,61,56 dashed -->
+      <polyline fill="none" stroke="#111" stroke-width="1.6" stroke-dasharray="6 4"
+        points="100,113.2 200,113.2 300,97 400,55.6 500,86.2 580,95.2"/>
+      <g font-size="10.5" fill="#111" text-anchor="middle">
+        <text x="100" y="214">v1</text><text x="200" y="214">v2</text><text x="300" y="214">v3</text>
+        <text x="400" y="214">v3b</text><text x="500" y="214">v4</text><text x="580" y="214">v5</text>
+      </g>
+      <g font-size="9.5" fill="#333">
+        <circle cx="500" cy="16" r="3.4" fill="#111"/>
+        <text x="500" y="10" text-anchor="middle">100%</text>
+        <circle cx="400" cy="55.6" r="3.4" fill="#fff" stroke="#111" stroke-width="1.4"/>
+        <text x="418" y="52">78%</text>
+        <circle cx="100" cy="196" r="3.4" fill="#111"/>
+      </g>
+      <g font-size="10" fill="#111">
+        <line x1="380" y1="232" x2="410" y2="232" stroke="#111" stroke-width="2"/>
+        <text x="416" y="236">new-schema recall</text>
+        <line x1="180" y1="232" x2="210" y2="232" stroke="#111" stroke-width="1.6" stroke-dasharray="6 4"/>
+        <text x="216" y="236">decision accuracy</text>
+      </g>
+      <g font-size="8.6" fill="#777" text-anchor="middle">
+        <text x="200" y="228">+mask,+balance</text>
+        <text x="300" y="228">+finite scoring</text>
+        <text x="400" y="228">+data</text>
+        <text x="500" y="228">+veto</text>
+      </g>
+    </svg>
+    </div>
+    <figcaption><b>Figure 2:</b> Five iterations on the smaller development corpus (80 held-out
+    cases). v1's full-sequence objective mode-collapsed (new-schema recall 0%). Completion-only
+    loss with balanced sampling (v2), finite-hypothesis scoring (v3), a larger corpus (v3b), and
+    the deterministic distance veto (v4) each contributed; v5 shows that widening the veto
+    threshold trades new-family recall back for match recall. v3b and v4 are the two retained
+    operating points.</figcaption>
+  </figure>
+
+  <h3 class="sub">6.4&emsp;Why structure alone cannot finish the job</h3>
+  <figure>
+    <div class="figbox">
+    <svg viewBox="0 0 620 206" role="img" aria-label="Structural distance ranges by case group">
+      <g font-size="10" fill="#555">
+        <line x1="120" y1="170" x2="590" y2="170" stroke="#111"/>
+        <text x="120" y="186" text-anchor="middle">0.0</text>
+        <text x="248" y="186" text-anchor="middle">0.15</text>
+        <text x="462" y="186" text-anchor="middle">0.40</text>
+        <text x="590" y="186" text-anchor="middle">0.55</text>
+        <text x="355" y="202" text-anchor="middle">structural distance to nearest known family</text>
+      </g>
+      <line x1="248" y1="14" x2="248" y2="170" stroke="#111" stroke-width="1" stroke-dasharray="3 3"/>
+      <text x="252" y="12" font-size="9" fill="#333">gate threshold 0.15</text>
+      <!-- x = 120 + d/0.55*470 -->
+      <g font-size="10" fill="#111">
+        <text x="112" y="42" text-anchor="end">exact (54)</text>
+        <circle cx="120" cy="38" r="4" fill="#111"/>
+        <text x="112" y="74" text-anchor="end">drift / renamed (36)</text>
+        <rect x="120" y="68" width="248" height="9" fill="#aaa"/>
+        <circle cx="120" cy="72.5" r="4" fill="#111"/>
+        <text x="374" y="76" font-size="8.8" fill="#777">max 0.29</text>
+        <text x="112" y="106" text-anchor="end">incompatible (18)</text>
+        <rect x="129" y="100" width="368" height="9" fill="#d5d5d5"/>
+        <circle cx="137" cy="104.5" r="4" fill="#111"/>
+        <text x="112" y="138" text-anchor="end">new family (36)</text>
+        <rect x="120" y="132" width="427" height="9" fill="#777"/>
+        <circle cx="445" cy="136.5" r="4" fill="#111"/>
+        <text x="553" y="140" font-size="8.8" fill="#777">med 0.38</text>
+        <text x="112" y="164" text-anchor="end">abstain (36)</text>
+        <rect x="120" y="158" width="470" height="7" fill="#e0e0e0"/>
+        <circle cx="325" cy="161.5" r="4" fill="#111"/>
+      </g>
+      <text x="355" y="26" font-size="9.5" fill="#333">● median&emsp;▬ min–max range</text>
+    </svg>
+    </div>
+    <figcaption><b>Figure 3:</b> Distance to the nearest known family, per case group (180
+    held-out cases). Renamed and drifted variants of <em>known</em> families reach distance 0.29
+    while some genuinely <em>new</em> families sit at 0.0 — the populations overlap across any
+    threshold. Distance settles the far-and-obvious cases deterministically; the overlap region is
+    a semantic judgement, which is precisely the model's non-redundant role.</figcaption>
+  </figure>
+  <p>This is the paper's central negative result, and it justifies the architecture. A pure
+  distance rule at 0.15 catches every new family but wrongly splits drifted ones; widening it to
+  0.40 (§6.3, v5) reverses the trade. No threshold wins both. The production policy therefore
+  layers them: the veto handles distances beyond any plausible drift, the fine-tuned model judges
+  the middle, and the trust gate guarantees that whatever either of them gets wrong becomes a
+  deferral rather than a merge.</p>
+
+  <h3 class="sub">6.5&emsp;End-to-end verification</h3>
+  <p>The complete production path was exercised on real infrastructure: a feedback snapshot was
+  exported with a content-addressed manifest; the deployed remote trainer resolved it, trained the
+  adapter described in Table 2, and returned artifact digests only; the adapter was reloaded from
+  its published artifact and re-evaluated, reproducing the validation numbers exactly (new-schema
+  recall 100% under the veto policy, decision accuracy 60.8%). The training hook demonstrated in
+  the same run that it cannot promote: activation requires the separate, gated controller.</p>
+
+  <h2 class="sec">7&emsp;Limitations</h2>
+  <ol class="compact">
+    <li><b>Synthetic ground truth.</b> Evaluation gold is independent of the gate and hidden from
+    the model, but it is generated by construction, not collected from production traffic. Ingestion
+    for real corpora (GitHub Archive, Wikimedia event streams) exists; sealed evaluation on them has
+    not yet run.</li>
+    <li><b>The held-out set became a development set.</b> Five iterations consulted the same
+    held-out families, so the final point estimates are optimistically selected. A sealed audit
+    corpus with frozen thresholds, and multi-seed runs with confidence intervals, are the required
+    next step.</li>
+    <li><b>Single seed, point estimates.</b> All accuracy figures are one training trajectory.</li>
+    <li><b>A veto's gain is not a model's gain.</b> The 100% new-family recall of the conservative
+    operating point belongs to the combined policy; the model alone achieves 89%. Both are
+    reported deliberately.</li>
+    <li><b>Zero observed false merges is not a production guarantee.</b> It is a structural
+    property of the gate plus an empirical observation on a bounded sample (upper 95% bound 10.1%
+    on the accepted subset); production-scale labelled traffic is needed for a production-grade
+    bound.</li>
+    <li><b>Pre-alpha software.</b> Single maintainer, no release history; some documentation still
+    describes earlier states of the system.</li>
+  </ol>
+
+  <h2 class="sec">8&emsp;Conclusion</h2>
+  <p>Deblob demonstrates that schema identification for event streams can be split into a fast,
+  provably safe deterministic core and a small, cheaply trained language model whose authority is
+  bounded by construction. The deterministic lane tags events in 0.43 ms and moves them
+  exactly-once at 598 records/s; the learned lane, trained for under $0.10, identifies unseen
+  schema families at 89–100% recall while structurally unable to hallucinate identifiers or force
+  a merge. The architectural contribution is the division of authority: <em>the model can only
+  ever widen what the system understands, never corrupt what it knows.</em> Continual learning
+  then makes coverage a function of accumulated human feedback rather than model scale — the loop,
+  from feedback capture to governed promotion, is implemented, tested against real
+  infrastructure, and awaits production traffic.</p>
+
+  <div class="fnote">
+    <p class="noindent" style="text-indent:0"><b>References</b></p>
+    <div class="refs">
+      <p>[1] Hu, E. J., Shen, Y., Wallis, P., Allen-Zhu, Z., Li, Y., Wang, S., Wang, L., &amp;
+        Chen, W. (2021). LoRA: Low-rank adaptation of large language models.
+        <em>arXiv:2106.09685</em>.</p>
+      <p>[2] Qwen Team (2024). Qwen2.5 technical report. <em>arXiv:2412.15115</em>.</p>
+      <p>[3] Deblob source, experiment harness, benchmarks, and training scripts:
+        <span class="mono">github.com/kamilrybacki/deblob</span> — see
+        <span class="mono">docs/</span> for the benchmark report, experiment specification, and
+        the joint technical report this paper condenses.</p>
+    </div>
+    <p style="margin-top:10px"><b>Reproducibility.</b> The corpus is deterministic by seed
+    (<span class="mono">deblob-eval generate --seed 11</span>); training and evaluation scripts
+    are under <span class="mono">deploy/experiment/modal/</span>. All measurements in §4 are from
+    the k3s benchmark deployment described in the repository; all learning results are from the
+    production Modal round of 2026-07-17.</p>
+    <p style="margin-top:10px"><b>AI-usage disclosure.</b> This system and paper were produced in
+    a human-directed collaboration with two AI agents (Claude, Anthropic; and a self-hosted agent,
+    Hermes), which performed implementation, experimentation, and drafting under human review. All
+    reported measurements were produced by executed code, not estimated by a model.</p>
+  </div>
+
+</div>
