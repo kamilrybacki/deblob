@@ -9,7 +9,7 @@ data:
   collect.sh: |
     #!/bin/sh
     set -u
-    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.raw"
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.grid.carbonintensity"
     UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
     CT="Content-Type: application/vnd.kafka.json.v2+json"
     # Unwrap records from the API envelope so Deblob discovers the real record

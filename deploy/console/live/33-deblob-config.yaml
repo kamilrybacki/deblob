@@ -5,6 +5,9 @@ data:
   deblob.toml: |
     [kafka]
     raw_topic = "events.raw"
+    # Per-source topics — the relay multi-subscribes; Envelope.source = the actual
+    # consumed topic, giving per-collector lineage. events.raw kept for back-compat.
+    raw_topics = ["events.raw", "events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure"]
     tagged_topic = "events.tagged"
     discovery_topic = "deblob.discovery"
     quarantine_topic = "deblob.quarantine"

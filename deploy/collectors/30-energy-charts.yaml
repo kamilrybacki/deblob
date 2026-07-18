@@ -9,7 +9,7 @@ data:
   collect.sh: |
     #!/bin/sh
     set -u
-    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.raw"
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.grid.energy-charts"
     UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
     CT="Content-Type: application/vnd.kafka.json.v2+json"
     BASE="https://api.energy-charts.info"
