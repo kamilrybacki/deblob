@@ -2,10 +2,17 @@ apiVersion: v1
 kind: ConfigMap
 metadata: {name: deblob-console-nginx, namespace: deblob}
 data:
-  default.conf: |
+  # Rendered by the nginx image entrypoint (envsubst) at boot: ${DEBLOB_API_TOKEN}
+  # is substituted from the container env (sourced from Secret deblob-secrets).
+  # NGINX_ENVSUBST_FILTER=DEBLOB_API_TOKEN (set on the Deployment) restricts
+  # substitution to that one var, so nginx's own $host/$uri/$up survive intact.
+  default.conf.template: |
     server {
       listen 8080;
       server_name _;
+      # Declare UTF-8 so the console's glyphs (◐ ⚙ ◈ ≡ …) render correctly;
+      # without it the browser guesses the encoding and mangles them.
+      charset utf-8;
       root /usr/share/nginx/html;
       index console.html;
       # Never emit absolute redirects — behind Caddy/Cloudflare the pod's own
@@ -16,13 +23,15 @@ data:
       location / { try_files $uri /console.html; add_header Cache-Control "no-store"; }
       # Same-origin proxy to the live Deblob management API. Resolver + variable
       # keep DNS at request time; no URI on proxy_pass so the full /api/v1/...
-      # path is forwarded unchanged. Bearer token comes from the browser.
+      # path is forwarded unchanged. The bearer token is injected HERE, server
+      # side, so the browser never holds it — access is gated by Authelia at the
+      # edge, and the console auto-connects to the real instance with no token.
       location /api/v1/ {
         resolver 10.43.0.10 valid=30s;
         set $up deblob-mgmt.deblob.svc.cluster.local;
         proxy_pass http://$up:9615;
         proxy_set_header Host $host;
-        proxy_set_header Authorization $http_authorization;
+        proxy_set_header Authorization "Bearer ${DEBLOB_API_TOKEN}";
       }
       location = /healthz { return 200 "ok\n"; }
     }

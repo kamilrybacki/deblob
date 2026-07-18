@@ -20,15 +20,26 @@ spec:
         ports: [{containerPort: 8080}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         resources: {requests: {cpu: 10m, memory: 24Mi}, limits: {cpu: 200m, memory: 96Mi}}
+        env:
+        # Bearer token injected into the /api/v1 proxy server-side (see the nginx
+        # template). The browser never holds it; Authelia gates access at the edge.
+        - name: DEBLOB_API_TOKEN
+          valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}
+        # Restrict envsubst to just this var so nginx's own $host/$uri/$up survive.
+        - {name: NGINX_ENVSUBST_FILTER, value: DEBLOB_API_TOKEN}
         volumeMounts:
         - {name: html, mountPath: /usr/share/nginx/html, readOnly: true}
+        # ConfigMap holds default.conf.template; the image entrypoint runs envsubst
+        # and writes the rendered default.conf into /etc/nginx/conf.d (emptyDir).
+        - {name: tmpl, mountPath: /etc/nginx/templates, readOnly: true}
         - {name: conf, mountPath: /etc/nginx/conf.d}
         - {name: cache, mountPath: /var/cache/nginx}
         - {name: run, mountPath: /tmp}
         readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 10}
       volumes:
       - {name: html, configMap: {name: deblob-console-html}}
-      - {name: conf, configMap: {name: deblob-console-nginx}}
+      - {name: tmpl, configMap: {name: deblob-console-nginx}}
+      - {name: conf, emptyDir: {}}
       - {name: cache, emptyDir: {}}
       - {name: run, emptyDir: {}}
 ---
