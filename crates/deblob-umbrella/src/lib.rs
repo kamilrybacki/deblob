@@ -15,10 +15,12 @@
 
 pub mod executor;
 pub mod path;
+pub mod store;
 pub mod types;
 pub mod units;
 pub mod verify;
 
+pub use store::{InMemoryUmbrellaStore, StoreError, StoredUmbrella, UmbrellaBundle, UmbrellaState, UmbrellaStore};
 pub use types::{
     Binding, Cardinality, CastMode, ChildTransform, FieldType, JsonPath, Op, OnError, OnMissing,
     Relation, ScalarType, UmbrellaField, UmbrellaSchema,

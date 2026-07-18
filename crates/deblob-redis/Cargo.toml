@@ -7,6 +7,7 @@ rust-version.workspace = true
 
 [dependencies]
 deblob-core = { path = "../deblob-core" }
+deblob-umbrella = { path = "../deblob-umbrella" }
 deblob-fingerprint = { path = "../deblob-fingerprint" }
 # P2-D Task 10: `crate::semantic::append_revision`/`rebuild_semantic_index`
 # compute a schema's signature (`deblob_semantic::signature::
