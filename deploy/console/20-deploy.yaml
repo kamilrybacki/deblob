@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: deblob-console, namespace: deblob, labels: {app: deblob-console}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: deblob-console}}
+  template:
+    metadata: {labels: {app: deblob-console}}
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+      securityContext: {runAsNonRoot: true, runAsUser: 101, fsGroup: 101, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: nginx
+        image: nginxinc/nginx-unprivileged:1.27-alpine
+        ports: [{containerPort: 8080}]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 10m, memory: 24Mi}, limits: {cpu: 200m, memory: 96Mi}}
+        volumeMounts:
+        - {name: html, mountPath: /usr/share/nginx/html, readOnly: true}
+        - {name: conf, mountPath: /etc/nginx/conf.d}
+        - {name: cache, mountPath: /var/cache/nginx}
+        - {name: run, mountPath: /tmp}
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 10}
+      volumes:
+      - {name: html, configMap: {name: deblob-console-html}}
+      - {name: conf, configMap: {name: deblob-console-nginx}}
+      - {name: cache, emptyDir: {}}
+      - {name: run, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: deblob-console, namespace: deblob, labels: {app: deblob-console}}
+spec:
+  type: NodePort
+  selector: {app: deblob-console}
+  ports: [{port: 80, targetPort: 8080, nodePort: 30890}]
