@@ -35,7 +35,7 @@ spec:
         - {name: conf, mountPath: /etc/nginx/conf.d}
         - {name: cache, mountPath: /var/cache/nginx}
         - {name: run, mountPath: /tmp}
-        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 10}
+        readinessProbe: {httpGet: {path: /_up, port: 8080}, initialDelaySeconds: 3, periodSeconds: 10}
       volumes:
       - {name: html, configMap: {name: deblob-console-html}}
       - {name: tmpl, configMap: {name: deblob-console-nginx}}

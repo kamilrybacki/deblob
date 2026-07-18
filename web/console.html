@@ -147,6 +147,17 @@
   .banner{border-radius:10px;padding:9px 14px;font-size:12.5px;margin:0 0 16px;display:flex;gap:9px;align-items:center}
   .banner.demo{background:var(--warn-soft);color:var(--warn)} .banner.ro{background:var(--accent-soft);color:var(--accent-ink)} .banner.mut{background:var(--risk-soft);color:var(--risk)}
   .empty{text-align:center;color:var(--faint);padding:40px;font-size:13px}
+  /* Similarity distance matrix — compact heatmap; scrolls if wide */
+  .mxwrap{overflow-x:auto}
+  .mx-t{border-collapse:separate;border-spacing:3px;font-size:11.5px}
+  .mx-t th{font-weight:600;color:var(--ink2);font-size:11px;padding:2px 6px;white-space:nowrap}
+  .mx-t th.l{text-align:right} .mx-t th.d{transform:rotate(-35deg);transform-origin:left bottom;height:52px;vertical-align:bottom;text-align:left}
+  .mx{width:46px;height:30px;text-align:center;border-radius:6px;font-family:var(--mono);font-variant-numeric:tabular-nums;color:var(--ink)}
+  .mx.self{background:repeating-linear-gradient(45deg,var(--sunk),var(--sunk) 4px,var(--panel-2) 4px,var(--panel-2) 8px);color:var(--faint)}
+  .mx.none{background:var(--sunk);color:var(--faint)}
+  .mx.close{background:var(--good-soft);color:var(--good)} .mx.mid{background:var(--accent-soft);color:var(--accent-ink)} .mx.far{background:var(--track);color:var(--ink2)}
+  .mxleg{display:flex;gap:14px;margin-top:12px;font-size:11.5px;color:var(--ink2);flex-wrap:wrap}
+  .mxleg span{display:inline-flex;align-items:center;gap:6px} .mxleg i{width:14px;height:14px;border-radius:4px;display:inline-block}
 </style>
 
 <div class="app">
@@ -199,9 +210,12 @@ async function api(path,opts){
 async function loadData(){
   if(state.base){
     try{
-      const [sch,cand]=await Promise.all([api('/api/v1/schemas?limit=200'),api('/api/v1/candidates').catch(()=>({data:[]}))]);
+      const [sch,cand]=await Promise.all([api('/api/v1/schemas?limit=200'),api('/api/v1/candidates?state=provisional').catch(()=>({data:[]}))]);
       const fams=(sch.data||[]).map(r=>({family_id:r.family_id,schema_id:r.schema_id,version:r.version,
-        label:(r.provenance&&r.provenance.label)||r.family_id.slice(4,14),
+        // Fallback label: family_ids are UUIDv7 (timestamp-prefixed), so families
+        // created in the same window share their leading segment — slicing the
+        // PREFIX makes them collide. Use the distinctive random tail instead.
+        label:(r.provenance&&r.provenance.label)||('fam-'+r.family_id.slice(-6)),
         observation_count:(r.provenance&&r.provenance.observation_count)||0,
         fields:canonToFields(r.canonical),semantic_fingerprint:r.semantic_fingerprint||null,
         privacy_class:r.privacy_class||'internal',canonicalizer:r.canonicalizer}));
@@ -313,15 +327,19 @@ V.families=()=>{const fams=state.data.families;
   <div class="tw"><table><thead><tr><th>Family</th><th>version</th><th>observations</th><th>fields</th><th>privacy</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 };
 
-V.similarity=()=>`<div class="pagehead"><h1>Similarity</h1><p>Schemas related by structural distance (weighted-Jaccard; lower = more similar). This is what retrieval sees before any model runs. The ranked table is the source of truth; the graph is a visual aid.</p></div>
-  <h2 class="sec">Nearest neighbours</h2>${simList()}
-  <h2 class="sec">Graph</h2><div class="card">${simGraph()}<div class="glegend"><span><i class="ln" style="background:var(--good)"></i>close (&lt; 0.5)</span><span><i class="ln" style="background:var(--line2)"></i>distant</span><span>node size = observations</span></div></div>`;
-function simGraph(){const fams=state.data.families;const N=fams.length;const cx=300,cy=190,R=150;
-  const pos={};fams.forEach((f,i)=>{const a=-Math.PI/2+i*2*Math.PI/N;pos[f.schema_id]={x:cx+R*Math.cos(a),y:cy+R*Math.sin(a),f};});
-  let edges='';const seen=new Set();
-  fams.forEach(f=>{(state.data.neighbors[f.schema_id]||[]).forEach(n=>{if(n.distance>=0.99)return;const key=[f.schema_id,n.schema_id].sort().join();if(seen.has(key))return;seen.add(key);const a=pos[f.schema_id],b=pos[n.schema_id];if(!a||!b)return;const close=n.distance<0.5;edges+=`<line x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="var(--${close?'good':'line2'})" stroke-width="${close?2.2:1}" opacity="${close?.9:.5}"/><text x="${(a.x+b.x)/2}" y="${(a.y+b.y)/2}" font-size="8.5" fill="var(--faint)" text-anchor="middle">${n.distance.toFixed(2)}</text>`;});});
-  let nodes='';fams.forEach(f=>{const p=pos[f.schema_id];const r=9+Math.min(14,f.observation_count/12);nodes+=`<g><circle cx="${p.x}" cy="${p.y}" r="${r}" fill="var(--accent-soft)" stroke="var(--accent)" stroke-width="1.6"/><text x="${p.x}" y="${p.y+r+13}" font-size="10.5" fill="var(--ink)" text-anchor="middle" font-family="var(--sans)">${esc(f.label)}</text></g>`;});
-  return `<svg viewBox="0 0 600 400" role="img" aria-label="schema similarity graph">${edges}${nodes}</svg>`;}
+V.similarity=()=>`<div class="pagehead"><h1>Similarity</h1><p>Schemas related by structural distance (weighted-Jaccard; lower = more similar). This is what retrieval sees before any model runs — the matrix is the pairwise overview, the list drills into each schema's nearest neighbours.</p></div>
+  <h2 class="sec">Distance matrix</h2><div class="card">${simMatrix()}</div>
+  <h2 class="sec">Nearest neighbours</h2>${simList()}`;
+function simMatrix(){
+  const fams=state.data.families; if(!fams.length) return '<div class="empty">No schemas yet.</div>';
+  const nb=state.data.neighbors||{};
+  const dist=(a,b)=>{if(a===b)return 0;const x=(nb[a]||[]).find(n=>n.schema_id===b);if(x)return x.distance;const y=(nb[b]||[]).find(n=>n.schema_id===a);return y?y.distance:null;};
+  if(!fams.some(f=>(nb[f.schema_id]||[]).length))
+    return '<div class="empty" style="padding:24px">No neighbour distances to plot — these schemas carry no semantic annotation yet. Structural retrieval still tags events; the SLM similarity lane is disabled in this deployment.</div>';
+  const cell=d=>{if(d===null)return '<td class="mx none" title="no computed relation">·</td>';if(d===0)return '<td class="mx self">—</td>';const c=d<0.5?'close':(d<0.85?'mid':'far');return `<td class="mx ${c}">${d.toFixed(2)}</td>`;};
+  const head=`<tr><th></th>${fams.map(f=>`<th>${esc(f.label)}</th>`).join('')}</tr>`;
+  const rows=fams.map(a=>`<tr><th class="l">${esc(a.label)}</th>${fams.map(b=>cell(dist(a.schema_id,b.schema_id))).join('')}</tr>`).join('');
+  return `<div class="mxwrap"><table class="mx-t">${head}${rows}</table></div><div class="mxleg"><span><i style="background:var(--good-soft)"></i>close &lt;0.5</span><span><i style="background:var(--accent-soft)"></i>related 0.5–0.85</span><span><i style="background:var(--track)"></i>distant</span><span><i style="background:var(--sunk)"></i>no relation</span></div>`;}
 function simList(){return state.data.families.map(f=>{const ns=(state.data.neighbors[f.schema_id]||[]).slice(0,3);
   return `<div class="card" style="margin-bottom:12px"><div style="font-weight:600;margin-bottom:10px">${esc(f.label)} <span class="muted num" style="font-weight:400;font-size:11px">${shortId(f.schema_id)}</span></div>${ns.map(n=>`<div class="nb"><div class="lab">${esc(n.label)}</div><div class="tk"><div class="fl ${n.distance<0.5?'close':''}" style="width:${(1-n.distance)*100}%"></div></div><div class="v">${n.distance.toFixed(2)}</div></div>`).join('')||'<div class="muted" style="font-size:12px">no close neighbours</div>'}</div>`;}).join('');}
 
@@ -381,7 +399,14 @@ function connectModal(){
 function render(){const v=location.hash.replace('#','')||'explorer';$$('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));$('#main').innerHTML=(V[v]||V.explorer)();afterRender(v);}
 function afterRender(v){
   if(v==='schemas'){const s=$('#schsearch');if(s)s.oninput=()=>{const q=s.value.toLowerCase();$('#schrows').innerHTML=schemaRows(state.data.families.filter(f=>f.label.toLowerCase().includes(q)||f.schema_id.includes(q)));};}
-  if(v==='operations'&&state.live){api('/healthz').then(()=>{$('#hz').innerHTML='<span class="v good" style="font-size:18px">200</span>';}).catch(()=>{$('#hz').innerHTML='<span class="v risk" style="font-size:18px">down</span>';});api('/readyz').then(()=>{$('#rz').innerHTML='<span class="v good" style="font-size:18px">200</span>';}).catch(()=>{$('#rz').innerHTML='<span class="v risk" style="font-size:18px">not ready</span>';});}
+  if(v==='operations'&&state.live){
+    // Status-based probe (health endpoints return plain text/empty, not JSON, so
+    // never call .json() here). /healthz and /readyz are proxied to the mgmt API.
+    const probe=(p,el,downTxt)=>fetch(state.base.replace(/\/$/,'')+p,{headers:{'Accept':'*/*'}})
+      .then(r=>{$(el).innerHTML=`<span class="v ${r.ok?'good':'risk'}" style="font-size:18px">${r.ok?'200':(r.status||downTxt)}</span>`;})
+      .catch(()=>{$(el).innerHTML=`<span class="v risk" style="font-size:18px">${downTxt}</span>`;});
+    probe('/healthz','#hz','down'); probe('/readyz','#rz','not ready');
+  }
 }
 // event delegation (no inline handlers -> CSP-safe)
 $('#main').addEventListener('click',e=>{

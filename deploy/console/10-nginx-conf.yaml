@@ -19,19 +19,38 @@ data:
       # :8080 listen port would leak into the Location header and break the
       # external https://deblob.<domain>/ flow. Serve console.html at / directly.
       absolute_redirect off;
+      # Request-time DNS for the in-cluster mgmt Service (name may not resolve at
+      # boot / IP may change). $up is reused by every proxied location below.
+      resolver 10.43.0.10 valid=30s;
+      set $up deblob-mgmt.deblob.svc.cluster.local;
+
+      # Pod readiness — nginx-only, independent of the mgmt API. The console must
+      # stay Ready (and reachable) even when Deblob is down, so it can SHOW that.
+      location = /_up { return 200 "ok\n"; }
+
       location = / { try_files /console.html =404; add_header Cache-Control "no-store"; }
       location / { try_files $uri /console.html; add_header Cache-Control "no-store"; }
-      # Same-origin proxy to the live Deblob management API. Resolver + variable
-      # keep DNS at request time; no URI on proxy_pass so the full /api/v1/...
-      # path is forwarded unchanged. The bearer token is injected HERE, server
-      # side, so the browser never holds it — access is gated by Authelia at the
-      # edge, and the console auto-connects to the real instance with no token.
+
+      # Same-origin proxy to the live Deblob management API. No URI on proxy_pass
+      # so the full /api/v1/... path is forwarded unchanged. The bearer token is
+      # injected HERE, server side, so the browser never holds it — access is
+      # gated by Authelia at the edge and the console auto-connects with no token.
       location /api/v1/ {
-        resolver 10.43.0.10 valid=30s;
-        set $up deblob-mgmt.deblob.svc.cluster.local;
         proxy_pass http://$up:9615;
         proxy_set_header Host $host;
         proxy_set_header Authorization "Bearer ${DEBLOB_API_TOKEN}";
       }
-      location = /healthz { return 200 "ok\n"; }
+      # Mgmt liveness/readiness proxied through so the console's Operations tiles
+      # reflect the REAL Deblob process, not nginx. These return plain text/empty,
+      # so the console probes them by HTTP status, never by parsing JSON.
+      location = /healthz {
+        proxy_pass http://$up:9615/healthz;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${DEBLOB_API_TOKEN}";
+      }
+      location = /readyz {
+        proxy_pass http://$up:9615/readyz;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "Bearer ${DEBLOB_API_TOKEN}";
+      }
     }
