@@ -54,8 +54,28 @@
   .pagehead p{margin:0;color:var(--ink2);font-size:13px;max-width:70ch}
   .grid{display:grid;gap:14px}
   .cols4{grid-template-columns:repeat(4,1fr)} .cols3{grid-template-columns:repeat(3,1fr)} .cols2{grid-template-columns:1fr 1fr}
+  .navtoggle{display:none;font-size:16px;padding:5px 11px}
+  #navbackdrop{display:none}
   @media(max-width:900px){.cols4{grid-template-columns:1fr 1fr}.cols3,.cols2{grid-template-columns:1fr}}
-  @media(max-width:640px){.app{grid-template-columns:1fr}nav{display:none}.cols4{grid-template-columns:1fr 1fr}}
+  @media(max-width:640px){
+    .app{grid-template-columns:1fr}
+    .navtoggle{display:inline-block}
+    .top{padding:10px 13px;gap:10px}
+    #mode{display:none}
+    nav{position:fixed;top:51px;left:0;bottom:0;width:246px;z-index:40;transform:translateX(-100%);transition:transform .22s ease;overflow-y:auto;box-shadow:var(--sh2)}
+    .app.navopen nav{transform:translateX(0)}
+    #navbackdrop{display:block;position:fixed;inset:51px 0 0 0;background:rgba(10,12,18,.42);opacity:0;pointer-events:none;transition:opacity .22s;z-index:35}
+    .app.navopen #navbackdrop{opacity:1;pointer-events:auto}
+    .cols4{grid-template-columns:1fr 1fr}
+    main{padding:16px 14px}
+    .pagehead h1{font-size:19px}
+    .streamrow{display:flex;flex-wrap:wrap;gap:5px 10px;font-size:11px}
+    .streamrow>span{overflow-wrap:anywhere}
+    .nb,.retr{grid-template-columns:1fr 1fr 44px}
+    .kv{grid-template-columns:1fr}
+    .modal{padding:18px}
+  }
+  @media(max-width:400px){.brandsub{display:none}.cols4{grid-template-columns:1fr}}
   .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px;box-shadow:var(--sh)}
   .stat .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin:0 0 9px}
   .stat .v{font-family:var(--mono);font-size:26px;font-weight:640;letter-spacing:-.02em;line-height:1}
@@ -170,7 +190,8 @@
 
 <div class="app">
   <div class="top">
-    <div class="brand"><span class="mk">D</span>Deblob <span style="color:var(--faint);font-weight:400;font-size:13px">Console</span></div>
+    <button class="iconbtn navtoggle" id="navtoggle" aria-label="Toggle navigation">☰</button>
+    <div class="brand"><span class="mk">D</span>Deblob <span class="brandsub" style="color:var(--faint);font-weight:400;font-size:13px">Console</span></div>
     <span id="mode" class="pill demo"><span class="led"></span>DEMO DATA</span>
     <div class="sp"></div>
     <button class="iconbtn" id="theme">◐ Theme</button>
@@ -193,6 +214,7 @@
     <div class="foot">Reads Deblob's <code>/api/v1</code>. Demo mode uses bundled data; mutations disabled.<br><a href="https://github.com/kamilrybacki/deblob" target="_blank" rel="noopener">source ↗</a></div>
   </nav>
   <main id="main"></main>
+  <div id="navbackdrop"></div>
 </div>
 <div id="overlay"></div>
 <div class="toast" id="toast"></div>
@@ -569,7 +591,10 @@ $('#main').addEventListener('click',e=>{
   else if(t.dataset.uact&&!t.disabled){umbMutate(t.dataset.uact,t.dataset.id);}
   else if(t.dataset.act&&!t.disabled){if(t.dataset.act==='export-oapi')exportOpenAPI(t.dataset.id);else mutate(t.dataset.act,t.dataset.id);}
 });
-$$('#nav a').forEach(a=>a.onclick=e=>{e.preventDefault();location.hash=a.dataset.v;});
+const _app=$('.app');
+$$('#nav a').forEach(a=>a.onclick=e=>{e.preventDefault();location.hash=a.dataset.v;_app.classList.remove('navopen');});
+$('#navtoggle').onclick=()=>_app.classList.toggle('navopen');
+$('#navbackdrop').onclick=()=>_app.classList.remove('navopen');
 window.addEventListener('hashchange',render);
 $('#connect').onclick=connectModal;
 $('#theme').onclick=()=>{const r=document.documentElement;const cur=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');const nx=cur==='dark'?'light':'dark';r.setAttribute('data-theme',nx);localStorage.setItem('deblob.theme',nx);};
