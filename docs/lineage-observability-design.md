@@ -79,6 +79,63 @@ share one `source` identity from Hermes' model and one redaction discipline. Wir
 order: (2) source propagation first (so there's a real `source` to show), then (1)
 the stream tap emitting it, then the console Live-Stream + Trace views.
 
+---
+
+# Merged with Hermes — the lineage MODEL (jr-lineage-181921)
+
+Full Hermes report: vault `research/Deblob-End-to-End-Lineage-Joint-Design-2026.md`.
+
+## Lineage model [H]
+- **Per-source Kafka topics are AUTHORITATIVE.** Producer-supplied source headers are
+  spoofable and must NOT determine identity.
+- Stable **`src_` ids** with reviewed `topic → source_id` bindings. `Envelope.source`
+  becomes the actual consumed topic; a separate logical `source_id` means topic
+  renames don't break lineage.
+- Relay subscribes to an explicit topic list; adds a canonical `deblob-source-id`
+  header ONLY after stripping all inbound reserved headers.
+- Every relay transaction emits a payload-free, deterministic **`LineageObservation`**
+  alongside tagged / discovery / quarantine output.
+- **Separate two kinds:** runtime source *observations* vs immutable, governed lineage
+  *assertions* created during promotion.
+- Source contribution = **many-to-many edges** with bounded counts, timestamps, and
+  first/last Kafka coordinates.
+- Full chain preserved: `source → candidate → schema revision → family/version →
+  silver contract revision → transform revision → umbrella revision`.
+- Gold distinguishes **`eligible_source_ids`** (covered by accepted transforms) vs
+  **`observed_source_ids`** (actually produced matching records).
+- Field lineage uses stable field ids + `canonical_field_id` + closed operator codes —
+  never raw paths or SLM prose.
+
+## Three concrete code gaps Hermes found [H]
+1. The relay sets `DiscoveryMsg.source = cfg.raw_topic` instead of the consumed
+   record's ACTUAL topic → `source = msg.topic()`.
+2. `ColdLane` receives `SampleMeta { source, cursor }` but DISCARDS the cursor and
+   persists neither source nor cursor → persist both on the candidate.
+3. Structural resolution + generalized candidate clustering are GLOBAL → a false-merge
+   risk once several collectors are live. **Source-scope retrieval + cluster aliases:**
+   `resolve_structural(source_scope_id, bucket_key, raw_fp)`,
+   `cluster_alias(source_scope_id, generalized_fp)`. Cross-source convergence is
+   deferred to the governed family/umbrella path — *source co-occurrence is provenance,
+   not semantic evidence.*
+
+## Prior art [H]
+OpenLineage (runtime vs design lineage), W3C PROV (entity/activity), OpenLineage +
+DataHub field-level lineage, Marquez bounded graph traversal — none bypasses Deblob's
+deterministic gates.
+
+## Implementation staging (Claude — risk-ordered)
+The full model touches Deblob's core (records, relay, coldlane, matcher keys). Staged
+so the exactly-once core stays stable:
+- **Stage L1 (safe, high value, do now):** per-source topics + relay multi-subscribe +
+  `Envelope.source = msg.topic()` (gap 1); persist `source` (+cursor) on
+  `CandidateRecord`/`SchemaRecord` (gap 2); the live-stream SSE tap; lineage on cards +
+  a read `/lineage` API. Delivers real per-source visibility.
+- **Stage L2 (deferred, core surgery):** source-scoped clustering keys (gap 3) — changes
+  `resolve_structural`/`cluster_alias` signatures + the matcher/registry; the
+  false-merge hardening. Governed lineage *assertions* on umbrella promotion. The `src_`
+  id registry + topic→source_id bindings + field-level lineage. Each is its own reviewed
+  change; none blocks L1's visibility.
+
 ## Open questions (for the merge)
 - Does the SSE tap live in the relay process or a separate consumer of a
   `deblob.stream` topic (decouples the hot path further, at the cost of a topic)?
