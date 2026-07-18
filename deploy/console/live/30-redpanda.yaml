@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: redpanda, namespace: deblob, labels: {app: redpanda}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: redpanda}}
+  template:
+    metadata: {labels: {app: redpanda}}
+    spec:
+      affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+      containers:
+      - name: redpanda
+        image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
+        ports: [{name: kafka, containerPort: 9092}, {name: admin, containerPort: 9644}]
+        resources: {requests: {cpu: 300m, memory: 1500Mi}, limits: {cpu: "2", memory: 2Gi}}
+        readinessProbe: {tcpSocket: {port: 9092}, initialDelaySeconds: 10, periodSeconds: 5}
+        volumeMounts: [{name: data, mountPath: /var/lib/redpanda/data}]
+      volumes: [{name: data, emptyDir: {sizeLimit: 4Gi}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: redpanda, namespace: deblob, labels: {app: redpanda}}
+spec: {clusterIP: None, selector: {app: redpanda}, ports: [{name: kafka, port: 9092}, {name: admin, port: 9644}]}

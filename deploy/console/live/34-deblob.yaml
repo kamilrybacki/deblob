@@ -1,0 +1,37 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: deblob, namespace: deblob, labels: {app: deblob}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: deblob}}
+  template:
+    metadata:
+      labels: {app: deblob}
+      annotations: {prometheus.io/scrape: "true", prometheus.io/port: "9615", prometheus.io/path: /metrics}
+    spec:
+      imagePullSecrets: [{name: ghcr-pull}]
+      affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: deblob
+        image: ghcr.io/kamilandrzejrybacki-inc/deblob:b5
+        imagePullPolicy: IfNotPresent
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        args: [--config, /app/deblob.toml]
+        ports: [{name: mgmt, containerPort: 9615}]
+        env:
+        - {name: DEBLOB_KAFKA_BROKERS, value: "redpanda.deblob.svc.cluster.local:9092"}
+        - {name: DEBLOB_REDIS_URL, value: "redis://redis-vault.deblob.svc.cluster.local:6379"}
+        - {name: DEBLOB_API_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}}
+        - {name: RUST_LOG, value: "info,deblob=info"}
+        volumeMounts: [{name: config, mountPath: /app/deblob.toml, subPath: deblob.toml}]
+        resources: {requests: {cpu: 300m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+        readinessProbe: {httpGet: {path: /readyz, port: 9615}, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 12}
+        livenessProbe: {httpGet: {path: /healthz, port: 9615}, initialDelaySeconds: 20, periodSeconds: 15}
+      volumes: [{name: config, configMap: {name: deblob-config}}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: deblob-mgmt, namespace: deblob, labels: {app: deblob}}
+spec: {selector: {app: deblob}, ports: [{name: mgmt, port: 9615, targetPort: 9615}]}
