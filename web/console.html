@@ -219,17 +219,82 @@ async function loadData(){
         observation_count:(r.provenance&&r.provenance.observation_count)||0,
         fields:canonToFields(r.canonical),semantic_fingerprint:r.semantic_fingerprint||null,
         privacy_class:r.privacy_class||'internal',canonicalizer:r.canonicalizer}));
-      state.data={...JSON.parse(JSON.stringify(window.DEMO)),families:fams,neighbors:{},candidates:cand.data||[],quarantine:[],
+      state.data={...JSON.parse(JSON.stringify(window.DEMO)),families:fams,neighbors:{},candidates:(cand.data||[]).map(normCand),quarantine:[],
         metrics:{...window.DEMO.metrics,schemas:fams.length,families:new Set(fams.map(f=>f.family_id)).size,candidates_pending:(cand.data||[]).length}};
       state.live=true; return;
     }catch(e){ /* fall through to demo */ }
   }
   state.data=JSON.parse(JSON.stringify(window.DEMO)); state.live=false;
 }
+// Deblob's canonical shape is a node tree: {optional, types:[...],
+// children:{<name>:node}, array_elem?:node}. Walk children into dotted-path
+// leaf fields — NOT a naive object walk (which would surface the node's own
+// metadata keys `optional`/`types`/`children` as if they were fields).
 function canonToFields(canon){
-  try{const o=typeof canon==='string'?JSON.parse(canon):canon;const out=[];
-    (function walk(v,p){if(v&&typeof v==='object'&&!Array.isArray(v)){for(const k in v){const np=p?p+'.'+k:k;const t=Array.isArray(v[k])?'array':typeof v[k]==='object'?'object':(v[k]==='number'||v[k]==='int'?'number':'string');out.push({path:np,type:t,nullable:false});if(t==='object')walk(v[k],np);}}})(o,'');
-    return out.slice(0,30);}catch(e){return[];}
+  try{const root=typeof canon==='string'?JSON.parse(canon):canon;const out=[];
+    const leafType=n=>{const ts=n.types||[];
+      if(n.array_elem||ts.includes('array'))return 'array';
+      return ts.find(t=>t!=='null')||ts[0]||'unknown';};
+    (function walk(node,pre){const ch=node&&node.children||{};
+      for(const k of Object.keys(ch)){const c=ch[k],path=pre?pre+'.'+k:k;
+        const ts=c.types||[];const nullable=!!c.optional||ts.includes('null');
+        if(c.children&&Object.keys(c.children).length&&ts.includes('object'))walk(c,path);
+        else out.push({path,type:leafType(c),nullable});}})(root,'');
+    return out.slice(0,60);}catch(e){return[];}
+}
+// Live candidates come back as a structural profile (profile.root.children),
+// not the demo's flat {fields, slm_decision, gate...}. Normalise so candCard —
+// and the rest of the UI — see a uniform shape. The SLM decision/gate fields
+// are absent when the discovery lane is disabled, so they get neutral defaults.
+function ndType(n){ if(!n) return 'unknown';
+  if(n.array_elem||n.array_empty_seen||n.array_partial_seen) return 'array';
+  if(n.children&&Object.keys(n.children).length) return 'object';
+  const t=n.types||{}; let best='',bc=-1; for(const k in t){ if(k==='null')continue; if(t[k]>bc){bc=t[k];best=k;} }
+  return best||'unknown'; }
+function profileToFields(profile){ const out=[]; const root=(profile&&profile.root)||{};
+  (function walk(node,pre){ const ch=node.children||{}; for(const k of Object.keys(ch)){ const c=ch[k],path=pre?pre+'.'+k:k;
+    if(c.children&&Object.keys(c.children).length) walk(c,path); else out.push({path,type:ndType(c)}); } })(root,'');
+  return out.slice(0,40); }
+function normCand(c){ if(!c||!c.profile) return c; // already demo-shaped
+  return {candidate_id:c.candidate_id,
+    observation_count:(c.sample_count!=null?c.sample_count:(c.profile.count||0)),
+    fields:profileToFields(c.profile),
+    slm_decision:c.slm_decision||'unclassified', slm_novelty:'', slm_relation:'', slm_cause:'structural cluster',
+    gate:c.gate||c.state||'provisional',
+    reason:c.reason||'Structural candidate awaiting review — the SLM decision lane is disabled in this deployment.',
+    top1_distance:(c.top1_distance!=null?c.top1_distance:'—'), margin:(c.margin!=null?c.margin:'—'),
+    match_label:c.match_label}; }
+// --- OpenAPI export -------------------------------------------------------
+// Turn a learned family's flat canonical field list ({path,type,nullable}) into
+// a nested JSON Schema, then wrap N families as OpenAPI 3.1 components.schemas.
+// Fully client-side (Blob download) — no network, CSP-safe.
+function oapiType(t){switch(t){case 'number':return {type:'number'};case 'array':return {type:'array',items:{}};case 'object':return {type:'object'};case 'bool':case 'boolean':return {type:'boolean'};case 'null':return {type:'null'};default:return {type:'string'};}}
+function fieldsToJsonSchema(fields){
+  const root={type:'object',properties:{}};
+  (fields||[]).forEach(fd=>{const parts=String(fd.path).split('.');let node=root;
+    parts.forEach((p,i)=>{node.properties=node.properties||{};
+      if(i===parts.length-1){node.properties[p]=oapiType(fd.type);
+        if(!fd.nullable){node.required=node.required||[];if(!node.required.includes(p))node.required.push(p);}}
+      else{if(!node.properties[p]||node.properties[p].type!=='object')node.properties[p]={type:'object',properties:{}};node=node.properties[p];}});});
+  return root;
+}
+function buildOpenAPI(families){
+  const schemas={},seen={};
+  families.forEach(f=>{let name=(f.label||f.schema_id).replace(/[^A-Za-z0-9_.-]/g,'_')||'schema';
+    if(seen[name])name+='_'+(++seen[name]);else seen[name]=1;
+    schemas[name]={title:f.label,description:`Deblob family ${f.family_id} · schema ${f.schema_id} · v${f.version} · ${f.observation_count} obs`,
+      'x-deblob-schema-id':f.schema_id,'x-deblob-family-id':f.family_id,'x-deblob-version':f.version,
+      ...fieldsToJsonSchema(f.fields)};});
+  return {openapi:'3.1.0',info:{title:'Deblob learned schemas',version:'1.0.0',
+    description:`Exported from the Deblob console — ${families.length} schema${families.length===1?'':'s'} discovered from event streams. Each component is a canonical shape; x-deblob-* keys carry the registry identity.`,
+    'x-generated-at':new Date().toISOString()},paths:{},components:{schemas}};
+}
+function downloadJSON(filename,obj){const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
+  const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;
+  document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);}
+function exportOpenAPI(id){const fams=state.data.families||[];
+  if(id==='all'){if(!fams.length){toast('No schemas to export');return;}downloadJSON('deblob-schemas.openapi.json',buildOpenAPI(fams));toast(`Exported ${fams.length} schema${fams.length===1?'':'s'} as OpenAPI`);}
+  else{const f=fams.find(x=>x.schema_id===id);if(f){downloadJSON(`deblob-${(f.label||'schema').replace(/[^A-Za-z0-9_.-]/g,'_')}.openapi.json`,buildOpenAPI([f]));toast('Exported schema as OpenAPI');}}
 }
 function setMode(){const el=$('#mode');
   if(!state.live){el.className='pill demo';el.innerHTML='<span class="led"></span>DEMO DATA';}
@@ -272,7 +337,7 @@ function traceView(t){
 
 V.schemas=()=>{const list=state.data.families;
   if(!state.sel.schema&&list[0])state.sel.schema=list[0].schema_id;
-  return `<div class="pagehead"><h1>Schema catalogue</h1><p>${list.length} learned schemas. Physical <code>sch_</code> identity and, where annotated, the semantic <code>sem_</code> fingerprint. Select one to inspect its canonical field shape.</p></div>
+  return `<div class="pagehead"><div style="display:flex;justify-content:space-between;align-items:end;gap:16px;flex-wrap:wrap"><div><h1>Schema catalogue</h1><p>${list.length} learned schemas. Physical <code>sch_</code> identity and, where annotated, the semantic <code>sem_</code> fingerprint. Select one to inspect its canonical field shape.</p></div><button class="btn" data-act="export-oapi" data-id="all" ${list.length?'':'disabled'} title="Download every learned schema as an OpenAPI 3.1 document">⬇ Export all · OpenAPI</button></div></div>
   <div class="split">
     <div class="listcard"><div class="search"><input id="schsearch" placeholder="Search schemas…" autocomplete="off"></div><div class="rowlist" id="schrows">${schemaRows(list)}</div></div>
     <div id="schdetail">${schemaDetail(list.find(f=>f.schema_id===state.sel.schema))}</div>
@@ -281,7 +346,7 @@ V.schemas=()=>{const list=state.data.families;
 function schemaRows(list){return list.map(f=>`<div class="row ${f.schema_id===state.sel.schema?'on':''}" data-sch="${f.schema_id}"><div><div class="lab">${esc(f.label)}</div><div class="meta">${shortId(f.schema_id)}</div></div><span class="cnt">${f.observation_count} obs</span></div>`).join('')||'<div class="empty">No schemas</div>';}
 function schemaDetail(f){if(!f)return '<div class="card empty">Select a schema</div>';
   const fields=f.fields.map(x=>`<div class="field"><span class="fp">${x.path.split('.').map((p,i)=>i?'<span class="dot">.</span>'+esc(p):esc(p)).join('')}</span><span class="ty ${x.type}">${x.type}</span><span class="muted" style="font-size:11px">${x.nullable?'nullable':'required'}</span></div>`).join('');
-  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin-bottom:4px"><div><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2><div class="muted num" style="font-size:11px;margin-top:3px">${esc(f.schema_id)}</div></div><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div>
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin-bottom:4px"><div><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2><div class="muted num" style="font-size:11px;margin-top:3px">${esc(f.schema_id)}</div></div><div style="display:flex;gap:8px;align-items:center"><button class="btn" data-act="export-oapi" data-id="${esc(f.schema_id)}" title="Download this schema as OpenAPI 3.1">⬇ OpenAPI</button><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div></div>
     <dl class="kv"><dt>family</dt><dd>${esc(f.family_id)}</dd><dt>version</dt><dd>v${f.version}</dd><dt>observations</dt><dd>${f.observation_count}</dd><dt>semantic sem_</dt><dd>${f.semantic_fingerprint?esc(f.semantic_fingerprint):'<span class="muted">not annotated</span>'}</dd><dt>canonicalizer</dt><dd>${esc(f.canonicalizer)}</dd></dl>
     <h2 class="sec" style="margin:16px 0 10px">Canonical shape · ${f.fields.length} fields</h2>${fields}
   </div>`;}
@@ -297,8 +362,8 @@ function candCard(c){
   const vic=c.gate==='apply_ready'?'✓':c.gate==='deferred_new'?'✧':'⏸';
   const canPromote=canMutate()&&c.gate==='apply_ready';
   return `<div class="cand"><div class="h"><div><div class="num muted" style="font-size:11px">${esc(c.candidate_id)}</div><div style="margin-top:4px"><span class="dec ${dc}">${esc(c.slm_decision)}</span> <span class="muted" style="font-size:12px">${esc(sub)}${c.match_label?' → '+esc(c.match_label):''}</span></div></div><span class="chip">${c.observation_count} obs</span></div>
-    <div class="fields">${c.fields.map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')}</div>
-    <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(c.gate.replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason)}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance} · margin ${c.margin}</span></div></div>
+    <div class="fields">${(c.fields||[]).map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
+    <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(String(c.gate||'—').replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason||'')}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance!=null?c.top1_distance:'—'} · margin ${c.margin!=null?c.margin:'—'}</span></div></div>
     <div class="actions"><button class="btn good" data-act="promote" data-id="${esc(c.candidate_id)}" ${canPromote?'':'disabled'}>Promote</button><button class="btn risk" data-act="reject" data-id="${esc(c.candidate_id)}" ${canMutate()?'':'disabled'}>Reject</button></div></div>`;
 }
 function mutate(kind,id){
@@ -413,7 +478,7 @@ $('#main').addEventListener('click',e=>{
   const t=e.target.closest('[data-tab],[data-sch],[data-act]');if(!t)return;
   if(t.dataset.tab!=null){state.tab=+t.dataset.tab;render();}
   else if(t.dataset.sch){state.sel.schema=t.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===t.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x.dataset.sch===t.dataset.sch));}
-  else if(t.dataset.act&&!t.disabled){mutate(t.dataset.act,t.dataset.id);}
+  else if(t.dataset.act&&!t.disabled){if(t.dataset.act==='export-oapi')exportOpenAPI(t.dataset.id);else mutate(t.dataset.act,t.dataset.id);}
 });
 $$('#nav a').forEach(a=>a.onclick=e=>{e.preventDefault();location.hash=a.dataset.v;});
 window.addEventListener('hashchange',render);
