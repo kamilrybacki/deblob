@@ -10,6 +10,7 @@ pub mod auth;
 pub mod candidates;
 pub mod schemas;
 pub mod semantic;
+pub mod umbrellas;
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use axum::{middleware, Json, Router};
 use deblob_core::ports::{EvidenceStore, Registry};
 use deblob_redis::health::HealthGate;
 use deblob_semantic::Registries;
+use deblob_umbrella::store::UmbrellaStore;
 use serde::Serialize;
 
 pub use auth::SecretToken;
@@ -48,6 +50,11 @@ pub struct ApiState {
     /// `Arc`-wrapped so cloning `ApiState` per-request never deep-copies the
     /// underlying `BTreeSet`s.
     pub semantic_registries: Arc<Registries>,
+    /// Gold-tier umbrella-schema governance store (read + reject surface
+    /// only here — promotion happens via the controller/bundle path, not a
+    /// raw endpoint). `Arc<dyn UmbrellaStore>`, same trait-object pattern
+    /// as every other injected dependency on this struct.
+    pub umbrellas: Arc<dyn UmbrellaStore>,
 }
 
 /// Standard error envelope, spec §8: `{"error":{"code","message","details"}}`.
@@ -271,6 +278,20 @@ pub fn router(state: ApiState) -> Router {
         .route("/candidates/{cand_id}/promote", post(candidates::promote))
         .route("/candidates/{cand_id}/reject", post(candidates::reject))
         .route("/quarantine", get(candidates::quarantine))
+        .route("/umbrellas", get(umbrellas::list_umbrellas))
+        .route("/umbrellas/{umbrella_id}", get(umbrellas::get_umbrella))
+        .route(
+            "/umbrellas/{umbrella_id}/transforms",
+            get(umbrellas::list_transforms),
+        )
+        .route(
+            "/umbrellas/{umbrella_id}/approve",
+            post(umbrellas::approve),
+        )
+        .route(
+            "/umbrellas/{umbrella_id}/reject",
+            post(umbrellas::reject),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,

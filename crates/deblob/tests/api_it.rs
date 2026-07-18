@@ -20,6 +20,7 @@ use deblob_core::revision::{
 };
 use deblob_core::semantic::SemanticMetadata;
 use deblob_redis::health::HealthGate;
+use deblob_umbrella::store::InMemoryUmbrellaStore;
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -510,6 +511,7 @@ fn make_state(
         metrics: Metrics::new(),
         semantic,
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
+        umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
     }
 }
 

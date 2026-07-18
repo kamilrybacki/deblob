@@ -23,6 +23,7 @@ deblob-monoid = { path = "../deblob-monoid" }
 deblob-redis = { path = "../deblob-redis" }
 deblob-semantic = { path = "../deblob-semantic" }
 deblob-slm = { path = "../deblob-slm" }
+deblob-umbrella = { path = "../deblob-umbrella" }
 rdkafka = { version = "0.37", features = ["cmake-build", "tokio", "ssl"] }
 unicode-normalization = "0.1"
 tokio = { workspace = true, features = ["net", "process", "io-util"] }

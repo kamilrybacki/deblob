@@ -2,9 +2,8 @@
 //!
 //! Layout (mirrors the candidate/schema stores):
 //!   * `deblob:umbrella:<id>`               HASH {record: <schema json>, state: <state>}
-//!   * `deblob:umbrellas:<state>`           SET of umbrella ids (maintained index — so
-//!                                          `list_umbrellas` is O(state) with NO empty
-//!                                          pages, unlike the SCAN-based candidate list)
+//!   * `deblob:umbrellas:<state>`           SET of umbrella ids (a maintained index, so
+//!     `list_umbrellas` is O(state) with NO empty pages, unlike the SCAN candidate list)
 //!   * `deblob:umbrella-transform:<umb>:<child>`  STRING <transform json>
 //!   * `deblob:umbrella-transforms:<umb>`   SET of child ids for that umbrella
 //!

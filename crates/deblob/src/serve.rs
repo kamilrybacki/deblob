@@ -28,8 +28,11 @@ use deblob_core::ports::{EvidenceStore, Registry};
 use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, IngestToken, KafkaDiscoverySink};
 use deblob_kafka::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 use deblob_kafka::{Relay, RelayCfg};
-use deblob_redis::{HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry};
+use deblob_redis::{
+    HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry, RedisUmbrella,
+};
 use deblob_slm::{HttpInferencer, SemanticInferencer, SlmHttpConfig};
+use deblob_umbrella::store::UmbrellaStore;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -326,6 +329,20 @@ pub async fn serve(
             .map_err(AppError::Redis)?;
     let evidence: Arc<dyn EvidenceStore> = Arc::new(evidence);
 
+    // Gold-tier umbrella-schema governance store (read + reject API surface
+    // — see `api::umbrellas`). Its own `ConnectionManager`, built the same
+    // way the health probe's connection is below, rather than sharing
+    // `RedisRegistry`'s/`RedisEvidence`'s internal connections (both are
+    // crate-private to `deblob-redis`, by the same design noted on
+    // `probe_conn` below).
+    let umbrella_client = redis::Client::open(secrets.redis_url.as_str())
+        .map_err(|e| AppError::Redis(CoreError::RegistryUnavailable(e.to_string())))?;
+    let umbrella_conn = umbrella_client
+        .get_connection_manager_with_config(deblob_redis::connection_manager_config())
+        .await
+        .map_err(|e| AppError::Redis(CoreError::RegistryUnavailable(e.to_string())))?;
+    let umbrellas: Arc<dyn UmbrellaStore> = Arc::new(RedisUmbrella::new(umbrella_conn));
+
     // The health gate's background probe needs its OWN connection —
     // `RedisRegistry::conn()` is crate-private to `deblob-redis`, by
     // design (spec §6: the gate is a separate runtime concern from the
@@ -379,6 +396,7 @@ pub async fn serve(
         // `Registries::default()` (both sets empty), so every strong-axis
         // annotation 422s exactly as it did before this wiring.
         semantic_registries: Arc::new(app_config.semantic.to_registries()),
+        umbrellas,
     };
     let management_addr: SocketAddr =
         app_config

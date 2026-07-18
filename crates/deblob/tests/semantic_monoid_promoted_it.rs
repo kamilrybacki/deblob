@@ -37,6 +37,7 @@ use deblob_core::ports::{EvidenceStore, Registry, SchemaRecord};
 use deblob_fingerprint::{canonical_bytes, fingerprint, parse_bounded, shape_of, Limits, Node};
 use deblob_redis::health::HealthGate;
 use deblob_redis::{RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry};
+use deblob_umbrella::store::InMemoryUmbrellaStore;
 use http_body_util::BodyExt;
 use serde_json::Value;
 use testcontainers_modules::{redis::Redis, testcontainers::runners::AsyncRunner};
@@ -146,6 +147,7 @@ fn state(registry: Arc<RedisRegistry>, semantic: RedisRegistry) -> ApiState {
         metrics: Metrics::new(),
         semantic: Arc::new(semantic),
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
+        umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
     }
 }
 

@@ -38,6 +38,7 @@ use deblob_core::semantic::{
 use deblob_fingerprint::{canonical_bytes, fingerprint, parse_bounded, shape_of, Limits};
 use deblob_redis::health::HealthGate;
 use deblob_redis::{RedisOpts, RedisRegistry};
+use deblob_umbrella::store::InMemoryUmbrellaStore;
 use redis::AsyncCommands;
 use testcontainers_modules::{
     redis::Redis,
@@ -151,6 +152,7 @@ fn state(reg: RedisRegistry, sem: RedisRegistry, metrics: Arc<Metrics>) -> ApiSt
         metrics,
         semantic: Arc::new(sem),
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
+        umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
     }
 }
 
