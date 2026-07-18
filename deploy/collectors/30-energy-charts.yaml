@@ -1,0 +1,64 @@
+# greenwindow collector — energy-charts.info (Fraunhofer ISE; Poland/EU grid, P1).
+# No token. CC BY 4.0 (data from Bundesnetzagentur | SMARD.de / ENTSO-E). Gives the
+# Poland grid signals the token-gated ENTSO-E would — day-ahead price (cheap) +
+# generation mix + renewable share + CO2 intensity (green). -> events.raw.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-energy-charts-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.raw"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    BASE="https://api.energy-charts.info"
+    produce() {
+      body=$(curl -sf -A "$UA" --max-time 20 "$1") || { echo "FETCH-FAIL $1"; return 0; }
+      printf '{"records":[{"value":%s}]}' "$body" | \
+        curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+             -o /dev/null -w "PRODUCED $1 -> %{http_code}\n" || echo "PRODUCE-FAIL $1"
+    }
+    # Poland: price (cheap), generation mix, renewable share + CO2 intensity (green).
+    for u in \
+      "$BASE/price?bzn=PL" \
+      "$BASE/public_power?country=pl" \
+      "$BASE/ren_share?country=pl" \
+      "$BASE/co2eq?country=pl" ; do
+      produce "$u"
+      sleep 1
+    done
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-energy-charts, namespace: deblob, labels: {app: greenwindow-collector, source: energy-charts}}
+spec:
+  schedule: "17,47 * * * *"        # twice hourly, offset from the other collectors
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 150
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: energy-charts}}
+        spec:
+          restartPolicy: Never
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: curlimages/curl:8.11.1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-energy-charts-sh}}
