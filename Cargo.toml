@@ -14,6 +14,7 @@ members = [
     "crates/deblob-redis",
     "crates/deblob-semantic",
     "crates/deblob-slm",
+    "crates/deblob-umbrella",
 ]
 exclude = ["crates/deblob-fingerprint/fuzz"]
 
