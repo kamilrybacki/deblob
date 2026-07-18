@@ -149,6 +149,12 @@
   .empty{text-align:center;color:var(--faint);padding:40px;font-size:13px}
   .cand .lineage{font-size:11px;color:var(--faint);margin:9px 0 2px;line-height:1.5}
   .cand .lineage code{background:var(--sunk);padding:1px 5px;border-radius:4px;font-family:var(--mono);color:var(--ink2)}
+  .tabs{display:flex;gap:6px;margin:0 0 14px} .tab{background:var(--panel-2);border:1px solid var(--line);color:var(--ink2);padding:6px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;text-transform:capitalize} .tab.on{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
+  .streamctl{display:flex;align-items:center;gap:12px;margin-bottom:10px} .streamctl #streamstat{font-size:12px}
+  .streamfeed{max-height:520px;overflow-y:auto;font-family:var(--mono);font-size:11.5px}
+  .streamrow{display:grid;grid-template-columns:70px 96px 140px 1fr 34px auto;gap:10px;align-items:center;padding:4px 6px;border-bottom:1px solid var(--line)}
+  .streamrow .st-o{font-weight:600;text-transform:uppercase;font-size:10px} .streamrow .st-o.good{color:var(--good)} .streamrow .st-o.risk{color:var(--risk)} .streamrow .st-o.accent{color:var(--accent-ink)} .streamrow .st-o.muted{color:var(--faint)}
+  .streamrow .src{color:var(--accent-ink)}
   /* Similarity distance matrix — compact heatmap; scrolls if wide */
   .mxwrap{overflow-x:auto}
   .mx-t{border-collapse:separate;border-spacing:3px;font-size:11.5px}
@@ -177,7 +183,9 @@
     <a data-v="schemas"><span class="ic">≡</span>Schema catalogue</a>
     <a data-v="discovery"><span class="ic">◔</span>Discovery queue</a>
     <a data-v="families"><span class="ic">⑂</span>Families &amp; versions</a>
+    <a data-v="consolidation"><span class="ic">▤</span>Consolidation</a>
     <a data-v="similarity"><span class="ic">✧</span>Similarity</a>
+    <a data-v="stream"><span class="ic">≋</span>Live stream</a>
     <div class="grp">Governance</div>
     <a data-v="model"><span class="ic">◇</span>Model &amp; learning</a>
     <a data-v="operations"><span class="ic">♥</span>Operations</a>
@@ -271,7 +279,7 @@ function normCand(c){ if(!c||!c.profile) return c; // already demo-shaped
     top1_distance:(c.top1_distance!=null?c.top1_distance:'—'), margin:(c.margin!=null?c.margin:'—'),
     match_label:c.match_label,
     // data lineage carried from the candidate record
-    first_seen_ms:c.first_seen_ms, last_seen_ms:c.last_seen_ms}; }
+    first_seen_ms:c.first_seen_ms, last_seen_ms:c.last_seen_ms, source:c.source}; }
 const fmtTs=ms=>ms?new Date(ms).toLocaleString([], {dateStyle:'short', timeStyle:'short'}):'—';
 // --- OpenAPI export -------------------------------------------------------
 // Turn a learned family's flat canonical field list ({path,type,nullable}) into
@@ -375,7 +383,7 @@ function candCard(c){
   const canPromote=canMutate()&&(c.gate==='apply_ready'||c.gate==='provisional');
   return `<div class="cand"><div class="h"><div><div class="num muted" style="font-size:11px">${esc(c.candidate_id)}</div><div style="margin-top:4px"><span class="dec ${dc}">${esc(c.slm_decision)}</span> <span class="muted" style="font-size:12px">${esc(sub)}${c.match_label?' → '+esc(c.match_label):''}</span></div></div><span class="chip">${c.observation_count} obs</span></div>
     <div class="fields">${(c.fields||[]).map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
-    <div class="lineage">⛓ lineage · first seen ${fmtTs(c.first_seen_ms)} · last ${fmtTs(c.last_seen_ms)} · ${c.observation_count} obs · ingested <code>events.raw</code> → group <code>deblob</code> · canon <code>deblob-canon-v1</code></div>
+    <div class="lineage">⛓ lineage · first seen ${fmtTs(c.first_seen_ms)} · last ${fmtTs(c.last_seen_ms)} · ${c.observation_count} obs · source <code>${c.source?esc(c.source):'events.raw'}</code> → group <code>deblob</code> · canon <code>deblob-canon-v1</code></div>
     <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(String(c.gate||'—').replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason||'')}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance!=null?c.top1_distance:'—'} · margin ${c.margin!=null?c.margin:'—'}</span></div></div>
     <div class="actions"><button class="btn good" data-act="promote" data-id="${esc(c.candidate_id)}" ${canPromote?'':'disabled'}>Promote</button><button class="btn risk" data-act="reject" data-id="${esc(c.candidate_id)}" ${canMutate()?'':'disabled'}>Reject</button></div></div>`;
 }
@@ -467,6 +475,65 @@ V.quarantine=()=>{const q=state.data.quarantine||[];
   ${q.length?`<div class="tw"><table><thead><tr><th>digest</th><th>reason</th><th>count</th><th>first seen</th></tr></thead><tbody>${rows}</tbody></table></div>`:'<div class="card empty">Quarantine is empty — all ingested events parsed cleanly.</div>'}`;
 };
 
+// --- Consolidation (gold umbrellas — HITL approval) ------------------------
+V.consolidation=()=>`<div class="pagehead"><h1>Consolidation</h1><p>Gold <b>umbrella</b> schemas — one canonical shape over many semantically-similar sources, each with a verified per-child transform. Umbrellas are <b>human-approved only</b>: the SLM + deterministic gate produce a verified <i>proposal</i>; you approve or reject it.</p></div>
+  ${banner()}
+  <div class="tabs" id="umbtabs">${['provisional','active','rejected'].map((s,i)=>`<button class="tab ${i===0?'on':''}" data-umbstate="${s}">${s}</button>`).join('')}</div>
+  <div id="umblist"><div class="card empty">Loading…</div></div>`;
+async function loadUmbrellas(st){
+  if(!state.live){$('#umblist').innerHTML='<div class="card empty">Connect to a live instance to view umbrellas.</div>';return;}
+  try{const r=await api('/api/v1/umbrellas?state='+encodeURIComponent(st));const list=r.data||[];
+    $('#umblist').innerHTML=list.length?list.map(u=>umbCard(u,st)).join(''):`<div class="card empty">No ${esc(st)} umbrellas.${st==='provisional'?' The consolidation controller proposes gold umbrellas over semantically-similar schemas — none are awaiting approval yet.':''}</div>`;
+  }catch(e){$('#umblist').innerHTML='<div class="card empty">Umbrella API not available yet (needs the consolidation turn-on).</div>';}
+}
+function umbCard(u,st){const s=u.schema||u;const fields=(s.fields||[]);
+  const canAct=canMutate()&&st==='provisional';
+  return `<div class="cand"><div class="h"><div><div style="font-weight:600">${esc(s.label||s.umbrella_id)}</div><div class="num muted" style="font-size:11px;margin-top:3px">${esc(s.umbrella_id)} · v${s.version} · <span class="dec ${st==='active'?'match':st==='rejected'?'abstain':'new'}">${esc(st)}</span></div></div><span class="chip">${fields.length} fields</span></div>
+    <div class="fields">${fields.map(f=>`<span class="chip">${esc((f.path&&String(f.path))||f.name||f.canonical_field_id)}<span class="muted">:${esc((f.ty&&(f.ty.kind||f.ty))||'?')}${f.unit?(' '+esc(f.unit.code||'')):''}${f.cardinality==='required'?' *':''}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
+    <div class="lineage">▤ gold umbrella · <code>${esc(s.umbrella_id)}</code> · members via <code>/umbrellas/${esc(s.umbrella_id)}/transforms</code> · HITL: promotion to active requires human approval</div>
+    <div class="actions"><button class="btn good" data-uact="approve" data-id="${esc(s.umbrella_id)}" ${canAct?'':'disabled'}>Approve</button><button class="btn risk" data-uact="reject" data-id="${esc(s.umbrella_id)}" ${canMutate()&&st!=='rejected'?'':'disabled'}>Reject</button></div></div>`;
+}
+function umbMutate(kind,id){
+  const approve=kind==='approve';
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>${approve?'Approve':'Reject'} umbrella</h3>
+    <p>${approve?'Promotes this proposal to a governed <b>gold</b> contract other systems build on. This is the human-in-the-loop gate — the deterministic checks already passed.':'Drops this umbrella proposal.'} The API enforces auth + audit.</p>
+    <p class="muted num" style="font-size:11.5px">${esc(id)}</p>
+    <label>Reason (recorded)</label><input id="ureason" placeholder="why">
+    ${approve?`<label>Type the umbrella id to confirm</label><input id="uconfirm" placeholder="${esc(id)}">`:''}
+    <div class="row2"><button class="btn" data-uno>Cancel</button><button class="btn ${approve?'good':'risk'}" data-uyes>${approve?'Approve':'Reject'}</button></div></div></div>`;
+  $('#overlay').querySelector('[data-uno]').onclick=()=>$('#overlay').innerHTML='';
+  $('#overlay').querySelector('[data-uyes]').onclick=async()=>{
+    const reason=($('#ureason').value||'').trim();if(!reason){toast('A reason is required.');return;}
+    if(approve&&($('#uconfirm').value||'').trim()!==id){toast('Typed id does not match.');return;}
+    $('#overlay').innerHTML='';
+    try{await api(`/api/v1/umbrellas/${encodeURIComponent(id)}/${kind}`,{method:'POST',body:JSON.stringify({reason})});
+      toast(`Umbrella ${approve?'approved':'rejected'}.`);const cur=($('#umbtabs .tab.on')||{}).dataset?.umbstate||'provisional';loadUmbrellas(cur);
+    }catch(e){toast('Failed: '+e.message);}
+  };
+}
+// --- Live stream (SSE tap; metadata only) ----------------------------------
+let _es=null, _streamPaused=false;
+function closeStream(){if(_es){_es.close();_es=null;}}
+V.stream=()=>`<div class="pagehead"><h1>Live stream</h1><p>Events flowing through Deblob in real time — raw record → tag decision (tagged / new candidate / matched / quarantined). Metadata only: ids, origin coordinates, decision, source — <b>never payloads</b>.</p></div>
+  <div class="card"><div class="streamctl"><button class="btn" id="streampause">Pause</button> <span id="streamstat" class="muted">connecting…</span></div>
+  <div id="streamfeed" class="streamfeed"><div class="muted" style="font-size:12px;padding:10px">waiting for events…</div></div></div>`;
+function openStream(){
+  closeStream();_streamPaused=false;
+  if(!state.live){$('#streamstat').textContent='not live';return;}
+  const feed=$('#streamfeed');let first=true;
+  try{_es=new EventSource(state.base.replace(/\/$/,'')+'/api/v1/stream');}
+  catch(e){$('#streamstat').textContent='unavailable';return;}
+  _es.onopen=()=>{$('#streamstat').textContent='● live';$('#streamstat').className='';};
+  _es.onerror=()=>{$('#streamstat').textContent='stream unavailable (needs the live-stream tap)';$('#streamstat').className='muted';};
+  _es.onmessage=ev=>{ if(_streamPaused)return; let d;try{d=JSON.parse(ev.data);}catch(_){return;}
+    if(first){feed.innerHTML='';first=false;}
+    const cls=d.outcome==='tagged'?'good':d.outcome==='quarantined'?'risk':d.outcome==='new_candidate'?'accent':'muted';
+    const o=d.origin||{};const row=document.createElement('div');row.className='streamrow';
+    row.innerHTML=`<span class="st-t">${new Date(d.ts_ms||Date.now()).toLocaleTimeString()}</span><span class="st-o ${cls}">${esc(d.outcome||'?')}</span><span class="num">${esc(shortId(d.schema_ref||''))}</span><span class="muted num">${esc((o.topic||'')+'/'+(o.partition!=null?o.partition:'')+'/'+(o.offset!=null?o.offset:''))}</span><span class="muted">${d.fields_count!=null?d.fields_count+'f':''}</span><span class="src">${d.source?esc(d.source):''}</span>`;
+    feed.insertBefore(row,feed.firstChild);
+    while(feed.childNodes.length>200)feed.removeChild(feed.lastChild);
+  };
+}
 function connectModal(){
   $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>Connect to Deblob</h3><p>Point the console at a running management API. Blank = bundled demo data. The token is held in this tab only (sessionStorage), never persisted to disk.</p>
     <label>API base URL</label><input id="cbase" placeholder="https://deblob.your-domain" value="${esc(state.base)}">
@@ -479,9 +546,11 @@ function connectModal(){
     $('#overlay').innerHTML='';toast('Connecting…');await boot();toast(state.live?'Connected.':'Could not reach API — showing demo data.');};
 }
 
-function render(){const v=location.hash.replace('#','')||'explorer';$$('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));$('#main').innerHTML=(V[v]||V.explorer)();afterRender(v);}
+function render(){closeStream();const v=location.hash.replace('#','')||'explorer';$$('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));$('#main').innerHTML=(V[v]||V.explorer)();afterRender(v);}
 function afterRender(v){
   if(v==='schemas'){const s=$('#schsearch');if(s)s.oninput=()=>{const q=s.value.toLowerCase();$('#schrows').innerHTML=schemaRows(state.data.families.filter(f=>f.label.toLowerCase().includes(q)||f.schema_id.includes(q)));};}
+  if(v==='consolidation')loadUmbrellas('provisional');
+  if(v==='stream'){openStream();const p=$('#streampause');if(p)p.onclick=()=>{_streamPaused=!_streamPaused;p.textContent=_streamPaused?'Resume':'Pause';};}
   if(v==='operations'&&state.live){
     // Status-based probe (health endpoints return plain text/empty, not JSON, so
     // never call .json() here). /healthz and /readyz are proxied to the mgmt API.
@@ -493,9 +562,11 @@ function afterRender(v){
 }
 // event delegation (no inline handlers -> CSP-safe)
 $('#main').addEventListener('click',e=>{
-  const t=e.target.closest('[data-tab],[data-sch],[data-act]');if(!t)return;
+  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate]');if(!t)return;
   if(t.dataset.tab!=null){state.tab=+t.dataset.tab;render();}
   else if(t.dataset.sch){state.sel.schema=t.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===t.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x.dataset.sch===t.dataset.sch));}
+  else if(t.dataset.umbstate){$$('#umbtabs .tab').forEach(x=>x.classList.toggle('on',x===t));loadUmbrellas(t.dataset.umbstate);}
+  else if(t.dataset.uact&&!t.disabled){umbMutate(t.dataset.uact,t.dataset.id);}
   else if(t.dataset.act&&!t.disabled){if(t.dataset.act==='export-oapi')exportOpenAPI(t.dataset.id);else mutate(t.dataset.act,t.dataset.id);}
 });
 $$('#nav a').forEach(a=>a.onclick=e=>{e.preventDefault();location.hash=a.dataset.v;});
