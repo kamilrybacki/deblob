@@ -43,6 +43,19 @@ pub struct CandidateRecord {
     pub first_seen_ms: i64,
     pub last_seen_ms: i64,
     pub state: CandidateState,
+    /// The Kafka topic (or other source identity) this candidate's most
+    /// recent observation was ingested from (Hermes review gap 2: real
+    /// per-record source, spec §4/§9). Threaded through from
+    /// `deblob::coldlane::SampleMeta::source`, which is itself now the
+    /// ACTUAL consumed record's topic rather than a static config value
+    /// (see `deblob-kafka::relay`'s `DiscoveryMsg.source` fix). Clustering
+    /// stays GLOBAL — this field is provenance/observability only, never a
+    /// clustering or retrieval key (source-scoped clustering is deferred to
+    /// a later stage). `#[serde(default)]` so every pre-existing
+    /// `CandidateRecord` JSON in storage (which lacks this field entirely)
+    /// still deserializes, yielding `None`.
+    #[serde(default)]
+    pub source: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -296,5 +309,27 @@ mod tests {
         assert_eq!(record.semantic, None);
         assert_eq!(record.semantic_fingerprint, None);
         assert_eq!(record.privacy_class, None);
+    }
+
+    /// Pre-existing serialized `CandidateRecord` JSON (lacking `source`
+    /// entirely) must still deserialize, yielding `None` for it —
+    /// `#[serde(default)]` exists precisely so every candidate already in
+    /// storage before this field shipped keeps loading (Hermes review gap
+    /// 2 follow-up, mirrors `schema_record_deserializes_pre_p2d_json_with_
+    /// none_semantics` above).
+    #[test]
+    fn candidate_record_deserializes_pre_source_json() {
+        let candidate_id = CandidateId::from_digest(&[9u8; 32]);
+        let json = serde_json::json!({
+            "candidate_id": candidate_id.as_str(),
+            "profile": {},
+            "sample_count": 3,
+            "first_seen_ms": 1_000,
+            "last_seen_ms": 2_000,
+            "state": "provisional",
+        });
+
+        let record: CandidateRecord = serde_json::from_value(json).unwrap();
+        assert_eq!(record.source, None);
     }
 }

@@ -511,6 +511,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
     let config = Config {
         kafka: KafkaConfig {
             raw_topic: raw_topic.clone(),
+            raw_topics: Vec::new(),
             tagged_topic: tagged_topic.clone(),
             discovery_topic: discovery_topic.clone(),
             quarantine_topic: quarantine_topic.clone(),

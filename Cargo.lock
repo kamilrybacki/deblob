@@ -607,6 +607,7 @@ dependencies = [
  "deblob-redis",
  "deblob-semantic",
  "deblob-slm",
+ "deblob-umbrella",
  "governor",
  "http-body-util",
  "prometheus",
@@ -619,6 +620,7 @@ dependencies = [
  "testcontainers-modules",
  "thiserror 2.0.18",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "toml",
  "tower",
@@ -753,6 +755,7 @@ dependencies = [
  "deblob-fingerprint",
  "deblob-match",
  "rdkafka",
+ "serde",
  "serde_json",
  "testcontainers-modules",
  "thiserror 2.0.18",
@@ -800,6 +803,7 @@ dependencies = [
  "deblob-fingerprint",
  "deblob-semantic",
  "deblob-slm",
+ "deblob-umbrella",
  "redis",
  "serde",
  "serde_json",
@@ -836,6 +840,18 @@ dependencies = [
  "thiserror 2.0.18",
  "tokio",
  "wiremock",
+]
+
+[[package]]
+name = "deblob-umbrella"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "deblob-core",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
 ]
 
 [[package]]
@@ -3127,6 +3143,7 @@ dependencies = [
  "futures-core",
  "pin-project-lite",
  "tokio",
+ "tokio-util",
 ]
 
 [[package]]

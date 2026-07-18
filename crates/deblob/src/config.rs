@@ -58,6 +58,15 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct KafkaConfig {
     pub raw_topic: String,
+    /// Every topic the relay consumes from, in addition to `raw_topic`
+    /// (Hermes review gap 1: multi-topic subscribe). `#[serde(default)]` so
+    /// every pre-existing TOML file (which never had this key) still
+    /// parses, defaulting to an empty list — [`KafkaConfig::
+    /// effective_raw_topics`] is what actually falls back to `[raw_topic]`
+    /// alone in that case (a plain `#[serde(default)]` on this field can't
+    /// itself reach across to a sibling field during deserialization).
+    #[serde(default)]
+    pub raw_topics: Vec<String>,
     pub tagged_topic: String,
     pub discovery_topic: String,
     pub quarantine_topic: String,
@@ -80,6 +89,22 @@ pub struct KafkaConfig {
     /// [`default_max_batch_linger_ms`] (100ms).
     #[serde(default = "default_max_batch_linger_ms")]
     pub max_batch_linger_ms: u64,
+}
+
+impl KafkaConfig {
+    /// The full topic list [`crate::serve::serve`] threads into
+    /// `deblob_kafka::RelayCfg::raw_topics`: `raw_topics` verbatim when
+    /// non-empty, else `[raw_topic]` alone (Hermes review gap 1) — the same
+    /// fallback [`deblob_kafka::relay::Relay::run`] itself applies, kept
+    /// here too so `serve()`'s wiring is unit-testable without spinning up
+    /// Kafka.
+    pub fn effective_raw_topics(&self) -> Vec<String> {
+        if self.raw_topics.is_empty() {
+            vec![self.raw_topic.clone()]
+        } else {
+            self.raw_topics.clone()
+        }
+    }
 }
 
 /// Batching spec §3: "max_batch_records: usize (default 500)".
@@ -753,6 +778,41 @@ mod tests {
         "#;
         let config = Config::parse_toml(toml).expect("max_batch_records = 1 must parse");
         assert_eq!(config.kafka.max_batch_records, 1);
+    }
+
+    /// Hermes review gap 1: `raw_topics` absent from the TOML entirely
+    /// deserializes to an empty `Vec` (the `#[serde(default)]`), and
+    /// `effective_raw_topics` then falls back to `[raw_topic]` alone — the
+    /// exact pre-multi-topic subscribe behavior. When explicitly set,
+    /// `effective_raw_topics` returns it verbatim, ignoring `raw_topic`.
+    #[test]
+    fn raw_topics_defaults_empty_and_falls_back_to_raw_topic() {
+        let config = Config::parse_toml(EXAMPLE_TOML).expect("example TOML must parse");
+        assert!(config.kafka.raw_topics.is_empty());
+        assert_eq!(
+            config.kafka.effective_raw_topics(),
+            vec![config.kafka.raw_topic.clone()]
+        );
+
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            raw_topics = ["r", "r2", "r3"]
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+        "#;
+        let config = Config::parse_toml(toml).expect("explicit raw_topics must parse");
+        assert_eq!(
+            config.kafka.raw_topics,
+            vec!["r".to_string(), "r2".to_string(), "r3".to_string()]
+        );
+        assert_eq!(
+            config.kafka.effective_raw_topics(),
+            vec!["r".to_string(), "r2".to_string(), "r3".to_string()]
+        );
     }
 
     #[test]

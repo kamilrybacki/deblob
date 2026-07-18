@@ -14,6 +14,7 @@ fn sample_candidate() -> CandidateRecord {
         first_seen_ms: 1_700_000_000_000,
         last_seen_ms: 1_700_000_000_000,
         state: CandidateState::Provisional,
+        source: None,
     }
 }
 

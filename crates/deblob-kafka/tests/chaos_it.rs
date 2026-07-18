@@ -251,6 +251,7 @@ fn relay_cfg_with_batch(
         brokers: brokers.to_string(),
         group_id: group_id.to_string(),
         raw_topic: t.raw.clone(),
+        raw_topics: Vec::new(),
         tagged_topic: t.tagged.clone(),
         discovery_topic: t.discovery.clone(),
         quarantine_topic: t.quarantine.clone(),
@@ -261,6 +262,7 @@ fn relay_cfg_with_batch(
         fault,
         metrics: Metrics::new(),
         sasl: None,
+        stream_tx: None,
     }
 }
 

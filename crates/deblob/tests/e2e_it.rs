@@ -413,6 +413,7 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
     let config = Config {
         kafka: KafkaConfig {
             raw_topic: raw_topic.clone(),
+            raw_topics: Vec::new(),
             tagged_topic: tagged_topic.clone(),
             discovery_topic: discovery_topic.clone(),
             quarantine_topic: quarantine_topic.clone(),

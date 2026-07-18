@@ -512,6 +512,7 @@ fn make_state(
         semantic,
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
         umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
+        stream_tx: tokio::sync::broadcast::channel(16).0,
     }
 }
 

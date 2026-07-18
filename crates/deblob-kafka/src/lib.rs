@@ -11,6 +11,8 @@
 pub mod discovery_producer;
 pub mod headers;
 pub mod relay;
+pub mod stream;
 
 pub use discovery_producer::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 pub use relay::{FaultPoint, KafkaSasl, Relay, RelayCfg, RelayError};
+pub use stream::{StreamEvent, StreamOutcome};

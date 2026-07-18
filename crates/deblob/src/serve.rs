@@ -27,12 +27,13 @@ use deblob_core::error::CoreError;
 use deblob_core::ports::{EvidenceStore, Registry};
 use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, IngestToken, KafkaDiscoverySink};
 use deblob_kafka::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
-use deblob_kafka::{Relay, RelayCfg};
+use deblob_kafka::{Relay, RelayCfg, StreamEvent};
 use deblob_redis::{
     HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry, RedisUmbrella,
 };
 use deblob_slm::{HttpInferencer, SemanticInferencer, SlmHttpConfig};
 use deblob_umbrella::store::UmbrellaStore;
+use tokio::sync::broadcast;
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -57,6 +58,14 @@ const HEALTH_PROBE_INTERVAL: Duration = Duration::from_secs(10);
 /// knob — spec §9's example config doesn't itemize it, so a fixed,
 /// generous default is used until a future task promotes it to `Config`.
 const HOT_MATCHER_LRU_CAPACITY: usize = 100_000;
+
+/// Live-stream tap (Stage L1) broadcast channel capacity: how many
+/// [`StreamEvent`]s a lagging SSE subscriber can fall behind by before
+/// older events are dropped for it (`tokio::sync::broadcast`'s standard
+/// lossy-multicast behavior — never applied to the relay's own send, which
+/// never blocks regardless of capacity). Not yet exposed as a TOML knob,
+/// same posture as [`HOT_MATCHER_LRU_CAPACITY`].
+const STREAM_CHANNEL_CAPACITY: usize = 1024;
 
 /// Every way [`serve`] can fail before/during startup or while wiring the
 /// runtime together. `Display` on each variant is safe to log verbatim —
@@ -378,6 +387,16 @@ pub async fn serve(
         app_config.promotion.to_policy(),
     ));
 
+    // --- Live-stream tap (Stage L1, payload-free): one broadcast channel,
+    // a clone of the `Sender` handed to the relay (which broadcasts a
+    // `StreamEvent` per record via a non-blocking send) and to `ApiState`
+    // (which subscribes fresh per `GET /api/v1/stream` SSE connection). The
+    // initial `Receiver` `broadcast::channel` returns is dropped
+    // immediately — a broadcast channel with zero receivers is valid; the
+    // relay's send simply becomes a no-op until the first SSE client
+    // subscribes. ---
+    let (stream_tx, _stream_rx) = broadcast::channel::<StreamEvent>(STREAM_CHANNEL_CAPACITY);
+
     // --- Management API: its OWN listen port, separate from Kafka ingest
     // (spec §8). ---
     let api_state = ApiState {
@@ -388,6 +407,7 @@ pub async fn serve(
         promoter,
         metrics: metrics.clone(),
         semantic,
+        stream_tx: stream_tx.clone(),
         // P2-D Task 8 follow-up (A1): seeded from the TOML `[semantic]`
         // section (`crate::config::SemanticConfig::to_registries`) — no
         // registration ENDPOINT exists (an operator edits the config file
@@ -422,6 +442,8 @@ pub async fn serve(
         brokers: secrets.kafka_brokers.clone(),
         group_id: app_config.kafka.group_id.clone(),
         raw_topic: app_config.kafka.raw_topic.clone(),
+        // Hermes review gap 1: multi-topic subscribe.
+        raw_topics: app_config.kafka.effective_raw_topics(),
         tagged_topic: app_config.kafka.tagged_topic.clone(),
         discovery_topic: app_config.kafka.discovery_topic.clone(),
         quarantine_topic: app_config.kafka.quarantine_topic.clone(),
@@ -432,6 +454,7 @@ pub async fn serve(
         fault: None,
         metrics: metrics.clone(),
         sasl: secrets.kafka_sasl.clone(),
+        stream_tx: Some(stream_tx.clone()),
     };
     let relay_shutdown = shutdown.clone();
     let relay_matcher = matcher.clone();

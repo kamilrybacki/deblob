@@ -183,6 +183,16 @@ impl ColdLane {
                 .as_ref()
                 .map(|r| r.state)
                 .unwrap_or(CandidateState::Provisional),
+            // Hermes review gap 2: the REAL per-record source (now the
+            // actual consumed record's topic — see
+            // `deblob-kafka::relay`'s `DiscoveryMsg.source` fix — rather
+            // than a static config value), persisted onto the candidate so
+            // `GET /api/v1/candidates` can surface it. Always set from this
+            // observation's `meta.source` (last-observation-wins, same
+            // "latest write" posture as `last_seen_ms` above) — never used
+            // as a clustering or retrieval key; clustering stays GLOBAL
+            // (source-scoped clustering is deferred).
+            source: Some(meta.source.clone()),
         };
 
         self.evidence.upsert_candidate(record).await?;

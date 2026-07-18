@@ -23,7 +23,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use deblob_core::envelope::SourceCursor;
@@ -39,10 +39,12 @@ use rdkafka::message::{Message, OwnedHeaders};
 use rdkafka::producer::{DeliveryFuture, FutureProducer, FutureRecord, Producer};
 use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use rdkafka::util::Timeout;
+use tokio::sync::broadcast;
 use tokio::time::{sleep_until, Instant as TokioInstant};
 use tokio_util::sync::CancellationToken;
 
 use crate::headers;
+use crate::stream::{StreamEvent, StreamOutcome};
 
 /// Where to inject a simulated crash inside the per-batch
 /// produce→commit sequence (Task 17's chaos harness, extended for batching
@@ -73,6 +75,13 @@ pub struct RelayCfg {
     pub brokers: String,
     pub group_id: String,
     pub raw_topic: String,
+    /// Every topic the relay consumes from (Hermes review gap 1: multi-topic
+    /// subscribe), IN ADDITION to `raw_topic` staying around for back-compat.
+    /// [`Relay::run`] subscribes to this list when non-empty; when empty
+    /// (every pre-existing call site/test — the zero-value default of a
+    /// `Vec`), it falls back to `[raw_topic]` alone, reproducing the exact
+    /// pre-this-field single-topic behavior.
+    pub raw_topics: Vec<String>,
     pub tagged_topic: String,
     pub discovery_topic: String,
     pub quarantine_topic: String,
@@ -107,6 +116,14 @@ pub struct RelayCfg {
     /// env-only `DEBLOB_KAFKA_SASL_*` secrets — SASL credentials must never
     /// live in the TOML config file.
     pub sasl: Option<KafkaSasl>,
+    /// Live-stream tap (Stage L1, payload-free): `Some` makes
+    /// [`process_batch`] broadcast a [`StreamEvent`] per record via a
+    /// NON-BLOCKING send once that record's outcome is decided. `None` —
+    /// every pre-existing call site/test — skips this entirely: zero
+    /// behavior change from before this field existed. The exactly-once
+    /// relay's correctness never depends on this channel having a
+    /// receiver, room, or even existing (see `crate::stream` docs).
+    pub stream_tx: Option<broadcast::Sender<StreamEvent>>,
 }
 
 /// SASL credentials for the relay's Kafka clients (spec §9). Never
@@ -211,7 +228,15 @@ impl Relay {
         };
         let consumer: StreamConsumer<RelayConsumerContext> =
             consumer_client_config(&cfg).create_with_context(context)?;
-        consumer.subscribe(&[cfg.raw_topic.as_str()])?;
+        // Hermes review gap 1: subscribe to every topic in `raw_topics` when
+        // non-empty; every pre-existing call site leaves `raw_topics` empty,
+        // so this falls back to the single `raw_topic` exactly as before.
+        let subscribe_topics: Vec<&str> = if cfg.raw_topics.is_empty() {
+            vec![cfg.raw_topic.as_str()]
+        } else {
+            cfg.raw_topics.iter().map(String::as_str).collect()
+        };
+        consumer.subscribe(&subscribe_topics)?;
 
         // `0` would mean "never flush" — clamp to 1, which reproduces the
         // exact pre-batching per-record-transaction behaviour (batching
@@ -523,6 +548,18 @@ async fn run_transaction_body(
             out_headers,
         )?;
 
+        // Live-stream tap (Stage L1): a tombstone never reaches
+        // `HotMatcher::classify` (no payload to parse), so its `StreamEvent`
+        // is built directly here rather than from a `Classification`.
+        emit_stream_event(
+            cfg,
+            cursor,
+            StreamOutcome::Tagged,
+            SchemaRef::Tombstone.header_value(),
+            None,
+            0,
+        );
+
         // AfterProduceBeforeCommit is now checked once per BATCH in
         // `process_batch`, after every record's deliveries (including this
         // tombstone's) have been awaited — not per record.
@@ -533,6 +570,29 @@ async fn run_transaction_body(
 
     let classification = matcher.classify(&payload, &cfg.limits).await;
 
+    // Live-stream tap (Stage L1): emitted immediately once the
+    // classification is decided — the SAME timing `HotMatcher::classify`
+    // already uses for its own `deblob_messages_total`/`deblob_tag_latency_
+    // seconds` metrics (recorded inside `classify` itself, unconditional on
+    // whether this record's produce/transaction ever commits). Non-blocking,
+    // best-effort: see `emit_stream_event` docs.
+    let stream_outcome = match &classification.schema_ref {
+        SchemaRef::Malformed => StreamOutcome::Quarantined,
+        SchemaRef::Provisional(_) => StreamOutcome::NewCandidate,
+        SchemaRef::Known(_) | SchemaRef::Unresolved | SchemaRef::Tombstone => StreamOutcome::Tagged,
+    };
+    let stream_reason = classification
+        .quarantine
+        .map(|reason| headers::quarantine_reason_value(reason).to_string());
+    emit_stream_event(
+        cfg,
+        cursor,
+        stream_outcome,
+        classification.schema_ref.header_value(),
+        stream_reason,
+        classification.fields_count,
+    );
+
     if let SchemaRef::Provisional(ref cand_id) = classification.schema_ref {
         let discovery = DiscoveryMsg {
             cand_id: cand_id.as_str().to_string(),
@@ -540,10 +600,12 @@ async fn run_transaction_body(
             // The relay has no per-producer identity from the raw Kafka
             // record itself (no reserved header carries one, and
             // inventing one would violate "IDs only, never model output"
-            // header hygiene) — the raw topic name is the closest stable
-            // "source" identity the cold lane's per-source rate limiter
-            // can key on.
-            source: cfg.raw_topic.clone(),
+            // header hygiene) — the ACTUAL topic this record was consumed
+            // from (Hermes review gap 1 fix: was `cfg.raw_topic`, which lied
+            // once multi-topic subscribe existed — now the record's own
+            // `cursor.topic`) is the closest stable "source" identity the
+            // cold lane's per-source rate limiter can key on.
+            source: cursor.topic.clone(),
             cursor: cursor.clone(),
         };
         let discovery_bytes = serde_json::to_vec(&discovery)?;
@@ -643,6 +705,48 @@ fn produce(
         .map_err(|(err, _record)| RelayError::Kafka(err))
 }
 
+/// Builds and broadcasts one payload-free [`StreamEvent`] for the live-
+/// stream tap (Stage L1) — a NO-OP when `cfg.stream_tx` is `None` (every
+/// pre-Stage-L1 call site/test). `broadcast::Sender::send` is itself
+/// synchronous/non-blocking (it never awaits a receiver — it only fails
+/// when there are currently zero receivers, or is silently lossy for a
+/// receiver lagging behind the channel's fixed capacity), matching this
+/// tap's "never block or fail the hot path" contract; the `Result` is
+/// deliberately ignored — the exactly-once relay's correctness never
+/// depends on this succeeding.
+fn emit_stream_event(
+    cfg: &RelayCfg,
+    cursor: &SourceCursor,
+    outcome: StreamOutcome,
+    schema_ref: String,
+    reason: Option<String>,
+    fields_count: u32,
+) {
+    let Some(tx) = &cfg.stream_tx else {
+        return;
+    };
+    let event = StreamEvent {
+        ts_ms: now_ms(),
+        lane: "hot",
+        origin: cursor.clone(),
+        outcome,
+        schema_ref,
+        // Not populated at Stage L1 — see `StreamEvent::family_id` docs.
+        family_id: None,
+        reason,
+        fields_count,
+        source: Some(cursor.topic.clone()),
+    };
+    let _ = tx.send(event);
+}
+
+fn now_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
 /// The consumer-side [`ClientConfig`] (pub(crate) so relay.rs's own unit
 /// tests can assert the cooperative-sticky/read-uncommitted settings
 /// without spinning up a broker — spec §3.2's rebalance-config rule).
@@ -704,6 +808,7 @@ mod tests {
             brokers: "localhost:9092".to_string(),
             group_id: "deblob-relay-test".to_string(),
             raw_topic: "raw".to_string(),
+            raw_topics: Vec::new(),
             tagged_topic: "tagged".to_string(),
             discovery_topic: "discovery".to_string(),
             quarantine_topic: "quarantine".to_string(),
@@ -714,6 +819,7 @@ mod tests {
             fault: None,
             metrics: Metrics::new(),
             sasl: None,
+            stream_tx: None,
         }
     }
 

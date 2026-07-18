@@ -412,6 +412,7 @@ mod tests {
             first_seen_ms,
             last_seen_ms,
             state: CandidateState::Provisional,
+            source: None,
         }
     }
 

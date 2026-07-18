@@ -38,6 +38,14 @@ pub struct Classification {
     /// under, when the payload parsed successfully (`None` for
     /// `Malformed`).
     pub bucket: Option<String>,
+    /// Top-level field count of the parsed payload (`0` for `Malformed`,
+    /// where no parse succeeded) — `deblob_fingerprint::ShapeSummary::
+    /// top_level_fields`, already computed as part of `bucket_key`'s own
+    /// input on every non-`Malformed` classification, so surfacing it here
+    /// costs nothing extra on the hot path. Feeds the live-stream tap's
+    /// (Stage L1) payload-free `StreamEvent::fields_count` — never a raw
+    /// field name or value, only a bounded count.
+    pub fields_count: u32,
 }
 
 /// The per-message deterministic decision table (spec §3.1, §10):
@@ -91,6 +99,7 @@ impl HotMatcher {
                     quarantine: Some(reason),
                     raw_fp: None,
                     bucket: None,
+                    fields_count: 0,
                 };
                 self.metrics
                     .record_classification(&classification.schema_ref);
@@ -105,7 +114,9 @@ impl HotMatcher {
 
         let shape = shape_of(&node);
         let raw_fp = fingerprint(&shape);
-        let bucket = bucket_key(&summarize(&shape));
+        let summary = summarize(&shape);
+        let fields_count = summary.top_level_fields as u32;
+        let bucket = bucket_key(&summary);
 
         if let Some(known) = self.lru.lock().get(&raw_fp).cloned() {
             self.metrics.record_cache_hit();
@@ -114,6 +125,7 @@ impl HotMatcher {
                 quarantine: None,
                 raw_fp: Some(raw_fp),
                 bucket: Some(bucket),
+                fields_count,
             };
             self.metrics
                 .record_classification(&classification.schema_ref);
@@ -144,6 +156,7 @@ impl HotMatcher {
             quarantine: None,
             raw_fp: Some(raw_fp),
             bucket: Some(bucket),
+            fields_count,
         };
         self.metrics.observe_tag_latency(started.elapsed());
         classification

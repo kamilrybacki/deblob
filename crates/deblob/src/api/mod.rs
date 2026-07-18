@@ -10,6 +10,7 @@ pub mod auth;
 pub mod candidates;
 pub mod schemas;
 pub mod semantic;
+pub mod stream;
 pub mod umbrellas;
 
 use std::sync::Arc;
@@ -55,6 +56,14 @@ pub struct ApiState {
     /// raw endpoint). `Arc<dyn UmbrellaStore>`, same trait-object pattern
     /// as every other injected dependency on this struct.
     pub umbrellas: Arc<dyn UmbrellaStore>,
+    /// Live-stream tap (Stage L1, payload-free): `GET /api/v1/stream`
+    /// subscribes a fresh `Receiver` from this per SSE connection
+    /// (`Sender::subscribe`, cheap and `Clone`-free — the `Sender` itself
+    /// is what's cloned onto `ApiState`). The SAME `Sender` `crate::serve::
+    /// serve` also clones into `deblob_kafka::RelayCfg::stream_tx`, so
+    /// every hot-path `StreamEvent` the relay broadcasts reaches every
+    /// currently-subscribed SSE client.
+    pub stream_tx: tokio::sync::broadcast::Sender<deblob_kafka::StreamEvent>,
 }
 
 /// Standard error envelope, spec §8: `{"error":{"code","message","details"}}`.
@@ -278,6 +287,7 @@ pub fn router(state: ApiState) -> Router {
         .route("/candidates/{cand_id}/promote", post(candidates::promote))
         .route("/candidates/{cand_id}/reject", post(candidates::reject))
         .route("/quarantine", get(candidates::quarantine))
+        .route("/stream", get(stream::get_stream))
         .route("/umbrellas", get(umbrellas::list_umbrellas))
         .route("/umbrellas/{umbrella_id}", get(umbrellas::get_umbrella))
         .route(
