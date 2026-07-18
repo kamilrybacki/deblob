@@ -26,6 +26,9 @@ pub struct ChildField {
     pub ty: ScalarType,
     pub unit: Option<Unit>,
     pub is_array: bool,
+    /// The silver semantic annotation, if the field has one. This is the
+    /// deterministic identity anchor correspondence enumeration keys on.
+    pub canonical_field_id: Option<deblob_core::semantic::CanonicalFieldId>,
 }
 
 /// A single reason a transform bundle is not verifiably sound.
@@ -274,7 +277,7 @@ mod tests {
         }
     }
     fn cf(path: &str, ty: ScalarType, unit: Option<Unit>) -> ChildField {
-        ChildField { path: JsonPath::parse(path).unwrap(), ty, unit, is_array: false }
+        ChildField { path: JsonPath::parse(path).unwrap(), ty, unit, is_array: false, canonical_field_id: None }
     }
     fn bind(src: &str, tgt: &str, ops: Vec<Op>, on_missing: OnMissing) -> Binding {
         Binding { source: JsonPath::parse(src).unwrap(), target: JsonPath::parse(tgt).unwrap(),

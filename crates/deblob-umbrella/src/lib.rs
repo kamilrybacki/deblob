@@ -13,6 +13,7 @@
 //!
 //! Joint design: `docs/umbrella-schema-design.md` (Claude × Hermes, jr-umbrella-181605).
 
+pub mod adjudicate;
 pub mod executor;
 pub mod path;
 pub mod store;

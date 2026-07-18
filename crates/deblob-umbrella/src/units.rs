@@ -127,6 +127,12 @@ pub fn rule(rule_id: &str) -> Option<&'static ConversionRule> {
     RULES.iter().find(|r| r.rule_id == rule_id)
 }
 
+/// Find the conversion rule that maps `from`'s code to `to`'s code, if one exists
+/// (used by correspondence enumeration to decide `SAME_QUANTITY_DIFFERENT_UNIT`).
+pub fn find_rule(from: &Unit, to: &Unit) -> Option<&'static ConversionRule> {
+    RULES.iter().find(|r| r.from_code == from.code && r.to_code == to.code)
+}
+
 /// Static check for a `unit_convert` op: the rule exists, its endpoints match the
 /// binding's declared units, and those units share a dimension. Currencies are
 /// rejected outright. Returns `Ok` when the op is verifiably sound.
