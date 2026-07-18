@@ -185,6 +185,19 @@ Rahm & Bernstein (combine linguistic+structural+constraint+instance matchers), C
 (separate correspondences from executable mappings), ReMatch (retrieval-narrowed LLM
 matching), TaDA LLM-schema-matching study (fixed yes/no/unknown > free-form confidence).
 
+## HARD INVARIANT — umbrellas are HITL-only (never auto-promoted)
+An umbrella schema **never** transitions to `active` (gold) automatically. The SLM
+adjudication + the full deterministic gate (static verification, held-out replay,
+counterfactual negatives, shadow) may only ever produce or update a **verified
+`provisional` proposal** — a bundle that *would* be safe to promote. A human then
+explicitly approves it (console → `POST /api/v1/umbrellas/{id}/approve`), which is
+the ONLY path that runs `promote_bundle` and sets `active`. The controller has no
+auto-promote path by construction. Rationale: gold is the published contract other
+systems build on; a wrong umbrella silently merges unrelated data across sources, so
+the gate raises the floor (nothing reaches a human without passing every check) but
+the human is always the ceiling. Reject is likewise human. This makes the gate a
+*decision-support* filter, not an autonomous actuator.
+
 ## Synthesis — the design in one line
 **Deterministic pre-filter + retrieval narrows the space → the SLM adjudicates finite,
 bounded hypotheses → a multi-stage deterministic gate (anchored on canonical-id
