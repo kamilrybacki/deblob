@@ -15,7 +15,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: deblob
-        image: ghcr.io/kamilandrzejrybacki-inc/deblob:b6
+        image: ghcr.io/kamilandrzejrybacki-inc/deblob:b7
         imagePullPolicy: IfNotPresent
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         args: [--config, /app/deblob.toml]
