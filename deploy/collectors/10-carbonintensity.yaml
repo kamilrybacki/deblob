@@ -1,0 +1,65 @@
+# greenwindow collector — GB grid carbon intensity (P0).
+# Pure-curl CronJob: fetch carbonintensity.org.uk JSON, produce each response to
+# Redpanda `events.raw` via the pandaproxy REST endpoint (no Kafka client, no
+# image build). Deblob's relay then fingerprints + discovers the grid schemas.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-carbonintensity-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.raw"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    produce() {
+      # $1 = upstream URL. Fetch JSON, wrap as one pandaproxy record, produce.
+      body=$(curl -sf -A "$UA" --max-time 15 "$1") || { echo "FETCH-FAIL $1"; return 0; }
+      # $body is valid JSON -> embed verbatim as the record value.
+      printf '{"records":[{"value":%s}]}' "$body" | \
+        curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+             -o /dev/null -w "PRODUCED $1 -> %{http_code}\n" || echo "PRODUCE-FAIL $1"
+    }
+    # Breadth across endpoints = distinct grid schemas for Deblob to discover.
+    for u in \
+      "https://api.carbonintensity.org.uk/intensity" \
+      "https://api.carbonintensity.org.uk/generation" \
+      "https://api.carbonintensity.org.uk/intensity/factors" \
+      "https://api.carbonintensity.org.uk/intensity/date" ; do
+      produce "$u"
+      sleep 1
+    done
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-carbonintensity, namespace: deblob, labels: {app: greenwindow-collector, source: carbonintensity}}
+spec:
+  schedule: "*/30 * * * *"          # carbonintensity updates every 30 min
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: carbonintensity}}
+        spec:
+          restartPolicy: Never
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: curlimages/curl:8.11.1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 64Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-carbonintensity-sh}}

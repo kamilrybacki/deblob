@@ -210,7 +210,7 @@ async function api(path,opts){
 async function loadData(){
   if(state.base){
     try{
-      const [sch,cand]=await Promise.all([api('/api/v1/schemas?limit=200'),api('/api/v1/candidates?state=provisional').catch(()=>({data:[]}))]);
+      const [sch,cand]=await Promise.all([api('/api/v1/schemas?limit=200'),api('/api/v1/candidates?state=provisional&limit=100').catch(()=>({data:[]}))]);
       const fams=(sch.data||[]).map(r=>({family_id:r.family_id,schema_id:r.schema_id,version:r.version,
         // Fallback label: family_ids are UUIDv7 (timestamp-prefixed), so families
         // created in the same window share their leading segment — slicing the
