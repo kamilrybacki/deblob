@@ -8,7 +8,11 @@ data:
       server_name _;
       root /usr/share/nginx/html;
       index console.html;
-      location = / { return 302 /console.html; }
+      # Never emit absolute redirects — behind Caddy/Cloudflare the pod's own
+      # :8080 listen port would leak into the Location header and break the
+      # external https://deblob.<domain>/ flow. Serve console.html at / directly.
+      absolute_redirect off;
+      location = / { try_files /console.html =404; add_header Cache-Control "no-store"; }
       location / { try_files $uri /console.html; add_header Cache-Control "no-store"; }
       # Same-origin proxy to the live Deblob management API. Resolver + variable
       # keep DNS at request time; no URI on proxy_pass so the full /api/v1/...

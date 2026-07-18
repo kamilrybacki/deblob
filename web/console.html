@@ -178,7 +178,7 @@
 "use strict";
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 // base URL is not secret -> localStorage; token IS secret -> sessionStorage only (Hermes).
-const state={live:false,base:localStorage.getItem('deblob.base')||'',token:sessionStorage.getItem('deblob.token')||'',data:null,sel:{},tab:0};
+const state={live:false,base:localStorage.getItem('deblob.base')||window.location.origin,token:sessionStorage.getItem('deblob.token')||'',data:null,sel:{},tab:0};
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const shortId=s=>s?(s.length>18?s.slice(0,14)+'…':s):'—';
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2600);}

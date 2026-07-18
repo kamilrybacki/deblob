@@ -35,7 +35,7 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       containers:
         - name: deblob
-          image: ghcr.io/kamilandrzejrybacki-inc/deblob:b4
+          image: ghcr.io/kamilandrzejrybacki-inc/deblob:b5
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
