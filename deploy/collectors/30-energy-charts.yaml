@@ -13,9 +13,12 @@ data:
     UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
     CT="Content-Type: application/vnd.kafka.json.v2+json"
     BASE="https://api.energy-charts.info"
+    # energy-charts responses are columnar (no .data/.Items) so they fall through
+    # to the whole-doc branch; carbonintensity/azure-shaped envelopes get unwrapped.
+    UNWRAP='{records: [ (if (.data|type)=="array" then .data[] elif (.data|type)=="object" then .data elif (.Items|type)=="array" then .Items[] else . end) | {value: .} ]}'
     produce() {
       body=$(curl -sf -A "$UA" --max-time 20 "$1") || { echo "FETCH-FAIL $1"; return 0; }
-      printf '{"records":[{"value":%s}]}' "$body" | \
+      echo "$body" | jq -c "$UNWRAP" | \
         curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
              -o /dev/null -w "PRODUCED $1 -> %{http_code}\n" || echo "PRODUCE-FAIL $1"
     }
@@ -46,16 +49,17 @@ spec:
         metadata: {labels: {app: greenwindow-collector, source: energy-charts}}
         spec:
           restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
           affinity:
             nodeAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:
                 nodeSelectorTerms:
                 - matchExpressions:
                   - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
-          securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
           containers:
           - name: collect
-            image: curlimages/curl:8.11.1
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
             command: ["/bin/sh", "/scripts/collect.sh"]
             securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
             resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}

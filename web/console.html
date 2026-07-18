@@ -147,6 +147,8 @@
   .banner{border-radius:10px;padding:9px 14px;font-size:12.5px;margin:0 0 16px;display:flex;gap:9px;align-items:center}
   .banner.demo{background:var(--warn-soft);color:var(--warn)} .banner.ro{background:var(--accent-soft);color:var(--accent-ink)} .banner.mut{background:var(--risk-soft);color:var(--risk)}
   .empty{text-align:center;color:var(--faint);padding:40px;font-size:13px}
+  .cand .lineage{font-size:11px;color:var(--faint);margin:9px 0 2px;line-height:1.5}
+  .cand .lineage code{background:var(--sunk);padding:1px 5px;border-radius:4px;font-family:var(--mono);color:var(--ink2)}
   /* Similarity distance matrix — compact heatmap; scrolls if wide */
   .mxwrap{overflow-x:auto}
   .mx-t{border-collapse:separate;border-spacing:3px;font-size:11.5px}
@@ -267,7 +269,10 @@ function normCand(c){ if(!c||!c.profile) return c; // already demo-shaped
     gate:c.gate||c.state||'provisional',
     reason:c.reason||'Structural candidate awaiting review — the SLM decision lane is disabled in this deployment.',
     top1_distance:(c.top1_distance!=null?c.top1_distance:'—'), margin:(c.margin!=null?c.margin:'—'),
-    match_label:c.match_label}; }
+    match_label:c.match_label,
+    // data lineage carried from the candidate record
+    first_seen_ms:c.first_seen_ms, last_seen_ms:c.last_seen_ms}; }
+const fmtTs=ms=>ms?new Date(ms).toLocaleString([], {dateStyle:'short', timeStyle:'short'}):'—';
 // --- OpenAPI export -------------------------------------------------------
 // Turn a learned family's flat canonical field list ({path,type,nullable}) into
 // a nested JSON Schema, then wrap N families as OpenAPI 3.1 components.schemas.
@@ -370,6 +375,7 @@ function candCard(c){
   const canPromote=canMutate()&&(c.gate==='apply_ready'||c.gate==='provisional');
   return `<div class="cand"><div class="h"><div><div class="num muted" style="font-size:11px">${esc(c.candidate_id)}</div><div style="margin-top:4px"><span class="dec ${dc}">${esc(c.slm_decision)}</span> <span class="muted" style="font-size:12px">${esc(sub)}${c.match_label?' → '+esc(c.match_label):''}</span></div></div><span class="chip">${c.observation_count} obs</span></div>
     <div class="fields">${(c.fields||[]).map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
+    <div class="lineage">⛓ lineage · first seen ${fmtTs(c.first_seen_ms)} · last ${fmtTs(c.last_seen_ms)} · ${c.observation_count} obs · ingested <code>events.raw</code> → group <code>deblob</code> · canon <code>deblob-canon-v1</code></div>
     <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(String(c.gate||'—').replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason||'')}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance!=null?c.top1_distance:'—'} · margin ${c.margin!=null?c.margin:'—'}</span></div></div>
     <div class="actions"><button class="btn good" data-act="promote" data-id="${esc(c.candidate_id)}" ${canPromote?'':'disabled'}>Promote</button><button class="btn risk" data-act="reject" data-id="${esc(c.candidate_id)}" ${canMutate()?'':'disabled'}>Reject</button></div></div>`;
 }

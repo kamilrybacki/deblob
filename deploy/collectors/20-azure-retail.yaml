@@ -12,11 +12,14 @@ data:
     UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
     CT="Content-Type: application/vnd.kafka.json.v2+json"
     BASE="https://prices.azure.com/api/retail/prices"
+    # Unwrap each price row out of the {Items:[...]} envelope so Deblob discovers
+    # the VM-price record shape, not the paging wrapper.
+    UNWRAP='{records: [ (.Items[]?) | {value: .} ]}'
     azure() {
       # $1 = OData $filter. -G + --data-urlencode keeps the query safely encoded.
       body=$(curl -G -sf -A "$UA" --max-time 25 "$BASE" --data-urlencode "\$filter=$1") \
         || { echo "FETCH-FAIL [$1]"; return 0; }
-      printf '{"records":[{"value":%s}]}' "$body" | \
+      echo "$body" | jq -c "$UNWRAP" | \
         curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
              -o /dev/null -w "PRODUCED azure[$1] -> %{http_code}\n" || echo "PRODUCE-FAIL [$1]"
     }
@@ -45,16 +48,17 @@ spec:
         metadata: {labels: {app: greenwindow-collector, source: azure-retail}}
         spec:
           restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
           affinity:
             nodeAffinity:
               requiredDuringSchedulingIgnoredDuringExecution:
                 nodeSelectorTerms:
                 - matchExpressions:
                   - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
-          securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
           containers:
           - name: collect
-            image: curlimages/curl:8.11.1
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
             command: ["/bin/sh", "/scripts/collect.sh"]
             securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
             resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
