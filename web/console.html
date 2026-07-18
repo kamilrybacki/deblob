@@ -196,7 +196,11 @@ const state={live:false,base:localStorage.getItem('deblob.base')||window.locatio
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const shortId=s=>s?(s.length>18?s.slice(0,14)+'…':s):'—';
 function toast(m){const t=$('#toast');t.textContent=m;t.classList.add('show');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.remove('show'),2600);}
-const canMutate=()=>state.live&&!!state.token;
+// Mutations are enabled whenever connected to a live instance: the same-origin
+// nginx proxy injects the bearer token server-side for writes too, and Authelia
+// gates the whole console — so an authenticated operator can act without pasting
+// a token. The mgmt API still enforces auth, state-transition legality, and audit.
+const canMutate=()=>state.live;
 
 async function api(path,opts){
   if(!state.base) throw new Error('no base');
@@ -360,7 +364,10 @@ function candCard(c){
   const sub=c.slm_relation||c.slm_novelty||c.slm_cause||'';
   const vcls=c.gate==='apply_ready'?'apply':c.gate==='deferred_new'?'new':'human';
   const vic=c.gate==='apply_ready'?'✓':c.gate==='deferred_new'?'✧':'⏸';
-  const canPromote=canMutate()&&c.gate==='apply_ready';
+  // Promote is offered for any live candidate (apply_ready OR provisional): with
+  // the SLM gate disabled nothing reaches apply_ready, so the operator decides.
+  // The mgmt API still enforces min_samples/min_age + state-transition legality.
+  const canPromote=canMutate()&&(c.gate==='apply_ready'||c.gate==='provisional');
   return `<div class="cand"><div class="h"><div><div class="num muted" style="font-size:11px">${esc(c.candidate_id)}</div><div style="margin-top:4px"><span class="dec ${dc}">${esc(c.slm_decision)}</span> <span class="muted" style="font-size:12px">${esc(sub)}${c.match_label?' → '+esc(c.match_label):''}</span></div></div><span class="chip">${c.observation_count} obs</span></div>
     <div class="fields">${(c.fields||[]).map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
     <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(String(c.gate||'—').replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason||'')}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance!=null?c.top1_distance:'—'} · margin ${c.margin!=null?c.margin:'—'}</span></div></div>
@@ -372,7 +379,8 @@ function mutate(kind,id){
     <p>${typed?'Publishes this cluster as a governed schema in the registry.':'Drops this candidate from the discovery queue.'} The API enforces authentication, state-transition legality, and audit attribution.</p>
     <p class="muted num" style="font-size:11.5px">${esc(id)}</p>
     <label>Reason (recorded)</label><input id="mreason" placeholder="why">
-    ${typed?`<label>Type the candidate id to confirm</label><input id="mconfirm" placeholder="${esc(id)}">`:''}
+    ${typed?`<label>New family name (optional)</label><input id="mname" placeholder="e.g. Grid carbon intensity">
+    <label>Type the candidate id to confirm</label><input id="mconfirm" placeholder="${esc(id)}">`:''}
     <div class="row2"><button class="btn" data-mno>Cancel</button><button class="btn ${typed?'good':'risk'}" data-myes>${typed?'Promote':'Reject'}</button></div></div></div>`;
   $('#overlay').querySelector('[data-mno]').onclick=()=>$('#overlay').innerHTML='';
   $('#overlay').querySelector('[data-myes]').onclick=async()=>{
@@ -380,7 +388,11 @@ function mutate(kind,id){
     if(!reason){toast('A reason is required.');return;}
     if(typed&&($('#mconfirm').value||'').trim()!==id){toast('Typed id does not match.');return;}
     $('#overlay').innerHTML='';
-    try{await api(`/api/v1/candidates/${encodeURIComponent(id)}/${kind}`,{method:'POST',body:JSON.stringify({reason})});
+    // promote wants a FamilyChoice — default a NEW family (FamilyChoice::New
+    // serialises as the string "new"); reject just carries the reason.
+    const name=typed?(($('#mname').value||'').trim()||null):null;
+    const body=typed?{family:'new',name,reason}:{reason};
+    try{await api(`/api/v1/candidates/${encodeURIComponent(id)}/${kind}`,{method:'POST',body:JSON.stringify(body)});
       toast(`Candidate ${kind}d.`);state.data.candidates=state.data.candidates.filter(c=>c.candidate_id!==id);render();
     }catch(e){toast('Failed: '+e.message);}
   };
