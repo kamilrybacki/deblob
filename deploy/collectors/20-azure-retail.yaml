@@ -1,0 +1,63 @@
+# greenwindow collector — Azure Retail Prices (compute-cost side, P1).
+# No auth. Pulls spot + consumption VM prices for PL/EU regions (incl. GPU SKUs
+# relevant to arm-C training) and produces each response to Redpanda events.raw.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-azure-retail-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.raw"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    BASE="https://prices.azure.com/api/retail/prices"
+    azure() {
+      # $1 = OData $filter. -G + --data-urlencode keeps the query safely encoded.
+      body=$(curl -G -sf -A "$UA" --max-time 25 "$BASE" --data-urlencode "\$filter=$1") \
+        || { echo "FETCH-FAIL [$1]"; return 0; }
+      printf '{"records":[{"value":%s}]}' "$body" | \
+        curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+             -o /dev/null -w "PRODUCED azure[$1] -> %{http_code}\n" || echo "PRODUCE-FAIL [$1]"
+    }
+    # Poland Central spot + on-demand VMs, plus a GPU (NC-series) spot slice from a
+    # nearby region — different price shapes / regions for Deblob to discover.
+    azure "serviceName eq 'Virtual Machines' and armRegionName eq 'polandcentral' and contains(meterName, 'Spot')"
+    sleep 1
+    azure "serviceName eq 'Virtual Machines' and armRegionName eq 'polandcentral' and priceType eq 'Consumption'"
+    sleep 1
+    azure "serviceName eq 'Virtual Machines' and armRegionName eq 'westeurope' and contains(armSkuName, 'NC') and contains(meterName, 'Spot')"
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-azure-retail, namespace: deblob, labels: {app: greenwindow-collector, source: azure-retail}}
+spec:
+  schedule: "7 * * * *"            # hourly (retail prices move slowly); offset from :00
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: azure-retail}}
+        spec:
+          restartPolicy: Never
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 100, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: curlimages/curl:8.11.1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-azure-retail-sh}}
