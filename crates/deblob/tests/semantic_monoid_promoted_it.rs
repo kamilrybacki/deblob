@@ -151,6 +151,8 @@ fn state(registry: Arc<RedisRegistry>, semantic: RedisRegistry) -> ApiState {
         sources: Arc::new(deblob_core::ports::InMemorySourceRegistry::default()),
         value_profiles: Arc::new(deblob_core::ports::InMemoryValueProfileStore::default()),
         enforce_value_guard: false,
+        samples: None,
+        samples_read_token: None,
         umbrella_min_support: 30,
         stream_tx: tokio::sync::broadcast::channel(16).0,
     }

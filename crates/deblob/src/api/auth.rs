@@ -32,6 +32,13 @@ impl SecretToken {
     fn matches(&self, presented: &[u8]) -> bool {
         self.0.len() == presented.len() && bool::from(self.0.ct_eq(presented))
     }
+
+    /// Constant-time verify a presented token string (public wrapper over
+    /// [`Self::matches`] for capability checks outside the bearer middleware,
+    /// e.g. the `samples:read` gate).
+    pub fn verify(&self, presented: &str) -> bool {
+        self.matches(presented.as_bytes())
+    }
 }
 
 /// Axum middleware: rejects any `/api/v1/*` request that doesn't carry a

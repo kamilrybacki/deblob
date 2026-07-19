@@ -364,6 +364,42 @@ pub async fn serve(
     let value_profiles: Arc<dyn deblob_core::ports::ValueProfileStore> =
         Arc::new(deblob_redis::RedisValueProfile::connect(&secrets.redis_url).await?);
 
+    // Redacted troubleshooting sample store (joint design dc-samples-dlp-1907):
+    // capture is OFF unless `[samples].enabled` AND a DEDICATED volatile Redis
+    // url is supplied (`DEBLOB_SAMPLES_REDIS_URL`) — fail-safe toward NOT
+    // storing payloads. Never the vault's Redis (RDB/AOF outlive the TTL).
+    let sample_capture_cfg = crate::sample_capture::SampleCaptureCfg {
+        enabled: app_config.samples.enabled,
+        capture_sources: app_config.samples.capture_sources.clone(),
+        max_input_bytes: app_config.samples.max_input_bytes,
+        max_sample_bytes: app_config.samples.max_sample_bytes,
+        dlp: deblob_dlp::DlpConfig::default(),
+    };
+    let sample_store: Option<Arc<dyn deblob_core::ports::SampleStore>> = if app_config.samples.enabled
+    {
+        match &secrets.samples_redis_url {
+            Some(url) => Some(Arc::new(
+                deblob_redis::RedisSampleStore::connect(
+                    url,
+                    deblob_redis::SampleStoreOpts {
+                        max_per_candidate: app_config.samples.max_per_candidate,
+                        retention_secs: app_config.samples.retention_secs,
+                        key_ttl_secs: app_config.samples.key_ttl_secs,
+                    },
+                )
+                .await?,
+            )),
+            None => {
+                tracing::warn!(
+                    "[samples].enabled but DEBLOB_SAMPLES_REDIS_URL is unset — sample capture stays OFF"
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     // The health gate's background probe needs its OWN connection —
     // `RedisRegistry::conn()` is crate-private to `deblob-redis`, by
     // design (spec §6: the gate is a separate runtime concern from the
@@ -434,6 +470,8 @@ pub async fn serve(
         umbrellas,
         sources,
         value_profiles,
+        samples: sample_store.clone(),
+        samples_read_token: secrets.samples_read_token.clone().map(|t| SecretToken::new(&t)),
         enforce_value_guard: app_config.umbrella.enforce_value_guard,
         umbrella_min_support: app_config.umbrella.min_value_support,
     };
@@ -489,6 +527,8 @@ pub async fn serve(
         discovery_topic: app_config.kafka.discovery_topic.clone(),
         limits: app_config.limits.to_limits(),
         sasl: secrets.kafka_sasl.clone(),
+        sample_store: sample_store.clone(),
+        sample_capture: sample_capture_cfg,
     };
     let discovery_shutdown = shutdown.clone();
     let discovery_cold_lane = cold_lane.clone();
@@ -621,6 +661,8 @@ mod tests {
             kafka_sasl: None,
             slm_api_token: slm_api_token.map(str::to_string),
             http_ingest_token: None,
+            samples_redis_url: None,
+            samples_read_token: None,
         }
     }
 
@@ -824,6 +866,8 @@ mod tests {
             kafka_sasl: None,
             slm_api_token: None,
             http_ingest_token: Some("ingest-secret".to_string()),
+            samples_redis_url: None,
+            samples_read_token: None,
         };
 
         let wiring = build_http_proxy_wiring(&http_proxy, &config, &secrets_with_token)

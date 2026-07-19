@@ -13,6 +13,7 @@ pub mod index;
 pub mod lua;
 pub mod registry;
 pub mod semantic;
+pub mod samples;
 pub mod source_registry;
 pub mod umbrella;
 pub mod value_profile;
@@ -25,6 +26,7 @@ pub use feedback_store::{
 };
 pub use health::{HealthGate, HealthState, PersistenceHealth};
 pub use source_registry::RedisSourceRegistry;
+pub use samples::{RedisSampleStore, SampleStoreOpts};
 pub use umbrella::RedisUmbrella;
 pub use value_profile::RedisValueProfile;
 pub use index::{bucket_key, bucket_member};

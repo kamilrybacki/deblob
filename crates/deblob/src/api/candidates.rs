@@ -14,6 +14,68 @@ use crate::promote::PromoteRequest;
 
 const DEFAULT_LIMIT: usize = 50;
 
+/// `GET /api/v1/candidates/{cand_id}/samples` — the redacted troubleshooting
+/// samples for a candidate (joint design `dc-samples-dlp-1907`).
+///
+/// Gated by the SEPARATE `samples:read` capability (header
+/// `X-Samples-Read-Token`), distinct from the ordinary API bearer — DLP is
+/// probabilistic so raw-derived content is need-to-know. Returns 404 when the
+/// feature is off (no store / no read token configured) so its existence isn't
+/// probeable. RE-RUNS the current DLP detector over every stored document on
+/// read (protecting against samples sanitized by an older detector), sets
+/// `Cache-Control: private, no-store` + `X-Content-Type-Options: nosniff`, and
+/// audits ONLY actor-less metadata (candidate/source/count) — never a body.
+pub async fn get_candidate_samples(
+    State(state): State<ApiState>,
+    headers: axum::http::HeaderMap,
+    Path(cand_id): Path<String>,
+) -> Result<Response, ApiError> {
+    // Feature must be fully configured, else it does not exist (404).
+    let (store, read_token) = match (&state.samples, &state.samples_read_token) {
+        (Some(s), Some(t)) => (s, t),
+        _ => return Err(ApiError::not_found("sample store not enabled")),
+    };
+    // Separate samples:read capability (constant-time compare via SecretToken).
+    let provided = headers
+        .get("x-samples-read-token")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    if !read_token.verify(provided) {
+        return Err(ApiError::forbidden("samples:read capability required"));
+    }
+    let id = CandidateId::parse(&cand_id)
+        .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+
+    let mut samples = store.list_samples(&id, 20).await.map_err(ApiError::from_core)?;
+    // Re-run the CURRENT DLP over each stored (already-redacted) document.
+    let dlp = deblob_dlp::DlpConfig::default();
+    let mut source = String::new();
+    for s in &mut samples {
+        source = s.source_id.clone();
+        let out = deblob_dlp::redact(&s.document, &dlp);
+        s.document = out.document;
+    }
+
+    // Audit: metadata only, NEVER a document body (spec §9 / Hermes review).
+    tracing::info!(
+        target: "samples_access",
+        candidate = id.as_str(),
+        source = %source,
+        count = samples.len(),
+        "samples:read served"
+    );
+
+    let body = serde_json::to_string(&ListResponse { data: samples, next_cursor: None })
+        .map_err(|e| ApiError::unavailable(e.to_string()))?;
+    let mut resp = (StatusCode::OK, body).into_response();
+    let h = resp.headers_mut();
+    h.insert("content-type", HeaderValue::from_static("application/json"));
+    h.insert("cache-control", HeaderValue::from_static("private, no-store"));
+    h.insert("pragma", HeaderValue::from_static("no-cache"));
+    h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    Ok(resp)
+}
+
 /// Header used to record who's performing an administrative action, since
 /// P1 ships a single shared bearer token rather than per-caller identities
 /// (spec §8 only requires "Bearer/API-key auth from env"). Task 14's audit

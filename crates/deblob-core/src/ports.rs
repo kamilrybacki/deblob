@@ -458,6 +458,91 @@ pub trait EvidenceStore: Send + Sync {
     }
 }
 
+/// One redacted troubleshooting sample (joint design `dc-samples-dlp-1907`).
+/// Built ONLY from DLP-redacted output — `document` never contains a raw
+/// payload value. Persisted opaquely by the [`SampleStore`]; `redaction_counts`
+/// is carried as JSON so `deblob-core` needn't depend on `deblob-dlp`.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SampleRecord {
+    /// Idempotency key = hash(source_id, topic, partition, offset). An
+    /// at-least-once consumer replay of the same coordinate must NOT create a
+    /// duplicate; the store dedups on this.
+    pub sample_id: String,
+    pub source_id: String,
+    pub candidate_id: CandidateId,
+    pub captured_at_ms: i64,
+    /// The DLP detector-set version that produced `document` (readers re-run
+    /// the current detector and can tell what generated the stored form).
+    pub dlp_version: String,
+    /// Per-finding counts (`{sensitive_key, secret_pattern, …}`), opaque JSON.
+    pub redaction_counts: serde_json::Value,
+    /// Whether structure-aware size limiting dropped fields/array tails.
+    pub truncated: bool,
+    /// The REDACTED document — visible markers in place of any secret/PII.
+    pub document: serde_json::Value,
+}
+
+/// Bounded, idempotent, age+count-pruned store of redacted troubleshooting
+/// samples per candidate (joint design `dc-samples-dlp-1907`). Backed by a
+/// DEDICATED, VOLATILE Redis instance — never the permanent vault's (whose
+/// RDB/AOF/backups would outlive the retention TTL). Off the hot path.
+#[async_trait]
+pub trait SampleStore: Send + Sync {
+    /// Idempotently store one redacted sample under its RESOLVED candidate id,
+    /// then prune by age and count. Returns `true` if newly stored, `false` if
+    /// it was a replay duplicate (dedup on `sample.sample_id`).
+    async fn put_sample(&self, sample: &SampleRecord) -> Result<bool, CoreError>;
+    /// Most-recent-first samples for a candidate, up to `limit`.
+    async fn list_samples(
+        &self,
+        candidate_id: &CandidateId,
+        limit: usize,
+    ) -> Result<Vec<SampleRecord>, CoreError>;
+}
+
+/// Process-local [`SampleStore`] for tests: idempotent + count-bounded (age
+/// pruning is time-based and exercised against the Redis impl).
+#[derive(Debug)]
+pub struct InMemorySampleStore {
+    max_per_candidate: usize,
+    inner: std::sync::Mutex<std::collections::HashMap<String, Vec<SampleRecord>>>,
+}
+
+impl InMemorySampleStore {
+    pub fn new(max_per_candidate: usize) -> Self {
+        Self { max_per_candidate, inner: std::sync::Mutex::new(std::collections::HashMap::new()) }
+    }
+}
+
+#[async_trait]
+impl SampleStore for InMemorySampleStore {
+    async fn put_sample(&self, sample: &SampleRecord) -> Result<bool, CoreError> {
+        let mut map = self.inner.lock().expect("poisoned");
+        let v = map.entry(sample.candidate_id.as_str().to_string()).or_default();
+        if v.iter().any(|s| s.sample_id == sample.sample_id) {
+            return Ok(false); // replay dup
+        }
+        v.push(sample.clone());
+        v.sort_by_key(|s| s.captured_at_ms);
+        let excess = v.len().saturating_sub(self.max_per_candidate);
+        if excess > 0 {
+            v.drain(0..excess); // drop oldest
+        }
+        Ok(true)
+    }
+    async fn list_samples(
+        &self,
+        candidate_id: &CandidateId,
+        limit: usize,
+    ) -> Result<Vec<SampleRecord>, CoreError> {
+        let map = self.inner.lock().expect("poisoned");
+        Ok(map
+            .get(candidate_id.as_str())
+            .map(|v| v.iter().rev().take(limit).cloned().collect())
+            .unwrap_or_default())
+    }
+}
+
 #[async_trait]
 pub trait SchemaMatcher: Send + Sync {
     /// Pure lookup: never creates anything. Returns Known / Provisional(candidate fp) / Unresolved.

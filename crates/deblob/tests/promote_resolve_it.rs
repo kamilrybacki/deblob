@@ -131,7 +131,7 @@ async fn promoted_schema_resolves_for_concrete_message() {
         .ingest(cand_id.clone(), &node_of(payload), meta("hot-path-sim"))
         .await
         .unwrap();
-    assert_eq!(outcome, deblob::coldlane::IngestOutcome::Ingested);
+    assert!(matches!(outcome, deblob::coldlane::IngestOutcome::Ingested { .. }));
 
     let promoter = Promoter::with_policy(registry.clone(), evidence.clone(), no_guard_policy());
     let schema = promoter
@@ -174,7 +174,7 @@ async fn promoted_schema_resolves_all_observed_variants() {
         .ingest(variant_id, &node_of(variant), meta("hot-path-sim"))
         .await
         .unwrap();
-    assert_eq!(second, deblob::coldlane::IngestOutcome::Ingested);
+    assert!(matches!(second, deblob::coldlane::IngestOutcome::Ingested { .. }));
 
     // Sanity: both variants were actually recorded against base_id before
     // promotion even runs.

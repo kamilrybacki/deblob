@@ -59,6 +59,65 @@ pub struct Config {
     /// opts into enforcement, same "off unless opted in" contract as `[slm]`.
     #[serde(default)]
     pub umbrella: UmbrellaConfig,
+    /// `[samples]` — redacted troubleshooting sample capture (joint design
+    /// `dc-samples-dlp-1907`). Absent, or `enabled` unset, defaults OFF —
+    /// deblob's §9 "never store payloads" invariant holds unless an operator
+    /// explicitly opts in per trusted source.
+    #[serde(default)]
+    pub samples: SamplesConfig,
+}
+
+/// `[samples]` capture policy. Every field defaults so an absent section is
+/// fully OFF.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SamplesConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    /// Trusted source strings authorized for capture (the relay-bound source
+    /// identity — a topic name / configured origin, NEVER a producer header).
+    #[serde(default)]
+    pub capture_sources: Vec<String>,
+    #[serde(default = "default_max_per_candidate")]
+    pub max_per_candidate: usize,
+    #[serde(default = "default_retention_secs")]
+    pub retention_secs: u64,
+    #[serde(default = "default_key_ttl_secs")]
+    pub key_ttl_secs: u64,
+    #[serde(default = "default_max_input_bytes")]
+    pub max_input_bytes: usize,
+    #[serde(default = "default_max_sample_bytes")]
+    pub max_sample_bytes: usize,
+}
+
+impl Default for SamplesConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            capture_sources: Vec::new(),
+            max_per_candidate: default_max_per_candidate(),
+            retention_secs: default_retention_secs(),
+            key_ttl_secs: default_key_ttl_secs(),
+            max_input_bytes: default_max_input_bytes(),
+            max_sample_bytes: default_max_sample_bytes(),
+        }
+    }
+}
+
+fn default_max_per_candidate() -> usize {
+    20
+}
+fn default_retention_secs() -> u64 {
+    7 * 24 * 60 * 60 // 7 days
+}
+fn default_key_ttl_secs() -> u64 {
+    8 * 24 * 60 * 60 // 8 days safety-net (> retention)
+}
+fn default_max_input_bytes() -> usize {
+    65536
+}
+fn default_max_sample_bytes() -> usize {
+    8192
 }
 
 /// `[umbrella]` consolidation policy.
@@ -549,6 +608,8 @@ pub const ENV_SLM_API_TOKEN: &str = "DEBLOB_SLM_API_TOKEN";
 /// never required when unset/`false`, same "off unless explicitly
 /// configured" contract as [`ENV_SLM_API_TOKEN`].
 pub const ENV_HTTP_INGEST_TOKEN: &str = "DEBLOB_HTTP_INGEST_TOKEN";
+pub const ENV_SAMPLES_REDIS_URL: &str = "DEBLOB_SAMPLES_REDIS_URL";
+pub const ENV_SAMPLES_READ_TOKEN: &str = "DEBLOB_SAMPLES_READ_TOKEN";
 
 const DEFAULT_SASL_MECHANISM: &str = "PLAIN";
 const DEFAULT_SECURITY_PROTOCOL: &str = "SASL_SSL";
@@ -575,6 +636,19 @@ pub struct Secrets {
     /// `true`, but otherwise leaves it optional — same shape as
     /// `slm_api_token` above.
     pub http_ingest_token: Option<String>,
+    /// `DEBLOB_SAMPLES_REDIS_URL` (joint design dc-samples-dlp-1907). The
+    /// DEDICATED, VOLATILE Redis for the redacted sample store — MUST be a
+    /// separate instance from `redis_url` (the permanent vault), whose
+    /// RDB/AOF/backups would outlive the retention TTL. `Some` iff the variable
+    /// was present; sample capture stays off without it even if `[samples]
+    /// .enabled` is true.
+    pub samples_redis_url: Option<String>,
+    /// `DEBLOB_SAMPLES_READ_TOKEN` — the separate `samples:read` capability
+    /// required to VIEW redacted samples (distinct from the ordinary
+    /// `api_token`; DLP is probabilistic so raw-derived content is
+    /// need-to-know). `Some` iff present; the read endpoint 404s/403s without
+    /// it configured.
+    pub samples_read_token: Option<String>,
 }
 
 /// Hand-written (not derived): every field here is a secret value, so the
@@ -597,6 +671,14 @@ impl fmt::Debug for Secrets {
             .field(
                 "http_ingest_token",
                 &self.http_ingest_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "samples_redis_url",
+                &self.samples_redis_url.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "samples_read_token",
+                &self.samples_read_token.as_ref().map(|_| "<redacted>"),
             )
             .finish()
     }
@@ -666,6 +748,12 @@ pub fn validate_secrets(
         return Err(ConfigError::MissingEnvVar(ENV_HTTP_INGEST_TOKEN));
     }
 
+    // Sample capture is OPTIONAL: absent env vars simply leave it off (even if
+    // `[samples].enabled`), never a startup error — fail-safe toward NOT
+    // storing payloads.
+    let samples_redis_url = env(ENV_SAMPLES_REDIS_URL);
+    let samples_read_token = env(ENV_SAMPLES_READ_TOKEN);
+
     Ok(Secrets {
         api_token,
         redis_url,
@@ -673,6 +761,8 @@ pub fn validate_secrets(
         kafka_sasl,
         slm_api_token,
         http_ingest_token,
+        samples_redis_url,
+        samples_read_token,
     })
 }
 

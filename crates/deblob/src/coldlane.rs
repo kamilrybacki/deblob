@@ -65,9 +65,15 @@ pub struct SampleMeta {
 /// dropped and counted, never panicked (spec brief) — the caller sees this
 /// variant instead of an error so a burst from one source degrades
 /// observably rather than propagating as a failure.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IngestOutcome {
-    Ingested,
+    /// Successfully ingested. `candidate_id` is the RESOLVED id AFTER
+    /// generalized clustering (a raw pre-cluster `cand_id` may redirect onto an
+    /// existing candidate) — the sample store MUST key on this, not on
+    /// `DiscoveryMsg.cand_id`, or samples attach to the wrong candidate (joint
+    /// design `dc-samples-dlp-1907`). `is_new` is `true` iff no candidate
+    /// record existed under `candidate_id` before this observation.
+    Ingested { candidate_id: CandidateId, is_new: bool },
     RateLimited,
 }
 
@@ -265,7 +271,10 @@ impl ColdLane {
         // aggregate profile statistics, not per-message cursor state.
         let _ = &meta.cursor;
 
-        Ok(IngestOutcome::Ingested)
+        Ok(IngestOutcome::Ingested {
+            candidate_id: target_id,
+            is_new: is_new_candidate,
+        })
     }
 }
 
@@ -534,13 +543,13 @@ mod tests {
             .ingest(base_id.clone(), &node_of(base), meta("src-a"))
             .await
             .unwrap();
-        assert_eq!(out1, IngestOutcome::Ingested);
+        assert!(matches!(out1, IngestOutcome::Ingested { .. }));
 
         let out2 = lane
             .ingest(variant_id.clone(), &node_of(variant), meta("src-a"))
             .await
             .unwrap();
-        assert_eq!(out2, IngestOutcome::Ingested);
+        assert!(matches!(out2, IngestOutcome::Ingested { .. }));
 
         // Exactly one candidate stored, at the FIRST raw id observed
         // (base_id) — the variant clustered onto it. Scoped in a block (not
@@ -670,7 +679,7 @@ mod tests {
                 .ingest(cand_id_of(&json), &node_of(&json), meta("src-a"))
                 .await
                 .unwrap();
-            assert_eq!(out, IngestOutcome::Ingested, "sample {i} should ingest");
+            assert!(matches!(out, IngestOutcome::Ingested { .. }), "sample {i} should ingest");
         }
 
         // 11th brand-new candidate from the SAME source in the same window
@@ -690,7 +699,7 @@ mod tests {
             .ingest(cand_id_of(from_b), &node_of(from_b), meta("src-b"))
             .await
             .unwrap();
-        assert_eq!(out_b, IngestOutcome::Ingested);
+        assert!(matches!(out_b, IngestOutcome::Ingested { .. }));
         assert_eq!(evidence.candidates.lock().unwrap().len(), 11);
     }
 
@@ -721,7 +730,7 @@ mod tests {
             .ingest(cand_id_of(known), &node_of(known), meta("src-a"))
             .await
             .unwrap();
-        assert_eq!(out, IngestOutcome::Ingested);
+        assert!(matches!(out, IngestOutcome::Ingested { .. }));
     }
 
     // Task 15 (spec §11): a brand-new candidate increments

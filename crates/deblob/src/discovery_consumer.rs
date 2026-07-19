@@ -33,6 +33,7 @@ use rdkafka::topic_partition_list::{Offset, TopicPartitionList};
 use tokio_util::sync::CancellationToken;
 
 use crate::coldlane::{ColdLane, IngestOutcome, SampleMeta};
+use deblob_core::ports::SampleStore;
 
 /// How many discovery messages to process between offset commits. A
 /// crash between commits re-ingests up to this many messages on restart —
@@ -53,6 +54,12 @@ pub struct DiscoveryConsumerCfg {
     pub discovery_topic: String,
     pub limits: Limits,
     pub sasl: Option<KafkaSasl>,
+    /// Redacted troubleshooting sample capture (joint design
+    /// dc-samples-dlp-1907). `None` store = capture disabled; when present,
+    /// `sample_capture.enabled` + the per-source allowlist gate it. Off the
+    /// hot path, fail-closed.
+    pub sample_store: Option<Arc<dyn SampleStore>>,
+    pub sample_capture: crate::sample_capture::SampleCaptureCfg,
 }
 
 /// Errors [`run`] can return. A malformed individual message is never one
@@ -118,7 +125,12 @@ pub async fn run(
         if let Some(payload) = payload {
             match serde_json::from_slice::<DiscoveryMsg>(&payload) {
                 Ok(discovery) => {
-                    if let Err(err) = handle_discovery_msg(discovery, &cold_lane, &cfg.limits).await
+                    let capture = cfg
+                        .sample_store
+                        .as_ref()
+                        .map(|s| (&cfg.sample_capture, s));
+                    if let Err(err) =
+                        handle_discovery_msg(discovery, &cold_lane, &cfg.limits, capture).await
                     {
                         // Never log the payload itself — only the error
                         // variant, which carries no message contents.
@@ -168,19 +180,54 @@ pub async fn handle_discovery_msg(
     msg: DiscoveryMsg,
     cold_lane: &ColdLane,
     limits: &Limits,
+    capture: Option<(&crate::sample_capture::SampleCaptureCfg, &Arc<dyn SampleStore>)>,
 ) -> Result<IngestOutcome, DiscoveryHandleError> {
     let node =
         parse_bounded(&msg.payload, limits).map_err(|_| DiscoveryHandleError::MalformedPayload)?;
     let cand_id =
         CandidateId::parse(&msg.cand_id).map_err(|_| DiscoveryHandleError::InvalidCandidateId)?;
+    // Clone what the (off-path, best-effort) sample capture needs before `meta`
+    // moves the source/cursor into `ingest`. `Bytes` clone is a cheap refcount.
+    let cap_payload = msg.payload.clone();
+    let cap_source = msg.source.clone();
+    let cap_cursor = msg.cursor.clone();
     let meta = SampleMeta {
         source: msg.source,
         cursor: Some(msg.cursor),
     };
-    cold_lane
+    let outcome = cold_lane
         .ingest(cand_id, &node, meta)
         .await
-        .map_err(DiscoveryHandleError::Ingest)
+        .map_err(DiscoveryHandleError::Ingest)?;
+
+    // Fail-closed sample capture (joint design dc-samples-dlp-1907): only for a
+    // trusted source, keyed on the RESOLVED candidate id, DLP-redacted before
+    // store. Any failure drops the sample; ingest NEVER fails on it, and no raw
+    // payload is ever logged.
+    if let (Some((cfg, store)), IngestOutcome::Ingested { candidate_id, .. }) = (capture, &outcome) {
+        if let Some(record) = crate::sample_capture::build_sample(
+            cfg,
+            &cap_source,
+            &cap_cursor.topic,
+            cap_cursor.partition,
+            cap_cursor.offset,
+            candidate_id,
+            &cap_payload,
+            now_ms(),
+        ) {
+            if let Err(err) = store.put_sample(&record).await {
+                tracing::warn!(target: "samples", error = %err, "sample store write failed (sample dropped)");
+            }
+        }
+    }
+    Ok(outcome)
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 /// The consumer-side [`ClientConfig`]: `read_committed` (spec §3.2's rule
@@ -368,8 +415,8 @@ mod tests {
         let cand_id = cand_id_of(payload);
         let msg = discovery_msg(&cand_id, payload, "events.raw", 42);
 
-        let outcome = handle_discovery_msg(msg, &lane, &limits).await.unwrap();
-        assert_eq!(outcome, IngestOutcome::Ingested);
+        let outcome = handle_discovery_msg(msg, &lane, &limits, None).await.unwrap();
+        assert!(matches!(outcome, IngestOutcome::Ingested { .. }));
 
         let stored = evidence
             .get_candidate(&cand_id)
@@ -397,6 +444,7 @@ mod tests {
             discovery_msg(&cand_id, payload, "events.raw", 1),
             &lane,
             &limits,
+            None,
         )
         .await
         .unwrap();
@@ -404,6 +452,7 @@ mod tests {
             discovery_msg(&cand_id, payload, "events.raw", 2),
             &lane,
             &limits,
+            None,
         )
         .await
         .unwrap();
@@ -421,7 +470,7 @@ mod tests {
         let mut msg = discovery_msg(&cand_id_of(r#"{"a":1}"#), r#"{"a":1}"#, "events.raw", 0);
         msg.cand_id = "not-a-valid-cand-id".to_string();
 
-        let err = handle_discovery_msg(msg, &lane, &limits).await.unwrap_err();
+        let err = handle_discovery_msg(msg, &lane, &limits, None).await.unwrap_err();
         assert!(matches!(err, DiscoveryHandleError::InvalidCandidateId));
     }
 
@@ -435,7 +484,7 @@ mod tests {
         let mut msg = discovery_msg(&cand_id, r#"{"a":1}"#, "events.raw", 0);
         msg.payload = Bytes::from(b"not json at all".to_vec());
 
-        let err = handle_discovery_msg(msg, &lane, &limits).await.unwrap_err();
+        let err = handle_discovery_msg(msg, &lane, &limits, None).await.unwrap_err();
         assert!(matches!(err, DiscoveryHandleError::MalformedPayload));
     }
 }

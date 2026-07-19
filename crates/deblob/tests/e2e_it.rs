@@ -456,6 +456,7 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
         // `Registries`, unchanged from every pre-A1 test.
         semantic: SemanticConfig::default(),
     umbrella: Default::default(),
+        samples: Default::default(),
     };
     let secrets = Secrets {
         api_token: API_TOKEN.to_string(),
@@ -464,6 +465,8 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
         kafka_sasl: None,
         slm_api_token: None,
         http_ingest_token: None,
+        samples_redis_url: None,
+        samples_read_token: None,
     };
     // AOF is on (see `start_redis`), so the persistence gate must pass
     // WITHOUT `--unsafe-volatile` — `allow_volatile: false` here is the

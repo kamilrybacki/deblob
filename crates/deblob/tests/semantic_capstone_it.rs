@@ -537,6 +537,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
             event_types: vec![REGISTERED_EVENT.to_string()],
         },
         umbrella: Default::default(),
+        samples: Default::default(),
     };
     let secrets = Secrets {
         api_token: TOKEN.to_string(),
@@ -545,6 +546,8 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
         kafka_sasl: None,
         slm_api_token: None,
         http_ingest_token: None,
+        samples_redis_url: None,
+        samples_read_token: None,
     };
     let redis_opts = RedisOpts {
         allow_volatile: false,

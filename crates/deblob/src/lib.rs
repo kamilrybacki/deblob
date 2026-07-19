@@ -23,6 +23,7 @@ pub mod discovery_consumer;
 pub mod feedback;
 pub mod model_registry;
 pub mod policy;
+pub mod sample_capture;
 pub mod promote;
 pub mod retrain;
 pub mod retrieval;
