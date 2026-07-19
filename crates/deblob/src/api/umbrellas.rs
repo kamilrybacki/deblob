@@ -123,15 +123,108 @@ pub struct FieldContributor {
     pub source_path: String,
     pub op_count: usize,
     pub on_missing: String,
+    /// Leaf field NAME (last path segment) as observed on this child.
+    pub source_name: String,
+    /// Unit code from the child's semantic annotation, if any.
+    pub unit: Option<String>,
+    /// Coarse value-bucket summary for this child's leaf (human-readable bucket
+    /// names, e.g. `["small","large"]`) — never a raw value. Empty when no
+    /// value profile exists or the leaf carried no numbers.
+    pub value_buckets: Vec<&'static str>,
+    /// Numeric observation count backing `value_buckets` (`0` if unknown).
+    pub numeric_count: u64,
+    /// Whether this child had a durable value profile at all.
+    pub has_value_profile: bool,
 }
 
-/// Field-level lineage for one umbrella field: the gold target and every
-/// child field currently bound to it.
+/// Field-level lineage for one umbrella field: the gold target, every child
+/// field bound to it, and the SHADOW name/value corroboration evidence
+/// (joint design `dc-umbrella-signals-1907`, Stage 2 — recorded/surfaced,
+/// not enforced).
 #[derive(Debug, Serialize)]
 pub struct FieldLineage {
     pub umbrella_path: String,
     pub canonical_field_id: String,
     pub contributors: Vec<FieldContributor>,
+    pub guard: crate::umbrella_guard::FieldGuard,
+}
+
+/// Per-child-schema evidence gathered once and reused across every umbrella
+/// field that child contributes to: value-profile leaves (path → mask +
+/// numeric count) and semantic units (path → unit code).
+struct ChildInfo {
+    has_value_profile: bool,
+    leaves: std::collections::HashMap<String, (u8, u64)>,
+    units: std::collections::HashMap<String, Option<String>>,
+}
+
+/// Human-readable coarse bucket names for a mask — for display only, never
+/// reversible to a value.
+fn bucket_names(mask: u8) -> Vec<&'static str> {
+    use deblob_core::ports::value_bucket as vb;
+    let mut out = Vec::new();
+    if mask & vb::NEGATIVE != 0 {
+        out.push("negative");
+    }
+    if mask & vb::ZERO != 0 {
+        out.push("zero");
+    }
+    if mask & vb::SMALL_POSITIVE != 0 {
+        out.push("small");
+    }
+    if mask & vb::MEDIUM_POSITIVE != 0 {
+        out.push("medium");
+    }
+    if mask & vb::LARGE_POSITIVE != 0 {
+        out.push("large");
+    }
+    out
+}
+
+/// `$.a.b` → `a.b` (strip the JsonPath root prefix so it joins to a
+/// value-profile leaf path); `$.x` → `x`.
+fn leaf_path_of(json_path: &str) -> String {
+    json_path.strip_prefix("$.").unwrap_or(json_path).to_string()
+}
+
+fn leaf_name_of(leaf_path: &str) -> String {
+    leaf_path.rsplit('.').next().unwrap_or(leaf_path).to_string()
+}
+
+/// Gathers one child schema's value + unit evidence (best-effort: any missing
+/// piece degrades to "no profile"/unit `None`, never an error).
+async fn child_info(state: &ApiState, child_schema_id: &str) -> ChildInfo {
+    let mut info = ChildInfo {
+        has_value_profile: false,
+        leaves: std::collections::HashMap::new(),
+        units: std::collections::HashMap::new(),
+    };
+    let Ok(sch_id) = SchemaId::parse(child_schema_id) else {
+        return info;
+    };
+    let Ok(Some(rec)) = state.registry.get_schema(&sch_id).await else {
+        return info;
+    };
+    // Value profile leaves.
+    if let Some(vp_ref) = &rec.value_profile_ref {
+        if let Ok(Some(snap)) = state.value_profiles.get_value_profile(vp_ref).await {
+            info.has_value_profile = true;
+            for leaf in snap.leaves {
+                info.leaves
+                    .insert(leaf.path, (leaf.numeric_bucket_mask, leaf.type_counts.number));
+            }
+        }
+    }
+    // Semantic units (via the same child-field derivation the controller uses).
+    let semantic = match state.semantic.active_semantic(&sch_id).await {
+        Ok(Some((m, _, _))) => Some(m),
+        _ => None,
+    };
+    for cf in child_fields_from_schema(&rec, semantic.as_ref()) {
+        let p = leaf_path_of(&String::from(cf.path.clone()));
+        info.units.insert(p, cf.unit.map(|u| u.code));
+    }
+    info
 }
 
 /// `GET /api/v1/umbrellas/{umbrella_id}/lineage/fields` — FIELD-level lineage:
@@ -159,33 +252,65 @@ pub async fn get_field_lineage(
         .await
         .map_err(ApiError::from_umbrella_store)?;
 
-    let fields = umbrella
-        .fields
-        .iter()
-        .map(|uf| {
-            let mut contributors = Vec::new();
-            for t in &transforms {
-                for b in &t.bindings {
-                    if b.target == uf.path {
-                        contributors.push(FieldContributor {
-                            child_schema_id: t.child_schema_id.clone(),
-                            child_revision: t.child_revision.clone(),
-                            source_path: String::from(b.source.clone()),
-                            op_count: b.ops.len(),
-                            on_missing: format!("{:?}", b.on_missing),
-                        });
-                    }
+    // Gather each distinct child schema's value + unit evidence once.
+    let mut child_ids: Vec<String> = transforms.iter().map(|t| t.child_schema_id.clone()).collect();
+    child_ids.sort();
+    child_ids.dedup();
+    let mut cache: std::collections::HashMap<String, ChildInfo> = std::collections::HashMap::new();
+    for cid in &child_ids {
+        cache.insert(cid.clone(), child_info(&state, cid).await);
+    }
+
+    let mut fields = Vec::new();
+    for uf in &umbrella.fields {
+        let mut contributors = Vec::new();
+        let mut evidence = Vec::new();
+        for t in &transforms {
+            for b in &t.bindings {
+                if b.target != uf.path {
+                    continue;
                 }
+                let source_path = String::from(b.source.clone());
+                let leaf_path = leaf_path_of(&source_path);
+                let name = leaf_name_of(&leaf_path);
+                let info = cache.get(&t.child_schema_id);
+                let (mask, numeric_count) = info
+                    .and_then(|i| i.leaves.get(&leaf_path).copied())
+                    .unwrap_or((0, 0));
+                let unit = info.and_then(|i| i.units.get(&leaf_path).cloned()).flatten();
+                let has_value_profile = info.map(|i| i.has_value_profile).unwrap_or(false);
+
+                evidence.push(crate::umbrella_guard::MemberEvidence {
+                    name: name.clone(),
+                    unit: unit.clone(),
+                    mask,
+                    numeric_count,
+                    has_profile: has_value_profile,
+                });
+                contributors.push(FieldContributor {
+                    child_schema_id: t.child_schema_id.clone(),
+                    child_revision: t.child_revision.clone(),
+                    source_path,
+                    op_count: b.ops.len(),
+                    on_missing: format!("{:?}", b.on_missing),
+                    source_name: name,
+                    unit,
+                    value_buckets: bucket_names(mask),
+                    numeric_count,
+                    has_value_profile,
+                });
             }
-            // Deterministic order for a stable UI/diff.
-            contributors.sort_by(|a, b| a.child_schema_id.cmp(&b.child_schema_id));
-            FieldLineage {
-                umbrella_path: String::from(uf.path.clone()),
-                canonical_field_id: uf.canonical_field_id.as_str().to_string(),
-                contributors,
-            }
-        })
-        .collect();
+        }
+        // Deterministic order for a stable UI/diff.
+        contributors.sort_by(|a, b| a.child_schema_id.cmp(&b.child_schema_id));
+        let guard = crate::umbrella_guard::evaluate_field(&evidence);
+        fields.push(FieldLineage {
+            umbrella_path: String::from(uf.path.clone()),
+            canonical_field_id: uf.canonical_field_id.as_str().to_string(),
+            contributors,
+            guard,
+        });
+    }
 
     Ok(Json(ListResponse {
         data: fields,

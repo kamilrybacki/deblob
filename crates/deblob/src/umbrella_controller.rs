@@ -197,6 +197,13 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
             continue; // need ≥2 members with a verified transform
         }
 
+        // 3b. SHADOW name/value corroboration (joint design Stage 2): compute
+        // and LOG the per-field guard verdict, but NEVER exclude a member or
+        // change grouping — enforcement is a later, config-gated stage. This
+        // is the deterministic gate running in shadow so its behavior can be
+        // observed on real cohorts before it is allowed to block anything.
+        shadow_evaluate_guard(state, &umbrella_id, &umbrella, &member_idxs, &schemas).await;
+
         // 4. persist PROVISIONAL only (HITL gate promotes to active)
         state
             .umbrellas
@@ -209,6 +216,83 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
         created.push(umbrella_id);
     }
     Ok(created)
+}
+
+/// Shadow-mode guard evaluation for one proposed umbrella: fetches each
+/// member's durable value profile, joins per umbrella field by canonical path,
+/// and logs the [`crate::umbrella_guard`] verdict + cause codes. Best-effort,
+/// side-effect-free beyond logging — a `CONTRADICTORY` verdict is recorded,
+/// never acted on, at this stage.
+async fn shadow_evaluate_guard(
+    state: &ApiState,
+    umbrella_id: &str,
+    umbrella: &UmbrellaSchema,
+    member_idxs: &[usize],
+    schemas: &[(SchemaRecord, Vec<ChildField>)],
+) {
+    use crate::umbrella_guard::{evaluate_field, MemberEvidence};
+    use std::collections::HashMap;
+
+    // Fetch each member's value-profile leaves once (path -> (mask, count)).
+    let mut member_leaves: HashMap<usize, HashMap<String, (u8, u64)>> = HashMap::new();
+    let mut member_has_profile: HashMap<usize, bool> = HashMap::new();
+    for &i in member_idxs {
+        let rec = &schemas[i].0;
+        let mut leaves = HashMap::new();
+        let mut has = false;
+        if let Some(vp_ref) = &rec.value_profile_ref {
+            if let Ok(Some(snap)) = state.value_profiles.get_value_profile(vp_ref).await {
+                has = true;
+                for l in snap.leaves {
+                    leaves.insert(l.path, (l.numeric_bucket_mask, l.type_counts.number));
+                }
+            }
+        }
+        member_leaves.insert(i, leaves);
+        member_has_profile.insert(i, has);
+    }
+
+    for uf in &umbrella.fields {
+        let cfid = uf.canonical_field_id.as_str();
+        let mut evidence = Vec::new();
+        for &i in member_idxs {
+            // Find this member's child field carrying the umbrella field's cfid.
+            let Some(cf) = schemas[i]
+                .1
+                .iter()
+                .find(|f| f.canonical_field_id.as_ref().map(|c| c.as_str()) == Some(cfid))
+            else {
+                continue;
+            };
+            let leaf_path = {
+                let p = String::from(cf.path.clone());
+                p.strip_prefix("$.").unwrap_or(&p).to_string()
+            };
+            let name = leaf_path.rsplit('.').next().unwrap_or(&leaf_path).to_string();
+            let (mask, count) = member_leaves
+                .get(&i)
+                .and_then(|m| m.get(&leaf_path).copied())
+                .unwrap_or((0, 0));
+            evidence.push(MemberEvidence {
+                name,
+                unit: cf.unit.as_ref().map(|u| u.code.clone()),
+                mask,
+                numeric_count: count,
+                has_profile: *member_has_profile.get(&i).unwrap_or(&false),
+            });
+        }
+        let guard = evaluate_field(&evidence);
+        tracing::info!(
+            target: "umbrella_guard_shadow",
+            umbrella = umbrella_id,
+            field = String::from(uf.path.clone()),
+            cfid,
+            verdict = ?guard.value_verdict,
+            name_corroborated = guard.name_corroborated,
+            causes = ?guard.causes,
+            "shadow guard verdict (not enforced)"
+        );
+    }
 }
 
 #[cfg(test)]

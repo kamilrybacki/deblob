@@ -33,6 +33,7 @@ pub mod serve;
 pub mod shadow;
 pub mod trusted;
 pub mod umbrella_controller;
+pub mod umbrella_guard;
 pub mod value_profile;
 
 pub use deblob_match::{matcher, metrics};
