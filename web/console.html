@@ -180,6 +180,9 @@
   .cchip{font-family:var(--mono);font-size:9px;color:var(--ink2);background:var(--sunk);border:1px solid var(--line);padding:1px 5px;border-radius:4px}
   .uchip{font-family:var(--mono);font-size:10px;color:var(--accent-ink);background:var(--accent-soft);padding:1px 5px;border-radius:4px}
   .bchip{font-family:var(--mono);font-size:10px;color:var(--ink2);background:var(--sunk);border:1px solid var(--line);padding:1px 5px;border-radius:4px}
+  .privacy-note{font-size:11.5px;line-height:1.5;color:var(--ink2);background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:6px 0 12px}
+  .insp-h{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:14px 0 7px}
+  pre.synth{font-family:var(--mono);font-size:11.5px;line-height:1.5;background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:11px;overflow-x:auto;max-height:340px;color:var(--ink)}
   .cand .lineage code{background:var(--sunk);padding:1px 5px;border-radius:4px;font-family:var(--mono);color:var(--ink2)}
   .tabs{display:flex;gap:6px;margin:0 0 14px} .tab{background:var(--panel-2);border:1px solid var(--line);color:var(--ink2);padding:6px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;text-transform:capitalize} .tab.on{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
   .streamctl{display:flex;align-items:center;gap:12px;margin-bottom:10px} .streamctl #streamstat{font-size:12px}
@@ -314,7 +317,10 @@ function normCand(c){ if(!c||!c.profile) return c; // already demo-shaped
     top1_distance:(c.top1_distance!=null?c.top1_distance:'—'), margin:(c.margin!=null?c.margin:'—'),
     match_label:c.match_label,
     // data lineage carried from the candidate record
-    first_seen_ms:c.first_seen_ms, last_seen_ms:c.last_seen_ms, source:c.source}; }
+    first_seen_ms:c.first_seen_ms, last_seen_ms:c.last_seen_ms, source:c.source,
+    // raw structural profile kept for the click-through inspector (evidence +
+    // synthesized example) — never any raw payload value, only coarse counts.
+    profile:c.profile}; }
 const fmtTs=ms=>ms?new Date(ms).toLocaleString([], {dateStyle:'short', timeStyle:'short'}):'—';
 // --- OpenAPI export -------------------------------------------------------
 // Turn a learned family's flat canonical field list ({path,type,nullable}) into
@@ -407,6 +413,52 @@ V.discovery=()=>{const cs=state.data.candidates;
   const body=cs.length?cs.map(candCard).join(''):'<div class="card empty">No pending candidates. The discovery queue is clear.</div>';
   return `<div class="pagehead"><h1>Discovery queue</h1><p>Stable clusters the model has proposed a decision for. Retrieval evidence and the gate verdict are shown separately; promote/reject writes to the registry under confirmation.</p></div>${banner()}${body}`;
 };
+// --- Candidate inspector: structural evidence + a SYNTHESIZED example -------
+// deblob never stores raw payloads (privacy §9): there are no real captured
+// messages to show. The inspector surfaces the coarse observed evidence
+// (per-field type counts, presence, numeric magnitude buckets) and builds a
+// representative example message from that shape — clearly synthetic, every
+// value a typed placeholder, never an observed value.
+function domType(n){const t=(n&&n.types)||{};let best='',bc=-1;for(const k in t){if(k==='null')continue;if(t[k]>bc){bc=t[k];best=k;}}return best||'null';}
+function bucketList(nb){if(!nb)return [];const o=[];if(nb.negative)o.push('neg');if(nb.zero)o.push('zero');if(nb.small_positive)o.push('small');if(nb.medium_positive)o.push('med');if(nb.large_positive)o.push('large');return o;}
+// One representative value for a leaf, chosen from its dominant type + buckets.
+function exampleValue(n){
+  if(n.children&&Object.keys(n.children).length)return exampleObject(n);
+  if(n.array_elem||(n.types&&n.types.array))return [n.array_elem?exampleValue(n.array_elem):'sample'];
+  const t=domType(n);
+  if(t==='number'){const nb=n.numeric_buckets||{};let v=nb.large_positive?8500:nb.medium_positive?57:nb.small_positive?7:nb.negative?-42:0;return n.int_only?v:(v===0?0:v+0.5);}
+  if(t==='string')return 'sample-text';
+  if(t==='bool')return true;
+  return null;
+}
+function exampleObject(n){const o={};const ch=n.children||{};for(const k of Object.keys(ch))o[k]=exampleValue(ch[k]);return o;}
+function synthMessage(profile){try{return JSON.stringify(exampleObject((profile&&profile.root)||{}),null,2);}catch(e){return '{}';}}
+// Flat evidence rows (path, type mix, presence, nullable, buckets, int-only).
+function evidenceRows(profile){const out=[];const total=(profile&&profile.count)||0;
+  (function walk(n,pre){const ch=n.children||{};const keys=Object.keys(ch);
+    if(keys.length){for(const k of keys)walk(ch[k],pre?pre+'.'+k:k);return;}
+    if(!pre)return;
+    const t=n.types||{};const mix=Object.keys(t).filter(k=>t[k]).map(k=>`${k}×${t[k]}`).join(', ')||'—';
+    const nullable=(n.explicit_null>0)||(t.null>0);
+    out.push({path:pre,type:domType(n),mix,present:n.present||0,total,nullable,buckets:bucketList(n.numeric_buckets),int:n.int_only,arr:!!(n.array_elem||t.array)});
+  })((profile&&profile.root)||{},'');
+  return out;}
+function candidateInspect(id){
+  const c=(state.data.candidates||[]).find(x=>x.candidate_id===id);
+  if(!c){toast('Candidate not found.');return;}
+  const rows=evidenceRows(c.profile);
+  const ev=rows.length?`<div class="tw"><table><thead><tr><th>field</th><th>type</th><th>seen</th><th>observed types</th><th>magnitude</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="num">${esc(r.path)}${r.arr?' []':''}</td><td>${esc(r.type)}${r.int?' <span class="muted">int</span>':''}${r.nullable?' <span class="muted">?</span>':''}</td><td class="num muted">${r.present}${r.total?'/'+r.total:''}</td><td class="muted" style="font-size:11px">${esc(r.mix)}</td><td>${r.buckets.length?r.buckets.map(b=>`<span class="bchip">${b}</span>`).join(' '):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="font-size:12px">no fields observed</div>';
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:760px">
+    <h3>Classification inspector</h3>
+    <p class="muted num" style="font-size:11.5px">${esc(id)} · ${c.observation_count} observations · source <code>${c.source?esc(c.source):'events.raw'}</code></p>
+    <div class="privacy-note">🔒 deblob never stores raw payloads (privacy invariant). No real captured message exists — below is the <b>coarse structural evidence</b> observed across ${c.observation_count} messages, and a <b>synthesized example</b> reconstructed from that shape. Every value is a typed placeholder, never an observed value.</div>
+    <h4 class="insp-h">Observed structure (${rows.length} field${rows.length===1?'':'s'})</h4>
+    ${ev}
+    <h4 class="insp-h">Synthesized example message <span class="muted" style="font-weight:400;font-size:11px">— reconstructed from shape, not real data</span></h4>
+    <pre class="synth">${esc(synthMessage(c.profile))}</pre>
+    <div class="row2"><button class="btn" data-inspno>Close</button></div></div></div>`;
+  $('#overlay').querySelector('[data-inspno]').onclick=()=>$('#overlay').innerHTML='';
+}
 function candCard(c){
   const dc=c.slm_decision==='match_schema'?'match':c.slm_decision==='new_candidate'?'new':'abstain';
   const sub=c.slm_relation||c.slm_novelty||c.slm_cause||'';
@@ -420,7 +472,7 @@ function candCard(c){
     <div class="fields">${(c.fields||[]).map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
     <div class="lineage">⛓ lineage · first seen ${fmtTs(c.first_seen_ms)} · last ${fmtTs(c.last_seen_ms)} · ${c.observation_count} obs · source <code>${c.source?esc(c.source):'events.raw'}</code> → group <code>deblob</code> · canon <code>deblob-canon-v1</code></div>
     <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(String(c.gate||'—').replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason||'')}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance!=null?c.top1_distance:'—'} · margin ${c.margin!=null?c.margin:'—'}</span></div></div>
-    <div class="actions"><button class="btn good" data-act="promote" data-id="${esc(c.candidate_id)}" ${canPromote?'':'disabled'}>Promote</button><button class="btn risk" data-act="reject" data-id="${esc(c.candidate_id)}" ${canMutate()?'':'disabled'}>Reject</button></div></div>`;
+    <div class="actions"><button class="btn" data-inspect="${esc(c.candidate_id)}">🔍 Inspect examples</button><button class="btn good" data-act="promote" data-id="${esc(c.candidate_id)}" ${canPromote?'':'disabled'}>Promote</button><button class="btn risk" data-act="reject" data-id="${esc(c.candidate_id)}" ${canMutate()?'':'disabled'}>Reject</button></div></div>`;
 }
 function mutate(kind,id){
   const typed=kind==='promote';
@@ -647,12 +699,13 @@ function afterRender(v){
 }
 // event delegation (no inline handlers -> CSP-safe)
 $('#main').addEventListener('click',e=>{
-  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate],[data-ufl]');if(!t)return;
+  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate],[data-ufl],[data-inspect]');if(!t)return;
   if(t.dataset.tab!=null){state.tab=+t.dataset.tab;render();}
   else if(t.dataset.sch){state.sel.schema=t.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===t.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x.dataset.sch===t.dataset.sch));}
   else if(t.dataset.umbstate){$$('#umbtabs .tab').forEach(x=>x.classList.toggle('on',x===t));loadUmbrellas(t.dataset.umbstate);}
   else if(t.dataset.uact&&!t.disabled){umbMutate(t.dataset.uact,t.dataset.id);}
   else if(t.dataset.ufl){toggleFieldLineage(t.dataset.ufl);}
+  else if(t.dataset.inspect){candidateInspect(t.dataset.inspect);}
   else if(t.dataset.act&&!t.disabled){if(t.dataset.act==='export-oapi')exportOpenAPI(t.dataset.id);else mutate(t.dataset.act,t.dataset.id);}
 });
 const _app=$('.app');
