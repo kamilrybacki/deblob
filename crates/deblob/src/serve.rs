@@ -29,7 +29,8 @@ use deblob_http::{DiscoverySink, HttpProxy, HttpProxyCfg, IngestToken, KafkaDisc
 use deblob_kafka::{DiscoveryProducer, DiscoveryProducerCfg, DiscoveryProducerError};
 use deblob_kafka::{Relay, RelayCfg, StreamEvent};
 use deblob_redis::{
-    HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry, RedisUmbrella,
+    HealthGate, RedisEvidence, RedisEvidenceOpts, RedisOpts, RedisRegistry, RedisSourceRegistry,
+    RedisUmbrella,
 };
 use deblob_slm::{HttpInferencer, SemanticInferencer, SlmHttpConfig};
 use deblob_umbrella::store::UmbrellaStore;
@@ -352,6 +353,11 @@ pub async fn serve(
         .map_err(|e| AppError::Redis(CoreError::RegistryUnavailable(e.to_string())))?;
     let umbrellas: Arc<dyn UmbrellaStore> = Arc::new(RedisUmbrella::new(umbrella_conn));
 
+    // Data-source registry (spec §9 lineage): its own connection, connect-and-
+    // go (no persistence gate — it's provenance/observability, not the vault).
+    let sources: Arc<dyn deblob_core::ports::SourceRegistry> =
+        Arc::new(RedisSourceRegistry::connect(&secrets.redis_url).await?);
+
     // The health gate's background probe needs its OWN connection —
     // `RedisRegistry::conn()` is crate-private to `deblob-redis`, by
     // design (spec §6: the gate is a separate runtime concern from the
@@ -417,6 +423,7 @@ pub async fn serve(
         // annotation 422s exactly as it did before this wiring.
         semantic_registries: Arc::new(app_config.semantic.to_registries()),
         umbrellas,
+        sources,
     };
     let management_addr: SocketAddr =
         app_config

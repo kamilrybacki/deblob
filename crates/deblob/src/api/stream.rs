@@ -17,9 +17,9 @@ use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::sse::{Event, KeepAlive, Sse};
-use deblob_core::id::SchemaId;
-use deblob_core::ports::Registry;
-use deblob_kafka::StreamEvent;
+use deblob_core::id::{CandidateId, SchemaId};
+use deblob_core::ports::{EvidenceStore, Registry};
+use deblob_kafka::{StreamEvent, StreamOutcome};
 use tokio_stream::wrappers::BroadcastStream;
 use tokio_stream::{Stream, StreamExt};
 
@@ -44,6 +44,30 @@ async fn enrich_family_id(registry: &Arc<dyn Registry>, event: &StreamEvent) -> 
     event
 }
 
+/// Best-effort matched-vs-new resolution (off the hot path, this SSE consumer
+/// path only — the relay's hot path emits `NewCandidate` for EVERY provisional
+/// classification without ever querying candidate-existence state, see
+/// `deblob_kafka::StreamOutcome::NewCandidate`'s docs). Here, where an extra
+/// lookup is free, a `NewCandidate` whose `cand_` ref already carries
+/// accumulated evidence (`sample_count >= 2`, i.e. this was NOT its first
+/// sighting) is relabelled `MatchedCandidate`. `sample_count <= 1`, a lookup
+/// miss, or any store error all leave the event as `NewCandidate` — resolution
+/// must never fail the stream, and "new" is the conservative default.
+async fn resolve_matched(evidence: &Arc<dyn EvidenceStore>, event: &StreamEvent) -> StreamEvent {
+    if event.outcome != StreamOutcome::NewCandidate || !event.schema_ref.starts_with("cand_") {
+        return event.clone();
+    }
+    let mut event = event.clone();
+    if let Ok(cand_id) = CandidateId::parse(&event.schema_ref) {
+        if let Ok(Some(rec)) = evidence.get_candidate(&cand_id).await {
+            if rec.sample_count >= 2 {
+                event.outcome = StreamOutcome::MatchedCandidate;
+            }
+        }
+    }
+    event
+}
+
 /// Subscribes a fresh `Receiver` onto `state.stream_tx` for the lifetime of
 /// this SSE connection and relays every successfully-received
 /// `deblob_kafka::StreamEvent` as one `data:` JSON SSE event, best-effort
@@ -58,11 +82,14 @@ pub async fn get_stream(
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = state.stream_tx.subscribe();
     let registry = state.registry.clone();
+    let evidence = state.evidence.clone();
     let events = BroadcastStream::new(rx)
         .then(move |item| {
             let registry = registry.clone();
+            let evidence = evidence.clone();
             async move {
                 let event = item.ok()?;
+                let event = resolve_matched(&evidence, &event).await;
                 let event = enrich_family_id(&registry, &event).await;
                 let sse_event = Event::default().json_data(&event).ok()?;
                 Some(Ok(sse_event))
@@ -77,9 +104,92 @@ mod tests {
     use super::*;
     use deblob_core::envelope::SourceCursor;
     use deblob_core::error::CoreError;
-    use deblob_core::id::{CandidateId, FamilyId, FamilyVersion};
-    use deblob_core::ports::{FamilyRecord, FamilyRef, SchemaRecord};
+    use deblob_core::id::{FamilyId, FamilyVersion};
+    use deblob_core::ports::{
+        CandidateRecord, CandidateState, FamilyRecord, FamilyRef, SchemaRecord,
+    };
     use deblob_kafka::StreamOutcome;
+
+    /// Minimal `EvidenceStore` fake: `get_candidate` answers from one fixed
+    /// optional record, everything else is unreachable by `resolve_matched`.
+    struct FakeEvidence(Option<CandidateRecord>);
+
+    #[async_trait::async_trait]
+    impl EvidenceStore for FakeEvidence {
+        async fn get_candidate(
+            &self,
+            id: &CandidateId,
+        ) -> Result<Option<CandidateRecord>, CoreError> {
+            Ok(self.0.as_ref().filter(|r| &r.candidate_id == id).cloned())
+        }
+        async fn upsert_candidate(&self, _rec: CandidateRecord) -> Result<(), CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+        async fn list_candidates(
+            &self,
+            _state: CandidateState,
+            _cursor: Option<String>,
+            _limit: usize,
+        ) -> Result<(Vec<CandidateRecord>, Option<String>), CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+        async fn append_evidence(
+            &self,
+            _id: &CandidateId,
+            _stats: serde_json::Value,
+        ) -> Result<(), CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+        async fn set_state(
+            &self,
+            _id: &CandidateId,
+            _state: CandidateState,
+        ) -> Result<(), CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+        async fn get_cluster(&self, _gen_fp: &str) -> Result<Option<CandidateId>, CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+        async fn set_cluster(
+            &self,
+            _gen_fp: &str,
+            _cand_id: &CandidateId,
+        ) -> Result<(), CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+        async fn add_variant(
+            &self,
+            _cand_id: &CandidateId,
+            _bucket_key: &str,
+            _fp_b32: &str,
+        ) -> Result<(), CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+        async fn get_variants(
+            &self,
+            _cand_id: &CandidateId,
+        ) -> Result<Vec<(String, String)>, CoreError> {
+            unimplemented!("not exercised by resolve_matched")
+        }
+    }
+
+    fn candidate(id: &CandidateId, sample_count: u64) -> CandidateRecord {
+        CandidateRecord {
+            candidate_id: id.clone(),
+            profile: serde_json::json!({}),
+            sample_count,
+            first_seen_ms: 0,
+            last_seen_ms: 0,
+            state: CandidateState::Provisional,
+            source: None,
+        }
+    }
+
+    fn new_candidate_event(schema_ref: &str) -> StreamEvent {
+        let mut ev = base_event(schema_ref);
+        ev.outcome = StreamOutcome::NewCandidate;
+        ev
+    }
 
     /// Minimal `Registry` fake: `get_schema` answers from an optional fixed
     /// record, everything else is unreachable by `enrich_family_id`.
@@ -210,6 +320,55 @@ mod tests {
         let enriched = enrich_family_id(&registry, &event).await;
 
         assert!(enriched.family_id.is_none());
+    }
+
+    #[tokio::test]
+    async fn re_observed_candidate_is_relabelled_matched() {
+        let cand = CandidateId::from_digest(&[7u8; 32]);
+        let evidence: Arc<dyn EvidenceStore> =
+            Arc::new(FakeEvidence(Some(candidate(&cand, 5))));
+        let event = new_candidate_event(cand.as_str());
+
+        let resolved = resolve_matched(&evidence, &event).await;
+
+        assert_eq!(resolved.outcome, StreamOutcome::MatchedCandidate);
+    }
+
+    #[tokio::test]
+    async fn first_sighting_candidate_stays_new() {
+        let cand = CandidateId::from_digest(&[7u8; 32]);
+        let evidence: Arc<dyn EvidenceStore> =
+            Arc::new(FakeEvidence(Some(candidate(&cand, 1))));
+        let event = new_candidate_event(cand.as_str());
+
+        let resolved = resolve_matched(&evidence, &event).await;
+
+        assert_eq!(resolved.outcome, StreamOutcome::NewCandidate);
+    }
+
+    #[tokio::test]
+    async fn unknown_candidate_stays_new() {
+        let evidence: Arc<dyn EvidenceStore> = Arc::new(FakeEvidence(None));
+        let event = new_candidate_event(CandidateId::from_digest(&[3u8; 32]).as_str());
+
+        let resolved = resolve_matched(&evidence, &event).await;
+
+        assert_eq!(resolved.outcome, StreamOutcome::NewCandidate);
+    }
+
+    #[tokio::test]
+    async fn non_new_candidate_outcome_is_left_alone() {
+        // A `Tagged` event (schema_ref is a sch_ id) must never be probed as
+        // a candidate — resolution only ever touches NewCandidate events.
+        let cand = CandidateId::from_digest(&[7u8; 32]);
+        let evidence: Arc<dyn EvidenceStore> =
+            Arc::new(FakeEvidence(Some(candidate(&cand, 99))));
+        let mut event = base_event("sch_whatever");
+        event.outcome = StreamOutcome::Tagged;
+
+        let resolved = resolve_matched(&evidence, &event).await;
+
+        assert_eq!(resolved.outcome, StreamOutcome::Tagged);
     }
 
     #[tokio::test]

@@ -13,6 +13,7 @@ pub mod index;
 pub mod lua;
 pub mod registry;
 pub mod semantic;
+pub mod source_registry;
 pub mod umbrella;
 
 pub use evidence::{RedisEvidence, RedisEvidenceOpts};
@@ -22,6 +23,7 @@ pub use feedback_store::{
     SAFETY_SUITE_DEDUP_PREFIX,
 };
 pub use health::{HealthGate, HealthState, PersistenceHealth};
+pub use source_registry::RedisSourceRegistry;
 pub use umbrella::RedisUmbrella;
 pub use index::{bucket_key, bucket_member};
 pub use registry::{RedisOpts, RedisRegistry};

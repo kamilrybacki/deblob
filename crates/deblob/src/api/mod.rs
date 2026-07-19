@@ -10,6 +10,7 @@ pub mod auth;
 pub mod candidates;
 pub mod schemas;
 pub mod semantic;
+pub mod sources;
 pub mod stream;
 pub mod umbrellas;
 
@@ -20,7 +21,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
-use deblob_core::ports::{EvidenceStore, Registry};
+use deblob_core::ports::{EvidenceStore, Registry, SourceRegistry};
 use deblob_redis::health::HealthGate;
 use deblob_semantic::Registries;
 use deblob_umbrella::store::UmbrellaStore;
@@ -56,6 +57,11 @@ pub struct ApiState {
     /// raw endpoint). `Arc<dyn UmbrellaStore>`, same trait-object pattern
     /// as every other injected dependency on this struct.
     pub umbrellas: Arc<dyn UmbrellaStore>,
+    /// Durable data-source registry (spec §9 lineage): every distinct source
+    /// observed gets a stable `src_` id, surfaced via `GET /api/v1/sources`
+    /// and populated off-path by `POST /api/v1/sources/reconcile`. Same
+    /// `Arc<dyn …>` injection pattern as every other store here.
+    pub sources: Arc<dyn SourceRegistry>,
     /// Live-stream tap (Stage L1, payload-free): `GET /api/v1/stream`
     /// subscribes a fresh `Receiver` from this per SSE connection
     /// (`Sender::subscribe`, cheap and `Clone`-free — the `Sender` itself
@@ -302,6 +308,13 @@ pub fn router(state: ApiState) -> Router {
             "/umbrellas/{umbrella_id}/lineage",
             get(umbrellas::get_lineage),
         )
+        .route(
+            "/umbrellas/{umbrella_id}/lineage/fields",
+            get(umbrellas::get_field_lineage),
+        )
+        .route("/sources", get(sources::list_sources))
+        .route("/sources/reconcile", post(sources::reconcile))
+        .route("/sources/{source_id}", get(sources::get_source))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,

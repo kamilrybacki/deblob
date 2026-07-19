@@ -47,6 +47,30 @@ macro_rules! digest_id {
 digest_id!(SchemaId, "sch_");
 digest_id!(CandidateId, "cand_");
 digest_id!(SemanticId, "sem_");
+digest_id!(SourceId, "src_");
+
+impl SourceId {
+    /// Stable content-addressed identity for a data SOURCE (the Kafka topic
+    /// — or other source identity, e.g. the HTTP proxy's `origin_prefix` — a
+    /// record was consumed from). A pure function of the source string only
+    /// (no clock, no random), so the SAME source name always maps to the
+    /// IDENTICAL `src_` id: the `SourceRegistry` (spec §9 lineage) can
+    /// therefore register idempotently and every observer derives the same
+    /// id without coordinating.
+    ///
+    /// Domain-separated from [`CandidateId::from_source_and_digest`]'s use of
+    /// the same source string: there the source folds into a candidate's
+    /// SHAPE digest; here it is the whole preimage, tagged with a distinct
+    /// prefix byte so a `src_` id can never collide with the source-folded
+    /// half of a `cand_` preimage.
+    pub fn from_source(source: &str) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(b"s"); // domain tag: source-identity preimage
+        hasher.update(source.as_bytes());
+        let digest: [u8; 32] = hasher.finalize().into();
+        Self::from_digest(&digest)
+    }
+}
 
 impl CandidateId {
     /// Source-scoped candidate identity (Hermes lineage gap 3, spec §4/§9):
@@ -220,6 +244,20 @@ mod tests {
         assert!(SchemaId::parse("cand_abc").is_err());
         assert!(SchemaId::parse("sch_!!!").is_err());
         assert!(CandidateId::parse("sch_abc").is_err());
+    }
+
+    #[test]
+    fn source_id_from_source_is_deterministic_and_distinct() {
+        let a1 = SourceId::from_source("events.grid.carbonintensity");
+        let a2 = SourceId::from_source("events.grid.carbonintensity");
+        let b = SourceId::from_source("events.compute.azure");
+        assert!(a1.as_str().starts_with("src_"));
+        assert_eq!(a1, a2, "same source name -> identical id");
+        assert_ne!(a1, b, "different sources -> different ids");
+        assert_eq!(SourceId::parse(a1.as_str()).unwrap(), a1);
+        // Domain separation: a src_ id must not parse as another dimension.
+        assert!(SchemaId::parse(a1.as_str()).is_err());
+        assert!(SourceId::parse("sch_abc").is_err());
     }
 
     #[test]

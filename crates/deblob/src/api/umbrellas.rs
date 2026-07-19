@@ -112,6 +112,87 @@ pub async fn get_lineage(
     Ok(Json(DataEnvelope { data: assertion }))
 }
 
+/// One child schema's contribution to a single umbrella field: which child
+/// field path feeds it, under which pinned child revision, and how (op-chain
+/// length + missing-handling). Derived purely from the persisted
+/// `ChildTransform` bindings — no separate storage.
+#[derive(Debug, Serialize)]
+pub struct FieldContributor {
+    pub child_schema_id: String,
+    pub child_revision: String,
+    pub source_path: String,
+    pub op_count: usize,
+    pub on_missing: String,
+}
+
+/// Field-level lineage for one umbrella field: the gold target and every
+/// child field currently bound to it.
+#[derive(Debug, Serialize)]
+pub struct FieldLineage {
+    pub umbrella_path: String,
+    pub canonical_field_id: String,
+    pub contributors: Vec<FieldContributor>,
+}
+
+/// `GET /api/v1/umbrellas/{umbrella_id}/lineage/fields` — FIELD-level lineage:
+/// for every field of the umbrella, which child schemas + child field paths
+/// feed it (from the persisted `ChildTransform` bindings). Complements the
+/// schema-level `/lineage` assertion. 404 if the umbrella doesn't exist.
+///
+/// A pure read-model over what `approve`/the controller already persisted —
+/// no new storage, no migration: `list_transforms` + the umbrella's own field
+/// set are joined here, in the handler, on `binding.target == field.path`.
+pub async fn get_field_lineage(
+    State(state): State<ApiState>,
+    Path(umbrella_id): Path<String>,
+) -> Result<Json<ListResponse<FieldLineage>>, ApiError> {
+    let umbrella = state
+        .umbrellas
+        .get_umbrella(&umbrella_id)
+        .await
+        .map_err(ApiError::from_umbrella_store)?
+        .ok_or_else(|| ApiError::not_found("umbrella not found"))?
+        .schema;
+    let transforms = state
+        .umbrellas
+        .list_transforms(&umbrella_id)
+        .await
+        .map_err(ApiError::from_umbrella_store)?;
+
+    let fields = umbrella
+        .fields
+        .iter()
+        .map(|uf| {
+            let mut contributors = Vec::new();
+            for t in &transforms {
+                for b in &t.bindings {
+                    if b.target == uf.path {
+                        contributors.push(FieldContributor {
+                            child_schema_id: t.child_schema_id.clone(),
+                            child_revision: t.child_revision.clone(),
+                            source_path: String::from(b.source.clone()),
+                            op_count: b.ops.len(),
+                            on_missing: format!("{:?}", b.on_missing),
+                        });
+                    }
+                }
+            }
+            // Deterministic order for a stable UI/diff.
+            contributors.sort_by(|a, b| a.child_schema_id.cmp(&b.child_schema_id));
+            FieldLineage {
+                umbrella_path: String::from(uf.path.clone()),
+                canonical_field_id: uf.canonical_field_id.as_str().to_string(),
+                contributors,
+            }
+        })
+        .collect();
+
+    Ok(Json(ListResponse {
+        data: fields,
+        next_cursor: None,
+    }))
+}
+
 /// `GET /api/v1/umbrellas/{umbrella_id}/transforms`.
 pub async fn list_transforms(
     State(state): State<ApiState>,

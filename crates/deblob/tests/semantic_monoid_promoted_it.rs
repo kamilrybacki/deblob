@@ -148,6 +148,7 @@ fn state(registry: Arc<RedisRegistry>, semantic: RedisRegistry) -> ApiState {
         semantic: Arc::new(semantic),
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
         umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
+        sources: Arc::new(deblob_core::ports::InMemorySourceRegistry::default()),
         stream_tx: tokio::sync::broadcast::channel(16).0,
     }
 }

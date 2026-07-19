@@ -322,9 +322,135 @@ pub trait SchemaMatcher: Send + Sync {
     ) -> crate::id::SchemaRef;
 }
 
+/// One registered data SOURCE (spec §9 lineage). Identity (`source_id`) is a
+/// pure function of `name` ([`SourceId::from_source`]), so registration is
+/// idempotent and every observer derives the same id. `first_seen_ms`/
+/// `last_seen_ms` bound the window this source has been observed over;
+/// provenance/observability only, never read back as a key by this crate.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct SourceRecord {
+    pub source_id: SourceId,
+    pub name: String,
+    pub first_seen_ms: i64,
+    pub last_seen_ms: i64,
+}
+
+/// A durable registry of the data sources the service has observed, keyed by
+/// the content-addressed [`SourceId`] (Hermes lineage gap: give every source
+/// a stable id the UI/lineage can reference instead of a raw topic string).
+///
+/// Deliberately NOT on the hot path: registration happens off-path (cold-lane
+/// ingest and the `POST /sources/reconcile` backfill that scans candidates'
+/// `source` fields), never from the deterministic relay — the same posture as
+/// the stream tap's `family_id`/matched-vs-new enrichment.
+#[async_trait]
+pub trait SourceRegistry: Send + Sync {
+    /// Idempotent upsert of a source by `name`: mints/returns its stable
+    /// [`SourceId`], sets `first_seen_ms` on first registration and never
+    /// moves it backward, and advances `last_seen_ms` to `max(existing,
+    /// observed_at_ms)`. Re-run safe: registering the same name twice yields
+    /// the same record (only `last_seen_ms` may advance).
+    async fn register_source(
+        &self,
+        name: &str,
+        observed_at_ms: i64,
+    ) -> Result<SourceRecord, CoreError>;
+    async fn get_source(&self, id: &SourceId) -> Result<Option<SourceRecord>, CoreError>;
+    /// Every registered source, unordered (callers sort for display).
+    async fn list_sources(&self) -> Result<Vec<SourceRecord>, CoreError>;
+}
+
+/// A process-local [`SourceRegistry`] for tests and in-memory deployments —
+/// same idempotent-upsert / monotonic-timestamp semantics as the Redis
+/// backend, without a store. Keyed by the content-addressed [`SourceId`].
+#[derive(Debug, Default)]
+pub struct InMemorySourceRegistry {
+    inner: std::sync::Mutex<std::collections::HashMap<String, SourceRecord>>,
+}
+
+#[async_trait]
+impl SourceRegistry for InMemorySourceRegistry {
+    async fn register_source(
+        &self,
+        name: &str,
+        observed_at_ms: i64,
+    ) -> Result<SourceRecord, CoreError> {
+        let id = SourceId::from_source(name);
+        let mut map = self.inner.lock().expect("poisoned");
+        let rec = map
+            .entry(id.as_str().to_string())
+            .and_modify(|r| {
+                r.first_seen_ms = r.first_seen_ms.min(observed_at_ms);
+                r.last_seen_ms = r.last_seen_ms.max(observed_at_ms);
+            })
+            .or_insert_with(|| SourceRecord {
+                source_id: id.clone(),
+                name: name.to_string(),
+                first_seen_ms: observed_at_ms,
+                last_seen_ms: observed_at_ms,
+            });
+        Ok(rec.clone())
+    }
+
+    async fn get_source(&self, id: &SourceId) -> Result<Option<SourceRecord>, CoreError> {
+        Ok(self.inner.lock().expect("poisoned").get(id.as_str()).cloned())
+    }
+
+    async fn list_sources(&self) -> Result<Vec<SourceRecord>, CoreError> {
+        Ok(self.inner.lock().expect("poisoned").values().cloned().collect())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Minimal executor: `InMemorySourceRegistry`'s futures have no real
+    /// await points (their bodies are synchronous), so a single poll under a
+    /// no-op waker always yields `Ready` — no runtime dependency needed.
+    fn block_on<F: std::future::Future>(mut fut: F) -> F::Output {
+        use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+        fn noop(_: *const ()) {}
+        fn clone(_: *const ()) -> RawWaker {
+            RawWaker::new(std::ptr::null(), &VTABLE)
+        }
+        static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+        let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+        let mut cx = Context::from_waker(&waker);
+        // Safety: `fut` is owned and never moved after being pinned here.
+        let mut fut = unsafe { std::pin::Pin::new_unchecked(&mut fut) };
+        loop {
+            if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
+                return v;
+            }
+        }
+    }
+
+    #[test]
+    fn in_memory_source_registry_is_idempotent_and_monotonic() {
+        let reg = InMemorySourceRegistry::default();
+        let name = "events.grid.carbonintensity";
+
+        let first = block_on(reg.register_source(name, 100)).unwrap();
+        assert!(first.source_id.as_str().starts_with("src_"));
+        assert_eq!((first.first_seen_ms, first.last_seen_ms), (100, 100));
+
+        // Later sighting advances last_seen, never first_seen; same id.
+        let later = block_on(reg.register_source(name, 250)).unwrap();
+        assert_eq!(later.source_id, first.source_id);
+        assert_eq!((later.first_seen_ms, later.last_seen_ms), (100, 250));
+
+        // An EARLIER sighting lowers first_seen, never last_seen.
+        let earlier = block_on(reg.register_source(name, 40)).unwrap();
+        assert_eq!((earlier.first_seen_ms, earlier.last_seen_ms), (40, 250));
+
+        // A distinct source is a distinct record; both are listed.
+        block_on(reg.register_source("events.compute.azure", 500)).unwrap();
+        let all = block_on(reg.list_sources()).unwrap();
+        assert_eq!(all.len(), 2);
+        let got = block_on(reg.get_source(&first.source_id)).unwrap().unwrap();
+        assert_eq!(got.name, name);
+    }
 
     /// Pre-P2-D serialized `SchemaRecord` JSON (lacking `semantic`,
     /// `semantic_fingerprint`, AND `privacy_class` entirely) must still
