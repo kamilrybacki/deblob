@@ -183,6 +183,8 @@
   .privacy-note{font-size:11.5px;line-height:1.5;color:var(--ink2);background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:9px 11px;margin:6px 0 12px}
   .insp-h{font-size:12px;text-transform:uppercase;letter-spacing:.05em;color:var(--faint);margin:14px 0 7px}
   pre.synth{font-family:var(--mono);font-size:11.5px;line-height:1.5;background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:11px;overflow-x:auto;max-height:340px;color:var(--ink)}
+  .sample{margin-bottom:10px}
+  .smeta{font-size:10.5px;color:var(--faint);margin-bottom:4px;font-family:var(--mono)}
   .cand .lineage code{background:var(--sunk);padding:1px 5px;border-radius:4px;font-family:var(--mono);color:var(--ink2)}
   .tabs{display:flex;gap:6px;margin:0 0 14px} .tab{background:var(--panel-2);border:1px solid var(--line);color:var(--ink2);padding:6px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;text-transform:capitalize} .tab.on{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
   .streamctl{display:flex;align-items:center;gap:12px;margin-bottom:10px} .streamctl #streamstat{font-size:12px}
@@ -456,8 +458,31 @@ function candidateInspect(id){
     ${ev}
     <h4 class="insp-h">Synthesized example message <span class="muted" style="font-weight:400;font-size:11px">— reconstructed from shape, not real data</span></h4>
     <pre class="synth">${esc(synthMessage(c.profile))}</pre>
+    <h4 class="insp-h">Real samples <span class="muted" style="font-weight:400;font-size:11px">— redacted; DLP is probabilistic, treat as sensitive</span></h4>
+    <div id="realsamples"><div class="muted" style="font-size:12px">loading…</div></div>
     <div class="row2"><button class="btn" data-inspno>Close</button></div></div></div>`;
   $('#overlay').querySelector('[data-inspno]').onclick=()=>$('#overlay').innerHTML='';
+  loadRealSamples(id);
+}
+// Redacted real-sample fetch (joint design Stage 4). The samples:read capability
+// is injected server-side by the console nginx (X-Samples-Read-Token) — the same
+// posture as the API bearer. 404 = capture not enabled for this deployment.
+// Rendered ONLY via esc() (HTML-escaped text), never innerHTML of raw content.
+async function loadRealSamples(id){
+  const box=$('#realsamples');if(!box)return;
+  if(!state.live){box.innerHTML='<div class="muted" style="font-size:12px">connect to a live instance to view samples</div>';return;}
+  try{
+    const r=await fetch(state.base.replace(/\/$/,'')+'/api/v1/candidates/'+encodeURIComponent(id)+'/samples',{headers:{'Accept':'application/json'}});
+    if(r.status===404){box.innerHTML='<div class="muted" style="font-size:12px">Sample capture is not enabled for this deployment (default off). Enable per-source in <code>[samples]</code>.</div>';return;}
+    if(!r.ok){box.innerHTML='<div class="muted" style="font-size:12px">samples unavailable ('+r.status+')</div>';return;}
+    const j=await r.json();const list=(j.data||[]);
+    if(!list.length){box.innerHTML='<div class="muted" style="font-size:12px">No samples captured for this candidate yet.</div>';return;}
+    box.innerHTML=list.map(s=>{
+      const rc=s.redaction_counts||{};const red=Object.keys(rc).filter(k=>rc[k]).map(k=>esc(k)+':'+rc[k]).join(' · ')||'none';
+      let doc='';try{doc=JSON.stringify(s.document,null,2);}catch(_){doc='<unrenderable>';}
+      return `<div class="sample"><div class="smeta"><span class="num muted">${esc(shortId(s.sample_id||''))}</span> · ${fmtTs(s.captured_at_ms)} · <span class="muted">redactions: ${red}</span> · <span class="muted">${esc(s.dlp_version||'')}</span></div><pre class="synth">${esc(doc)}</pre></div>`;
+    }).join('');
+  }catch(e){box.innerHTML='<div class="muted" style="font-size:12px">samples unavailable</div>';}
 }
 function candCard(c){
   const dc=c.slm_decision==='match_schema'?'match':c.slm_decision==='new_candidate'?'new':'abstain';

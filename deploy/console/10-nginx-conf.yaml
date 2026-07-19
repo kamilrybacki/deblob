@@ -52,6 +52,12 @@ data:
         proxy_pass http://$up:9615;
         proxy_set_header Host $host;
         proxy_set_header Authorization "Bearer ${DEBLOB_API_TOKEN}";
+        # samples:read capability injected server-side (like the bearer above),
+        # so console viewers gated by Authelia can view redacted samples without
+        # holding the token. Harmless on non-samples routes (deblob ignores it).
+        proxy_set_header X-Samples-Read-Token "${DEBLOB_SAMPLES_READ_TOKEN}";
+        # Never cache API responses (samples are private, no-store).
+        proxy_cache off;
       }
       # Mgmt liveness/readiness proxied through so the console's Operations tiles
       # reflect the REAL Deblob process, not nginx. These return plain text/empty,

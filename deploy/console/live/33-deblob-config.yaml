@@ -45,3 +45,14 @@ data:
     # UNKNOWN on them.
     enforce_value_guard = false
     min_value_support = 5
+    [samples]
+    # Redacted troubleshooting sample capture (joint design dc-samples-dlp-1907).
+    # OFF by default; enabled here ONLY for the low-risk PUBLIC grid/market
+    # collectors (never a PII-bearing stream). Every sample is DLP-redacted
+    # before storage into a DEDICATED VOLATILE Redis (DEBLOB_SAMPLES_REDIS_URL);
+    # viewing needs the separate samples:read capability.
+    enabled = true
+    capture_sources = ["events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure"]
+    max_per_candidate = 20
+    retention_secs = 604800
+    max_sample_bytes = 8192

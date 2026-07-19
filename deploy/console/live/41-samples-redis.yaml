@@ -1,0 +1,46 @@
+# Dedicated VOLATILE Redis for the redacted troubleshooting sample store
+# (joint design dc-samples-dlp-1907). Persistence is fully DISABLED (no RDB, no
+# AOF, no save points) so nothing survives the retention TTL — a DLP miss must
+# never persist in a snapshot/backup/replica. Separate INSTANCE from the vault
+# (a separate DB number is insufficient: RDB/AOF are instance-wide). No backup
+# job targets this. emptyDir storage — lost on pod restart, by design.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: samples-redis-conf, namespace: deblob}
+data:
+  redis.conf: |
+    appendonly no
+    save ""
+    maxmemory 256mb
+    maxmemory-policy allkeys-lru
+    dir /tmp
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: samples-redis, namespace: deblob, labels: {app: samples-redis}}
+spec:
+  replicas: 1
+  strategy: {type: Recreate}
+  selector: {matchLabels: {app: samples-redis}}
+  template:
+    metadata: {labels: {app: samples-redis}}
+    spec:
+      affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+      securityContext: {runAsNonRoot: true, runAsUser: 999, fsGroup: 999, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: redis
+        image: redis:7.4-alpine
+        args: [redis-server, /etc/redis/redis.conf]
+        ports: [{name: redis, containerPort: 6379}]
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: 500m, memory: 320Mi}}
+        readinessProbe: {exec: {command: [redis-cli, ping]}, initialDelaySeconds: 3, periodSeconds: 5}
+        volumeMounts: [{name: conf, mountPath: /etc/redis}, {name: data, mountPath: /tmp}]
+      volumes:
+      - {name: conf, configMap: {name: samples-redis-conf}}
+      - {name: data, emptyDir: {sizeLimit: 512Mi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: samples-redis, namespace: deblob, labels: {app: samples-redis}}
+spec: {selector: {app: samples-redis}, ports: [{port: 6379, targetPort: 6379}]}

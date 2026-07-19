@@ -25,8 +25,13 @@ spec:
         # template). The browser never holds it; Authelia gates access at the edge.
         - name: DEBLOB_API_TOKEN
           valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}
-        # Restrict envsubst to just this var so nginx's own $host/$uri/$up survive.
-        - {name: NGINX_ENVSUBST_FILTER, value: DEBLOB_API_TOKEN}
+        # samples:read capability, injected server-side into the /api/v1 proxy so
+        # Authelia-gated console viewers can see redacted samples (joint design
+        # dc-samples-dlp-1907). Browser never holds it.
+        - name: DEBLOB_SAMPLES_READ_TOKEN
+          valueFrom: {secretKeyRef: {name: deblob-secrets, key: samples_read_token}}
+        # Restrict envsubst to just these vars so nginx's own $host/$uri/$up survive.
+        - {name: NGINX_ENVSUBST_FILTER, value: "DEBLOB_API_TOKEN,DEBLOB_SAMPLES_READ_TOKEN"}
         volumeMounts:
         - {name: html, mountPath: /usr/share/nginx/html, readOnly: true}
         # ConfigMap holds default.conf.template; the image entrypoint runs envsubst
