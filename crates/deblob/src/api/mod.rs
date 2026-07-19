@@ -72,6 +72,9 @@ pub struct ApiState {
     /// with any `CONTRADICTORY` field; when `false` (default) the guard runs in
     /// shadow (logged, never enforced).
     pub enforce_value_guard: bool,
+    /// `[umbrella].min_value_support` — minimum numeric observations before a
+    /// leaf's bucket mask may drive a `CONTRADICTORY` guard verdict.
+    pub umbrella_min_support: u64,
     /// Live-stream tap (Stage L1, payload-free): `GET /api/v1/stream`
     /// subscribes a fresh `Receiver` from this per SSE connection
     /// (`Sender::subscribe`, cheap and `Clone`-free — the `Sender` itself

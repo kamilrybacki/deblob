@@ -37,3 +37,11 @@ data:
     [semantic]
     canonical_field_ids = ["cfid_amount","cfid_currency","cfid_user_id","cfid_order_id","cfid_status","cfid_timestamp","cfid_scopetest","cfid_v","cfid_w"]
     event_types = ["event.order.placed","event.user.created","event.sensor.reading","event.payment.captured"]
+    [umbrella]
+    # Value-bucket guard runs in SHADOW (records/logs, never blocks) unless
+    # enforce_value_guard is turned on. min_value_support lowered from the 30
+    # default because this homelab's grid collectors are low-volume (a dozen
+    # observations per poll window) — 30 would leave the guard permanently
+    # UNKNOWN on them.
+    enforce_value_guard = false
+    min_value_support = 5

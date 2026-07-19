@@ -62,7 +62,7 @@ pub struct Config {
 }
 
 /// `[umbrella]` consolidation policy.
-#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct UmbrellaConfig {
     /// When `true`, a proposed umbrella that has ANY field the value guard
@@ -74,6 +74,28 @@ pub struct UmbrellaConfig {
     /// should only be enabled after shadow observation on real cohorts.
     #[serde(default)]
     pub enforce_value_guard: bool,
+    /// Minimum numeric observations a leaf must carry before its bucket mask
+    /// may participate in a `CONTRADICTORY` verdict (guards early-sample bias).
+    /// Defaults to [`default_min_value_support`] (30). Low-volume deployments
+    /// (few observations per poll) may lower it so the guard is not
+    /// permanently `UNKNOWN`; below it, a mismatch never blocks.
+    #[serde(default = "default_min_value_support")]
+    pub min_value_support: u64,
+}
+
+/// Default `[umbrella].min_value_support` (Hermes review: guard early-sample
+/// bias). 30 observations.
+fn default_min_value_support() -> u64 {
+    30
+}
+
+impl Default for UmbrellaConfig {
+    fn default() -> Self {
+        Self {
+            enforce_value_guard: false,
+            min_value_support: default_min_value_support(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]

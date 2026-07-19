@@ -435,6 +435,7 @@ pub async fn serve(
         sources,
         value_profiles,
         enforce_value_guard: app_config.umbrella.enforce_value_guard,
+        umbrella_min_support: app_config.umbrella.min_value_support,
     };
     let management_addr: SocketAddr =
         app_config

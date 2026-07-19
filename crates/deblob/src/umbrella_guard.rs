@@ -19,9 +19,11 @@
 
 use serde::Serialize;
 
-/// Minimum numeric observations a leaf must carry before its mask may
+/// Default minimum numeric observations a leaf must carry before its mask may
 /// participate in a `CONTRADICTORY` verdict — guards early-sample/seasonal
-/// bias (a mismatch seen from a handful of rows must not block).
+/// bias (a mismatch seen from a handful of rows must not block). The effective
+/// value is configurable per deployment (`[umbrella].min_value_support`); this
+/// is the fallback the pure-function tests use.
 pub const MIN_SUPPORT: u64 = 30;
 
 /// Generic field names that carry no identifying signal — they never
@@ -119,7 +121,9 @@ fn units_comparable(members: &[MemberEvidence]) -> bool {
 }
 
 /// The value-bucket verdict over a field's members (see module docs).
-pub fn value_verdict(members: &[MemberEvidence]) -> ValueVerdict {
+/// `min_support` is the minimum numeric observations a leaf needs before its
+/// mask may drive a `CONTRADICTORY` verdict.
+pub fn value_verdict(members: &[MemberEvidence], min_support: u64) -> ValueVerdict {
     if members.len() < 2 {
         return ValueVerdict::Unknown;
     }
@@ -130,7 +134,7 @@ pub fn value_verdict(members: &[MemberEvidence]) -> ValueVerdict {
     // participate; masks with no numbers behind them prove nothing.
     let numeric: Vec<&MemberEvidence> = members
         .iter()
-        .filter(|m| m.has_profile && m.mask != 0 && m.numeric_count >= MIN_SUPPORT)
+        .filter(|m| m.has_profile && m.mask != 0 && m.numeric_count >= min_support)
         .collect();
     if numeric.len() < 2 {
         return ValueVerdict::Unknown;
@@ -150,8 +154,8 @@ pub fn value_verdict(members: &[MemberEvidence]) -> ValueVerdict {
 /// corroboration, and the bounded cause codes that explain the decision.
 /// `CFID_EXACT` + `TYPE_COMPATIBLE` are always present (that is precisely what
 /// the typed grouping key already guarantees for every consolidated field).
-pub fn evaluate_field(members: &[MemberEvidence]) -> FieldGuard {
-    let verdict = value_verdict(members);
+pub fn evaluate_field(members: &[MemberEvidence], min_support: u64) -> FieldGuard {
+    let verdict = value_verdict(members, min_support);
     let names: Vec<String> = members.iter().map(|m| m.name.clone()).collect();
     let corroborated = name_corroborated(&names);
 
@@ -191,8 +195,8 @@ mod tests {
             m("a", None, vb::LARGE_POSITIVE, 1000),
             m("b", None, vb::SMALL_POSITIVE, 1000),
         ];
-        assert_eq!(value_verdict(&members), ValueVerdict::Contradictory);
-        let g = evaluate_field(&members);
+        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::Contradictory);
+        let g = evaluate_field(&members, MIN_SUPPORT);
         assert!(g.causes.contains(&CauseCode::ValueProfileContradiction));
     }
 
@@ -202,7 +206,7 @@ mod tests {
             m("retailPrice", None, vb::SMALL_POSITIVE | vb::MEDIUM_POSITIVE | vb::LARGE_POSITIVE, 5000),
             m("unitPrice", None, vb::SMALL_POSITIVE | vb::MEDIUM_POSITIVE | vb::LARGE_POSITIVE, 5000),
         ];
-        assert_eq!(value_verdict(&members), ValueVerdict::Compatible);
+        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::Compatible);
     }
 
     #[test]
@@ -212,7 +216,7 @@ mod tests {
             m("amount", Some("[cents]"), vb::LARGE_POSITIVE, 1000),
             m("amount", Some("USD"), vb::SMALL_POSITIVE, 1000),
         ];
-        assert_eq!(value_verdict(&members), ValueVerdict::NotComparable);
+        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::NotComparable);
     }
 
     #[test]
@@ -221,7 +225,7 @@ mod tests {
             m("a", None, vb::LARGE_POSITIVE, 5),
             m("b", None, vb::SMALL_POSITIVE, 5),
         ];
-        assert_eq!(value_verdict(&members), ValueVerdict::Unknown);
+        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::Unknown);
     }
 
     #[test]
@@ -230,7 +234,7 @@ mod tests {
             MemberEvidence { name: "a".into(), unit: None, mask: 0, numeric_count: 0, has_profile: false },
             MemberEvidence { name: "b".into(), unit: None, mask: 0, numeric_count: 0, has_profile: false },
         ];
-        assert_eq!(value_verdict(&members), ValueVerdict::Unknown);
+        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::Unknown);
     }
 
     #[test]
@@ -254,7 +258,7 @@ mod tests {
             m("aaa", None, vb::SMALL_POSITIVE, 1000),
             m("xxx", None, vb::SMALL_POSITIVE, 1000),
         ];
-        let g = evaluate_field(&members);
+        let g = evaluate_field(&members, MIN_SUPPORT);
         assert_eq!(g.value_verdict, ValueVerdict::Compatible);
         assert!(!g.name_corroborated);
         assert!(!g.causes.contains(&CauseCode::NameCorroborated));

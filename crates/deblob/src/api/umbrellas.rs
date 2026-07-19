@@ -303,7 +303,7 @@ pub async fn get_field_lineage(
         }
         // Deterministic order for a stable UI/diff.
         contributors.sort_by(|a, b| a.child_schema_id.cmp(&b.child_schema_id));
-        let guard = crate::umbrella_guard::evaluate_field(&evidence);
+        let guard = crate::umbrella_guard::evaluate_field(&evidence, state.umbrella_min_support);
         fields.push(FieldLineage {
             umbrella_path: String::from(uf.path.clone()),
             canonical_field_id: uf.canonical_field_id.as_str().to_string(),

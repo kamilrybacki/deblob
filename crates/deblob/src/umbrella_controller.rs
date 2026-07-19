@@ -293,7 +293,7 @@ async fn shadow_evaluate_guard(
                 has_profile: *member_has_profile.get(&i).unwrap_or(&false),
             });
         }
-        let guard = evaluate_field(&evidence);
+        let guard = evaluate_field(&evidence, state.umbrella_min_support);
         if guard.value_verdict == ValueVerdict::Contradictory {
             any_contradictory = true;
         }
