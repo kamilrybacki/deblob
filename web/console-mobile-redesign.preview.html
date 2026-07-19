@@ -1,0 +1,848 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-deblob-style'; script-src 'nonce-deblob-script'; img-src 'none'; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>Deblob Console - Mobile Redesign</title>
+  <style nonce="deblob-style">
+    :root {
+      --bg:#0c0e13; --panel:#14171e; --panel-2:#1b1f28; --sunk:#101319;
+      --ink:#e8ebf1; --ink2:#9aa3b4; --faint:#5f6878; --line:#252a34; --line2:#333a47;
+      --accent:#8b95f0; --accent-soft:#20263c; --accent-ink:#aab2f6;
+      --good:#3ad696; --good-soft:#122820; --warn:#e6a94a; --warn-soft:#2a2113;
+      --risk:#f2686b; --risk-soft:#2c1618; --track:#222834;
+      --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+      --sans:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+      --sh:0 1px 2px rgba(0,0,0,.3),0 8px 22px rgba(0,0,0,.3);
+      --sh2:0 12px 50px rgba(0,0,0,.5);
+      color-scheme: dark;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:#f5f6f8; --panel:#fff; --panel-2:#eef0f4; --sunk:#f0f2f6;
+        --ink:#151922; --ink2:#4a5262; --faint:#8a92a2; --line:#e2e5ec; --line2:#cdd2dc;
+        --accent:#4b5bd6; --accent-soft:#e7e9fb; --accent-ink:#3644b8;
+        --good:#0f9d63; --good-soft:#dcf1e7; --warn:#c07d16; --warn-soft:#f6ecd6;
+        --risk:#d13f42; --risk-soft:#f8dedf; --track:#e5e8ef;
+        --sh:0 1px 2px rgba(20,25,40,.05),0 6px 18px rgba(20,25,40,.05);
+        --sh2:0 8px 40px rgba(20,25,40,.14);
+        color-scheme: light;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg:#f5f6f8; --panel:#fff; --panel-2:#eef0f4; --sunk:#f0f2f6;
+      --ink:#151922; --ink2:#4a5262; --faint:#8a92a2; --line:#e2e5ec; --line2:#cdd2dc;
+      --accent:#4b5bd6; --accent-soft:#e7e9fb; --accent-ink:#3644b8;
+      --good:#0f9d63; --good-soft:#dcf1e7; --warn:#c07d16; --warn-soft:#f6ecd6;
+      --risk:#d13f42; --risk-soft:#f8dedf; --track:#e5e8ef;
+      --sh:0 1px 2px rgba(20,25,40,.05),0 6px 18px rgba(20,25,40,.05);
+      --sh2:0 8px 40px rgba(20,25,40,.14);
+      color-scheme: light;
+    }
+    :root[data-theme="dark"] {
+      --bg:#0c0e13; --panel:#14171e; --panel-2:#1b1f28; --sunk:#101319;
+      --ink:#e8ebf1; --ink2:#9aa3b4; --faint:#5f6878; --line:#252a34; --line2:#333a47;
+      --accent:#8b95f0; --accent-soft:#20263c; --accent-ink:#aab2f6;
+      --good:#3ad696; --good-soft:#122820; --warn:#e6a94a; --warn-soft:#2a2113;
+      --risk:#f2686b; --risk-soft:#2c1618; --track:#222834;
+      --sh:0 1px 2px rgba(0,0,0,.3),0 8px 22px rgba(0,0,0,.3);
+      --sh2:0 12px 50px rgba(0,0,0,.5);
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    html { overflow-x: hidden; background: var(--bg); }
+    body {
+      margin: 0;
+      min-width: 0;
+      overflow-x: hidden;
+      background: var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.45;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    button, input { font: inherit; }
+    button {
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel-2);
+      color: var(--ink);
+      cursor: pointer;
+      transition: border-color .18s ease, background .18s ease, transform .18s ease;
+    }
+    button:hover { border-color: var(--line2); }
+    button:active { transform: translateY(1px); }
+    button:focus-visible, a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+    a { color: inherit; text-decoration: none; }
+    .num, code, pre { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding-bottom: 68px;
+    }
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 20;
+      display: grid;
+      grid-template-columns: 44px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+      border-bottom: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+    }
+    .brand { min-width: 0; display: flex; align-items: center; gap: 9px; }
+    .mark {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: grid;
+      place-items: center;
+      background: var(--accent);
+      color: #fff;
+      font-family: var(--mono);
+      font-size: 15px;
+      font-weight: 760;
+      flex: 0 0 auto;
+    }
+    .brandtext { min-width: 0; }
+    .brandtext strong { display: block; font-size: 15px; letter-spacing: -.01em; line-height: 1.1; }
+    .brandtext span { display: block; color: var(--faint); font-size: 11px; font-family: var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .top-actions { display: flex; align-items: center; gap: 8px; }
+    .iconbtn {
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      display: grid;
+      place-items: center;
+      color: var(--ink2);
+    }
+    .mode-pill {
+      min-height: 32px;
+      padding: 0 10px;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      border-radius: 999px;
+      background: var(--warn-soft);
+      color: var(--warn);
+      border: 1px solid color-mix(in srgb, var(--warn) 34%, transparent);
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 680;
+    }
+    .led { width: 7px; height: 7px; border-radius: 999px; background: currentColor; }
+    main {
+      min-width: 0;
+      width: 100%;
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 16px 12px 24px;
+    }
+    .drawer {
+      position: fixed;
+      inset: 0 auto 0 0;
+      z-index: 40;
+      width: min(86vw, 330px);
+      transform: translateX(-105%);
+      transition: transform .22s ease;
+      background: var(--panel);
+      border-right: 1px solid var(--line);
+      box-shadow: var(--sh2);
+      padding: 12px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: 12px;
+    }
+    .drawer.open { transform: translateX(0); }
+    .scrim {
+      position: fixed;
+      inset: 0;
+      z-index: 35;
+      background: rgba(4,6,10,.56);
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity .18s ease;
+    }
+    .scrim.open { opacity: 1; pointer-events: auto; }
+    .drawer-head { display: flex; align-items: center; justify-content: space-between; }
+    .nav-group { margin: 12px 0 8px; color: var(--faint); font: 700 11px/1 var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .nav-link {
+      min-height: 44px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 0 12px;
+      border-radius: 10px;
+      color: var(--ink2);
+      font-size: 14px;
+      font-weight: 560;
+    }
+    .nav-link.active { background: var(--accent-soft); color: var(--accent-ink); }
+    .drawer-foot {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--sunk);
+      color: var(--ink2);
+      font-size: 12px;
+    }
+    .bottom-tabs {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 18;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 6px;
+      padding: 7px 8px calc(7px + env(safe-area-inset-bottom));
+      background: color-mix(in srgb, var(--panel) 96%, transparent);
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(14px);
+    }
+    .tablink {
+      min-height: 50px;
+      display: grid;
+      place-items: center;
+      gap: 2px;
+      border-radius: 11px;
+      color: var(--ink2);
+      font-size: 11px;
+      font-weight: 650;
+    }
+    .tablink span:first-child { font-size: 17px; line-height: 1; }
+    .tablink.active { background: var(--accent-soft); color: var(--accent-ink); }
+    .hero {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+    .eyebrow { color: var(--faint); font: 720 11px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(24px, 7vw, 38px); line-height: 1.03; letter-spacing: -.025em; text-wrap: pretty; }
+    .hero p { color: var(--ink2); max-width: 65ch; }
+    .hero-tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      min-height: 44px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 8px 10px;
+      background: var(--panel);
+      color: var(--ink2);
+      font-size: 13px;
+    }
+    .switch { width: 38px; height: 22px; padding: 2px; border-radius: 999px; background: var(--track); }
+    .switch::after { content: ""; display: block; width: 18px; height: 18px; border-radius: 50%; background: var(--faint); transition: transform .18s ease, background .18s ease; }
+    .toggle.on .switch::after { transform: translateX(16px); background: var(--accent); }
+    .section {
+      margin-top: 18px;
+      scroll-margin-top: 76px;
+    }
+    .section-title {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 10px;
+    }
+    .section-title h2 { font-size: 18px; letter-spacing: -.01em; }
+    .section-title .meta { color: var(--faint); font: 650 11px/1.2 var(--mono); text-transform: uppercase; letter-spacing: .07em; }
+    .grid { display: grid; gap: 10px; }
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card {
+      min-width: 0;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      box-shadow: var(--sh);
+    }
+    .stat { padding: 13px; }
+    .stat .k { color: var(--faint); font: 720 10px/1.2 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+    .stat .v { margin-top: 8px; font: 720 24px/1 var(--mono); letter-spacing: -.03em; }
+    .stat .s { margin-top: 6px; color: var(--ink2); font-size: 12px; }
+    .trace-card { padding: 6px 12px 12px; }
+    .step {
+      position: relative;
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 10px;
+      padding: 13px 0;
+    }
+    .step + .step { border-top: 1px solid var(--line); }
+    .node {
+      width: 28px;
+      height: 28px;
+      margin-top: 1px;
+      border-radius: 9px;
+      display: grid;
+      place-items: center;
+      background: var(--accent-soft);
+      color: var(--accent-ink);
+      border: 1px solid color-mix(in srgb, var(--accent) 45%, transparent);
+      font: 760 12px/1 var(--mono);
+    }
+    .step h3 { font-size: 15px; line-height: 1.15; }
+    .step p { margin-top: 5px; color: var(--ink2); font-size: 13px; }
+    .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      max-width: 100%;
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--sunk);
+      color: var(--ink2);
+      font: 650 11px/1.2 var(--mono);
+      overflow-wrap: anywhere;
+    }
+    .chip.good { color: var(--good); background: var(--good-soft); border-color: color-mix(in srgb, var(--good) 34%, transparent); }
+    .chip.warn { color: var(--warn); background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 34%, transparent); }
+    .chip.risk { color: var(--risk); background: var(--risk-soft); border-color: color-mix(in srgb, var(--risk) 34%, transparent); }
+    .barset { display: grid; gap: 7px; margin-top: 9px; }
+    .barrow { display: grid; grid-template-columns: minmax(72px, 1fr) 72px; gap: 8px; align-items: center; font: 12px/1 var(--mono); color: var(--ink2); }
+    .bar { height: 8px; overflow: hidden; border-radius: 999px; background: var(--track); }
+    .bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent); }
+    .bar .w58 { width: 58%; }
+    .bar .w31 { width: 31%; }
+    .candidate { overflow: clip; }
+    .cand-head, .cand-body, .cand-actions { padding: 14px; }
+    .cand-head {
+      display: grid;
+      gap: 9px;
+      border-bottom: 1px solid var(--line);
+    }
+    .idline { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .idline code { color: var(--accent-ink); font-size: 12px; overflow-wrap: anywhere; }
+    .decision {
+      flex: 0 0 auto;
+      min-height: 30px;
+      display: inline-flex;
+      align-items: center;
+      padding: 0 9px;
+      border-radius: 999px;
+      background: var(--warn-soft);
+      color: var(--warn);
+      border: 1px solid color-mix(in srgb, var(--warn) 36%, transparent);
+      font: 760 10px/1 var(--mono);
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+    .lineage {
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      gap: 8px;
+      align-items: center;
+      color: var(--ink2);
+      font-size: 13px;
+    }
+    .lineage .arrow { color: var(--accent-ink); font-family: var(--mono); }
+    .verdict {
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid var(--line2);
+      border-radius: 12px;
+      background: var(--sunk);
+    }
+    .verdict strong { display: block; margin-bottom: 5px; font-size: 14px; }
+    .verdict p { color: var(--ink2); font-size: 13px; }
+    .metrics {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .metric { padding: 8px; border-radius: 10px; background: var(--panel-2); border: 1px solid var(--line); }
+    .metric span { display: block; color: var(--faint); font: 700 10px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+    .metric b { display: block; margin-top: 4px; font: 720 18px/1 var(--mono); }
+    .cand-actions {
+      position: sticky;
+      bottom: 68px;
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 8px;
+      background: color-mix(in srgb, var(--panel) 95%, transparent);
+      border-top: 1px solid var(--line);
+      backdrop-filter: blur(10px);
+    }
+    .primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 720; }
+    .danger { color: var(--risk); }
+    .stream-list { display: grid; gap: 8px; }
+    .stream-row {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    .stream-row.compact { gap: 6px; padding: 10px 12px; }
+    .stream-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .stream-top time { color: var(--faint); font: 650 12px/1 var(--mono); }
+    .defgrid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .defgrid div { min-width: 0; padding: 8px; border-radius: 9px; background: var(--sunk); }
+    .defgrid dt { color: var(--faint); font: 700 10px/1.2 var(--mono); text-transform: uppercase; letter-spacing: .06em; }
+    .defgrid dd { margin: 4px 0 0; color: var(--ink); font: 650 12px/1.25 var(--mono); overflow-wrap: anywhere; }
+    .side-treatment {
+      display: grid;
+      gap: 10px;
+    }
+    .micro-panel { padding: 13px; }
+    .micro-panel h3 { font-size: 15px; }
+    .micro-panel p { margin-top: 6px; color: var(--ink2); font-size: 13px; }
+    .matrix-wrap {
+      margin-top: 10px;
+      overflow-x: auto;
+      padding-bottom: 8px;
+      scrollbar-color: var(--accent) var(--track);
+    }
+    .matrix {
+      min-width: 520px;
+      display: grid;
+      grid-template-columns: 112px repeat(5, 72px);
+      gap: 4px;
+      font: 650 11px/1 var(--mono);
+    }
+    .mxh, .mxcell { min-height: 44px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--line); }
+    .mxh { color: var(--ink2); background: var(--sunk); }
+    .mxcell { color: var(--ink); background: var(--panel-2); }
+    .mxcell.hot { background: var(--accent-soft); color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+    .catalogue { display: grid; gap: 8px; margin-top: 10px; }
+    .family-row { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 10px; border-radius: 10px; background: var(--sunk); border: 1px solid var(--line); }
+    .family-row code { color: var(--accent-ink); font-size: 12px; }
+    .modal-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 50;
+      display: none;
+      align-items: end;
+      padding: 12px;
+      background: rgba(4,6,10,.7);
+    }
+    .modal-bg.open { display: flex; }
+    .modal {
+      width: 100%;
+      max-height: min(86vh, 760px);
+      overflow: auto;
+      border: 1px solid var(--line2);
+      border-radius: 16px 16px 12px 12px;
+      background: var(--panel);
+      box-shadow: var(--sh2);
+    }
+    .modal-head {
+      position: sticky;
+      top: 0;
+      z-index: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px;
+      background: var(--panel);
+      border-bottom: 1px solid var(--line);
+    }
+    .modal-head h2 { font-size: 17px; }
+    .modal-body { padding: 14px; display: grid; gap: 14px; }
+    .table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; }
+    table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 13px; }
+    th, td { padding: 10px; text-align: left; border-bottom: 1px solid var(--line); }
+    th { color: var(--faint); font: 760 11px/1 var(--mono); text-transform: uppercase; letter-spacing: .06em; background: var(--sunk); }
+    td { color: var(--ink2); }
+    tr:last-child td { border-bottom: 0; }
+    pre {
+      max-width: 100%;
+      overflow: auto;
+      margin: 0;
+      padding: 12px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: var(--sunk);
+      color: var(--ink2);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .redacted {
+      display: grid;
+      gap: 8px;
+    }
+    .sample { padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--sunk); color: var(--ink2); font-size: 13px; }
+    .port-notes {
+      margin-top: 20px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: var(--panel);
+    }
+    .port-notes ul { margin: 10px 0 0; padding-left: 20px; color: var(--ink2); }
+    .port-notes li + li { margin-top: 6px; }
+    @media (max-width: 374px) {
+      .stats, .hero-tools, .metrics, .defgrid { grid-template-columns: 1fr; }
+      .cand-actions { grid-template-columns: 1fr; }
+      .lineage { grid-template-columns: 1fr; }
+      .lineage .arrow { display: none; }
+    }
+    @media (min-width: 560px) {
+      .mode-pill { display: inline-flex; }
+      main { padding: 22px 18px 32px; }
+      .hero { grid-template-columns: minmax(0, 1fr) 260px; align-items: end; }
+      .hero-tools { align-self: end; }
+      .side-treatment { grid-template-columns: 1fr 1fr; }
+      .modal-bg { align-items: center; justify-content: center; }
+      .modal { max-width: 760px; border-radius: 16px; }
+    }
+    @media (min-width: 860px) {
+      .app {
+        grid-template-columns: 236px 1fr;
+        grid-template-rows: auto 1fr;
+        padding-bottom: 0;
+      }
+      .topbar { grid-column: 1 / 3; padding-inline: 18px; }
+      .drawer {
+        position: sticky;
+        top: 62px;
+        z-index: 5;
+        grid-row: 2;
+        transform: none;
+        width: 236px;
+        height: calc(100vh - 62px);
+        box-shadow: none;
+      }
+      .drawer .iconbtn { display: none; }
+      main { grid-column: 2; padding: 26px; }
+      .bottom-tabs, .scrim { display: none; }
+      .stats { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+      .explorer-grid { grid-template-columns: minmax(0, 1.15fr) minmax(300px, .85fr); align-items: start; }
+      .cand-actions { position: static; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .stream-row { grid-template-columns: 150px 116px 1fr; align-items: center; }
+      .stream-top { display: contents; }
+      .stream-row .defgrid { grid-column: 3; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="app" data-od-id="app-shell">
+    <header class="topbar" data-od-id="topbar">
+      <button class="iconbtn" id="openNav" aria-label="Open navigation">☰</button>
+      <div class="brand" data-od-id="brand-lockup">
+        <div class="mark" aria-hidden="true">D</div>
+        <div class="brandtext">
+          <strong>Deblob console</strong>
+          <span>operator view · synthetic demo</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <span class="mode-pill"><span class="led"></span>DEMO</span>
+        <button class="iconbtn" id="themeBtn" aria-label="Toggle theme">◐</button>
+      </div>
+    </header>
+
+    <aside class="drawer" id="drawer" aria-label="Console navigation" data-od-id="navigation-drawer">
+      <div class="drawer-head">
+        <div class="brand">
+          <div class="mark" aria-hidden="true">D</div>
+          <div class="brandtext"><strong>Deblob</strong><span>schema governance</span></div>
+        </div>
+        <button class="iconbtn" id="closeNav" aria-label="Close navigation">×</button>
+      </div>
+      <nav>
+        <div class="nav-group">Understand</div>
+        <a class="nav-link active" href="#explorer"><span>◈</span>Decision explorer</a>
+        <div class="nav-group">Learned data</div>
+        <a class="nav-link" href="#discovery"><span>◔</span>Discovery queue</a>
+        <a class="nav-link" href="#stream"><span>≋</span>Live stream</a>
+        <a class="nav-link" href="#similarity"><span>✧</span>Similarity</a>
+        <a class="nav-link" href="#catalogue"><span>≡</span>Schema catalogue</a>
+        <div class="nav-group">Governance</div>
+        <a class="nav-link" href="#governance"><span>◇</span>Model &amp; learning</a>
+        <a class="nav-link" href="#governance"><span>⚠</span>Quarantine</a>
+      </nav>
+      <div class="drawer-foot">Demo mode uses bundled synthetic data. Mutations are represented as disabled operator intents.</div>
+    </aside>
+    <div class="scrim" id="scrim" aria-hidden="true"></div>
+
+    <main data-od-id="main-content">
+      <section class="hero" data-od-id="overview">
+        <div>
+          <div class="eyebrow">Mobile-first redesign</div>
+          <h1 data-od-id="page-title">Review decisions without decoding a desktop table.</h1>
+          <p>Primary operator actions are reachable by thumb, wide data is contained locally, and every evidence surface keeps payload values synthetic or redacted.</p>
+        </div>
+        <div class="hero-tools" aria-label="Preview controls">
+          <button class="toggle" id="navMode" aria-pressed="true"><span>Bottom tabs</span><span class="switch"></span></button>
+          <button class="toggle" id="densityMode" aria-pressed="false"><span>Compact rows</span><span class="switch"></span></button>
+        </div>
+      </section>
+
+      <section id="explorer" class="section" data-od-id="decision-explorer">
+        <div class="section-title">
+          <h2>Decision explorer</h2>
+          <span class="meta">trace · 5 steps</span>
+        </div>
+        <div class="grid stats" data-od-id="stat-card-grid">
+          <article class="card stat" data-od-id="stat-learned-schemas"><div class="k">Learned schemas</div><div class="v num">412</div><div class="s">+8 today</div></article>
+          <article class="card stat" data-od-id="stat-families"><div class="k">Families</div><div class="v num">57</div><div class="s">3 pending merge</div></article>
+          <article class="card stat" data-od-id="stat-discovery"><div class="k">Discovery queue</div><div class="v num">14</div><div class="s">6 need inspection</div></article>
+          <article class="card stat" data-od-id="stat-relay"><div class="k">Relay/s</div><div class="v num">128</div><div class="s">p95 gate 41ms</div></article>
+        </div>
+        <div class="grid explorer-grid section">
+          <article class="card trace-card" data-od-id="trace-stepper">
+            <div class="step">
+              <div class="node">1</div>
+              <div><h3>Event shape captured</h3><p>Field paths are normalized before retrieval. Values are not shown in the operator surface.</p><div class="chips"><span class="chip">source: billing-ingest</span><span class="chip">shape: inv/*</span></div></div>
+            </div>
+            <div class="step">
+              <div class="node">2</div>
+              <div><h3>Retrieval candidates ranked</h3><p>Nearest schemas are compared by structural distance and family margin.</p><div class="barset"><div class="barrow"><span>invoice.v3</span><span class="bar"><i class="w58"></i></span></div><div class="barrow"><span>order.v5</span><span class="bar"><i class="w31"></i></span></div></div></div>
+            </div>
+            <div class="step">
+              <div class="node">3</div>
+              <div><h3>Model proposal</h3><p>Proposal says structural novelty, with amount and tax-rate paths driving separation.</p><div class="chips"><span class="chip warn">new candidate</span><span class="chip">novelty: structural</span></div></div>
+            </div>
+            <div class="step">
+              <div class="node">4</div>
+              <div><h3>Deterministic trust gate</h3><p>Gate defers because nearest family exceeds threshold and margin is not decisive.</p><div class="chips"><span class="chip warn">deferred_new</span><span class="chip">0.42 distance</span></div></div>
+            </div>
+            <div class="step">
+              <div class="node">5</div>
+              <div><h3>Final action</h3><p>Route to discovery queue with promotion disabled until inspector review completes.</p><div class="chips"><span class="chip good">queued</span><span class="chip">mutation locked</span></div></div>
+            </div>
+          </article>
+          <article class="card micro-panel" data-od-id="mobile-pattern-note">
+            <div class="eyebrow">Porting move</div>
+            <h3>Make the trace the main mobile object.</h3>
+            <p>The old desktop screen asks operators to scan side-by-side panels. This version lets them read the pipeline as one vertical decision story, with only the active retrieval bars expanded.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="discovery" class="section" data-od-id="discovery-queue">
+        <div class="section-title">
+          <h2>Discovery queue</h2>
+          <span class="meta">candidate card</span>
+        </div>
+        <article class="card candidate" data-od-id="candidate-card">
+          <div class="cand-head">
+            <div class="idline">
+              <code>cand_d0f631ca1ddb</code>
+              <span class="decision">new</span>
+            </div>
+            <div class="chips"><span class="chip">invoice_id:string</span><span class="chip">amount:number</span><span class="chip">tax_rate:number</span><span class="chip">currency:string</span></div>
+          </div>
+          <div class="cand-body">
+            <div class="lineage"><span>billing ingest</span><span class="arrow">→</span><span>candidate family</span></div>
+            <div class="verdict" data-od-id="candidate-verdict">
+              <strong>Gate deferred promotion</strong>
+              <p>Nearest family too far for automatic match. Review structural evidence before promoting a new schema family.</p>
+              <div class="metrics"><div class="metric"><span>Distance</span><b class="num">0.42</b></div><div class="metric"><span>Margin</span><b class="num">0.16</b></div></div>
+            </div>
+          </div>
+          <div class="cand-actions" data-od-id="candidate-actions">
+            <button class="primary" id="inspectBtn">Inspect</button>
+            <button disabled title="Demo preview only">Promote</button>
+            <button class="danger" disabled title="Demo preview only">Reject</button>
+          </div>
+        </article>
+      </section>
+
+      <section id="stream" class="section" data-od-id="live-stream">
+        <div class="section-title">
+          <h2>Live stream</h2>
+          <span class="meta">stacked row</span>
+        </div>
+        <div class="stream-list">
+          <article class="card stream-row" data-od-id="stream-row-accepted">
+            <div class="stream-top"><time>14:32:18.441</time><span class="chip good">match</span></div>
+            <dl class="defgrid">
+              <div><dt>Source</dt><dd>billing-ingest</dd></div>
+              <div><dt>Shape</dt><dd>invoice.v3</dd></div>
+              <div><dt>Dist</dt><dd>0.08</dd></div>
+              <div><dt>Action</dt><dd>relay</dd></div>
+            </dl>
+          </article>
+          <article class="card stream-row" data-od-id="stream-row-deferred">
+            <div class="stream-top"><time>14:32:21.006</time><span class="chip warn">abstain</span></div>
+            <dl class="defgrid">
+              <div><dt>Source</dt><dd>sensor-edge</dd></div>
+              <div><dt>Shape</dt><dd>telemetry/*</dd></div>
+              <div><dt>Dist</dt><dd>0.37</dd></div>
+              <div><dt>Action</dt><dd>queue</dd></div>
+            </dl>
+          </article>
+        </div>
+      </section>
+
+      <section id="similarity" class="section" data-od-id="similarity-treatment">
+        <div class="section-title">
+          <h2>Similarity</h2>
+          <span class="meta">contained scroll</span>
+        </div>
+        <article class="card micro-panel">
+          <h3>Heatmap stays wide, but the scroll is explicit.</h3>
+          <p>Cells are at least 44px tall, headers remain visible in the first column, and the scroll lives inside the module instead of the body.</p>
+          <div class="matrix-wrap" aria-label="Scrollable schema distance matrix">
+            <div class="matrix">
+              <div class="mxh">schema</div><div class="mxh">inv</div><div class="mxh">ord</div><div class="mxh">usr</div><div class="mxh">sns</div><div class="mxh">log</div>
+              <div class="mxh">invoice</div><div class="mxcell hot">self</div><div class="mxcell">.42</div><div class="mxcell">.71</div><div class="mxcell">.88</div><div class="mxcell">.64</div>
+              <div class="mxh">order</div><div class="mxcell">.42</div><div class="mxcell hot">self</div><div class="mxcell">.68</div><div class="mxcell">.79</div><div class="mxcell">.58</div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section id="catalogue" class="section" data-od-id="schema-catalogue-treatment">
+        <div class="section-title">
+          <h2>Schema catalogue</h2>
+          <span class="meta">drill-down</span>
+        </div>
+        <article class="card micro-panel">
+          <h3>List first, detail second.</h3>
+          <p>The desktop split view becomes a single-column drill-down: families list, selected family header, then canonical field table in a local scroller.</p>
+          <div class="catalogue">
+            <div class="family-row"><span>Billing events</span><code>57 schemas</code></div>
+            <div class="family-row"><span>Sensor readings</span><code>34 schemas</code></div>
+          </div>
+        </article>
+      </section>
+
+      <section id="governance" class="port-notes" data-od-id="porting-notes">
+        <div class="eyebrow">Mobile moves for porting</div>
+        <ul>
+          <li>Keep bottom tabs to the four review-heavy areas and leave the full IA in the drawer.</li>
+          <li>Turn stream rows into definition cards with labels, not wrapped table cells.</li>
+          <li>Use sticky card actions on mobile only; return actions to normal flow on desktop.</li>
+          <li>Constrain every wide artifact inside its own scroller so the body never overflows.</li>
+        </ul>
+      </section>
+    </main>
+
+    <nav class="bottom-tabs" id="bottomTabs" aria-label="Primary sections" data-od-id="bottom-tabs">
+      <a class="tablink active" href="#explorer"><span>◈</span><span>Trace</span></a>
+      <a class="tablink" href="#discovery"><span>◔</span><span>Queue</span></a>
+      <a class="tablink" href="#stream"><span>≋</span><span>Stream</span></a>
+      <a class="tablink" href="#similarity"><span>✧</span><span>Map</span></a>
+    </nav>
+  </div>
+
+  <div class="modal-bg" id="modalBg" role="dialog" aria-modal="true" aria-labelledby="modalTitle" data-od-id="classification-inspector-modal">
+    <div class="modal">
+      <div class="modal-head">
+        <div><div class="eyebrow">Classification inspector</div><h2 id="modalTitle">Structural evidence only</h2></div>
+        <button class="iconbtn" id="closeModal" aria-label="Close inspector">×</button>
+      </div>
+      <div class="modal-body">
+        <section>
+          <h3>Evidence table</h3>
+          <div class="table-scroll">
+            <table>
+              <thead><tr><th>Path</th><th>Observed type</th><th>Presence</th><th>Signal</th></tr></thead>
+              <tbody>
+                <tr><td><code>invoice_id</code></td><td>string</td><td class="num">31/31</td><td>new identifier family</td></tr>
+                <tr><td><code>amount</code></td><td>number</td><td class="num">31/31</td><td>billing numeric</td></tr>
+                <tr><td><code>tax_rate</code></td><td>number</td><td class="num">29/31</td><td>separates from order.v5</td></tr>
+                <tr><td><code>currency</code></td><td>string enum</td><td class="num">31/31</td><td>low cardinality</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+        <section>
+          <h3>Synthesized example</h3>
+          <pre aria-label="Synthetic schema example">{
+  "invoice_id": "synthetic_invoice_001",
+  "amount": 128.40,
+  "tax_rate": 0.0825,
+  "currency": "SYNTH"
+}</pre>
+        </section>
+        <section>
+          <h3>Redacted real-sample summary</h3>
+          <div class="redacted">
+            <div class="sample"><code>sample_a</code> · values removed · 4 known paths · source token redacted</div>
+            <div class="sample"><code>sample_b</code> · DLP-redacted identifiers · numeric ranges bucketed</div>
+            <div class="sample"><code>sample_c</code> · value display disabled · structure only</div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script nonce="deblob-script">
+    (function () {
+      const root = document.documentElement;
+      const drawer = document.getElementById('drawer');
+      const scrim = document.getElementById('scrim');
+      const bottomTabs = document.getElementById('bottomTabs');
+      const modalBg = document.getElementById('modalBg');
+      const compactRows = () => document.querySelectorAll('.stream-row').forEach(row => row.classList.toggle('compact'));
+      function setDrawer(open) {
+        drawer.classList.toggle('open', open);
+        scrim.classList.toggle('open', open);
+      }
+      document.getElementById('openNav').addEventListener('click', () => setDrawer(true));
+      document.getElementById('closeNav').addEventListener('click', () => setDrawer(false));
+      scrim.addEventListener('click', () => setDrawer(false));
+      document.querySelectorAll('.drawer a').forEach(link => link.addEventListener('click', () => setDrawer(false)));
+      document.getElementById('themeBtn').addEventListener('click', () => {
+        const next = root.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+        root.setAttribute('data-theme', next);
+      });
+      document.getElementById('navMode').classList.add('on');
+      document.getElementById('navMode').addEventListener('click', event => {
+        const btn = event.currentTarget;
+        const isOn = !btn.classList.contains('on');
+        btn.classList.toggle('on', isOn);
+        btn.setAttribute('aria-pressed', String(isOn));
+        bottomTabs.style.display = isOn ? '' : 'none';
+      });
+      document.getElementById('densityMode').addEventListener('click', event => {
+        const btn = event.currentTarget;
+        const isOn = !btn.classList.contains('on');
+        btn.classList.toggle('on', isOn);
+        btn.setAttribute('aria-pressed', String(isOn));
+        compactRows();
+      });
+      document.getElementById('inspectBtn').addEventListener('click', () => modalBg.classList.add('open'));
+      document.getElementById('closeModal').addEventListener('click', () => modalBg.classList.remove('open'));
+      modalBg.addEventListener('click', event => {
+        if (event.target === modalBg) modalBg.classList.remove('open');
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') {
+          setDrawer(false);
+          modalBg.classList.remove('open');
+        }
+      });
+      const anchors = [...document.querySelectorAll('.tablink, .nav-link')];
+      const sections = [...document.querySelectorAll('main > section[id]')];
+      const updateActive = () => {
+        let current = sections[0].id;
+        for (const section of sections) {
+          if (section.getBoundingClientRect().top < 140) current = section.id;
+        }
+        anchors.forEach(link => link.classList.toggle('active', link.getAttribute('href') === '#' + current));
+      };
+      document.addEventListener('scroll', updateActive, { passive: true });
+      updateActive();
+    }());
+  </script>
+</body>
+</html>

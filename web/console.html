@@ -40,14 +40,14 @@
   .top .sp{flex:1}
   .iconbtn{background:none;border:1px solid var(--line);color:var(--ink2);border-radius:8px;padding:6px 11px;font-size:12.5px;cursor:pointer;font-family:var(--sans)}
   .iconbtn:hover{border-color:var(--line2);color:var(--ink)}
-  nav{background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:2px}
-  nav a{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:9px;color:var(--ink2);text-decoration:none;font-size:13.5px;font-weight:500;cursor:pointer}
-  nav a:hover{background:var(--panel-2);color:var(--ink)}
-  nav a.on{background:var(--accent-soft);color:var(--accent-ink);font-weight:620}
-  nav a .ic{width:17px;text-align:center;opacity:.85}
-  nav .grp{font-size:10.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:14px 12px 5px}
-  nav .foot{margin-top:auto;font-size:11px;color:var(--faint);padding:10px 12px;line-height:1.5}
-  nav .foot a{display:inline;padding:0;color:var(--accent);font-weight:500}
+  #nav{background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:2px}
+  #nav a{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:9px;color:var(--ink2);text-decoration:none;font-size:13.5px;font-weight:500;cursor:pointer}
+  #nav a:hover{background:var(--panel-2);color:var(--ink)}
+  #nav a.on{background:var(--accent-soft);color:var(--accent-ink);font-weight:620}
+  #nav a .ic{width:17px;text-align:center;opacity:.85}
+  #nav .grp{font-size:10.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:14px 12px 5px}
+  #nav .foot{margin-top:auto;font-size:11px;color:var(--faint);padding:10px 12px;line-height:1.5}
+  #nav .foot a{display:inline;padding:0;color:var(--accent);font-weight:500}
   main{padding:22px clamp(16px,3vw,30px);min-width:0;overflow-x:hidden}
   .pagehead{margin:0 0 18px}
   .pagehead h1{font-size:21px;margin:0 0 4px;letter-spacing:-.01em;font-weight:660}
@@ -56,29 +56,15 @@
   .cols4{grid-template-columns:repeat(4,1fr)} .cols3{grid-template-columns:repeat(3,1fr)} .cols2{grid-template-columns:1fr 1fr}
   .navtoggle{display:none;font-size:16px;padding:5px 11px}
   #navbackdrop{display:none}
+  /* Mobile bottom tab bar — 4 primary views; the drawer keeps the full IA. Hidden on desktop. */
+  .btmtabs{position:fixed;left:0;right:0;bottom:0;z-index:30;box-sizing:border-box;height:calc(60px + env(safe-area-inset-bottom));display:none;grid-template-columns:repeat(4,1fr);align-items:stretch;gap:4px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -3px 18px rgba(0,0,0,.28)}
+  .btmtabs a{display:grid;place-content:center;justify-items:center;gap:3px;border-radius:11px;color:var(--ink2);font-size:10px;font-weight:620;letter-spacing:.01em;cursor:pointer;font-family:var(--sans)}
+  .btmtabs a .ic{font-size:18px;line-height:1;opacity:.9}
+  .btmtabs a.on{background:var(--accent-soft);color:var(--accent-ink)}
+  .btmtabs a:active{transform:translateY(1px)}
   @media(max-width:900px){.cols4{grid-template-columns:1fr 1fr}.cols3,.cols2{grid-template-columns:1fr}}
-  @media(max-width:640px){
-    .app{grid-template-columns:1fr}
-    .navtoggle{display:inline-block}
-    .top{padding:10px 13px;gap:10px}
-    #mode{display:none}
-    nav{position:fixed;top:51px;left:0;bottom:0;width:246px;z-index:40;transform:translateX(-100%);transition:transform .22s ease;overflow-y:auto;box-shadow:var(--sh2)}
-    .app.navopen nav{transform:translateX(0)}
-    #navbackdrop{display:block;position:fixed;inset:51px 0 0 0;background:rgba(10,12,18,.42);opacity:0;pointer-events:none;transition:opacity .22s;z-index:35}
-    .app.navopen #navbackdrop{opacity:1;pointer-events:auto}
-    .cols4{grid-template-columns:1fr 1fr}
-    main{padding:16px 14px}
-    .pagehead h1{font-size:19px}
-    .streamrow{display:flex;flex-wrap:wrap;gap:5px 10px;font-size:11px}
-    .streamrow>span{overflow-wrap:anywhere}
-    .nb,.retr{grid-template-columns:1fr 1fr 44px}
-    .kv{grid-template-columns:1fr}
-    .modal-bg{padding:10px}
-    .modal{padding:16px}
-    .insp-h{margin-top:16px}
-    pre.synth{font-size:11px;max-height:240px}
-  }
-  @media(max-width:400px){.brandsub{display:none}.cols4{grid-template-columns:1fr}}
+  /* Mobile overrides live at the END of this stylesheet (after all base rules) so
+     equal-specificity mobile rules win by source order — see the @media blocks below. */
   .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px;box-shadow:var(--sh)}
   .stat .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.05em;text-transform:uppercase;color:var(--faint);margin:0 0 9px}
   .stat .v{font-family:var(--mono);font-size:26px;font-weight:640;letter-spacing:-.02em;line-height:1}
@@ -207,6 +193,53 @@
   .mx.close{background:var(--good-soft);color:var(--good)} .mx.mid{background:var(--accent-soft);color:var(--accent-ink)} .mx.far{background:var(--track);color:var(--ink2)}
   .mxleg{display:flex;gap:14px;margin-top:12px;font-size:11.5px;color:var(--ink2);flex-wrap:wrap}
   .mxleg span{display:inline-flex;align-items:center;gap:6px} .mxleg i{width:14px;height:14px;border-radius:4px;display:inline-block}
+
+  /* ===== Mobile overrides — placed last so equal-specificity rules win by source order ===== */
+  @media(max-width:640px){
+    .app{grid-template-columns:1fr}
+    body{font-size:15px}
+    .navtoggle{display:inline-block}
+    .top{padding:10px 13px;gap:9px}
+    #mode{display:none}
+    /* keep the topbar within the viewport: brand can shrink, action buttons go icon-only */
+    .top .brand{min-width:0;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+    .brandsub{display:none}
+    .top .sp{flex:1;min-width:0}
+    .iconbtn .btxt{display:none}
+    #theme,#connect{padding:8px 11px;font-size:15px}
+    #nav{position:fixed;top:51px;left:0;bottom:0;width:246px;z-index:40;transform:translateX(-100%);transition:transform .22s ease;overflow-y:auto;box-shadow:var(--sh2)}
+    .app.navopen #nav{transform:translateX(0)}
+    #navbackdrop{display:block;position:fixed;inset:51px 0 0 0;background:rgba(10,12,18,.42);opacity:0;pointer-events:none;transition:opacity .22s;z-index:35}
+    .app.navopen #navbackdrop{opacity:1;pointer-events:auto}
+    /* show the bottom tab bar; pad main so content clears it */
+    .btmtabs{display:grid}
+    main{padding:16px 14px calc(80px + env(safe-area-inset-bottom))}
+    .pagehead h1{font-size:19px}
+    .cols4{grid-template-columns:1fr 1fr}
+    /* thumb-friendly candidate actions */
+    .cand .actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px}
+    .cand .actions .btn{min-height:44px;padding:9px 8px;text-align:center}
+    /* live stream: 6-column grid -> labeled definition cards */
+    .streamfeed{max-height:none;display:grid;gap:8px}
+    .streamrow{display:grid;grid-template-columns:1fr 1fr;gap:9px 10px;align-items:start;padding:11px 12px;border:1px solid var(--line);border-radius:11px;background:var(--panel)}
+    .streamrow>.st-t{grid-column:1;align-self:center;font-size:11px;color:var(--faint)}
+    .streamrow>.st-o{grid-column:2;justify-self:end;align-self:center;font-size:10px}
+    .streamrow>.num:not(.muted),.streamrow>.num.muted,.streamrow>.muted:not(.num),.streamrow>.src{position:relative;padding-top:12px;font-size:11px;line-height:1.3;overflow-wrap:anywhere;color:var(--ink2)}
+    .streamrow>.num:not(.muted)::before,.streamrow>.num.muted::before,.streamrow>.muted:not(.num)::before,.streamrow>.src::before{position:absolute;top:0;left:0;font-family:var(--mono);font-size:8.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--faint)}
+    .streamrow>.num:not(.muted)::before{content:"schema"}
+    .streamrow>.num.muted::before{content:"origin"}
+    .streamrow>.muted:not(.num)::before{content:"fields"}
+    .streamrow>.src::before{content:"source"}
+    .nb,.retr{grid-template-columns:1fr 1fr 44px}
+    .kv{grid-template-columns:1fr}
+    /* inspector + confirm dialogs become bottom sheets */
+    .modal-bg{place-items:end stretch;padding:0}
+    .modal{border-radius:16px 16px 0 0;padding:16px;max-height:88dvh}
+    .modal .row2 .btn{min-height:44px}
+    .insp-h{margin-top:16px}
+    pre.synth{font-size:11px;max-height:240px}
+  }
+  @media(max-width:400px){.brandsub{display:none}.cols4{grid-template-columns:1fr}.cand .actions{grid-template-columns:1fr}}
 </style>
 
 <div class="app">
@@ -215,8 +248,8 @@
     <div class="brand"><span class="mk">D</span>Deblob <span class="brandsub" style="color:var(--faint);font-weight:400;font-size:13px">Console</span></div>
     <span id="mode" class="pill demo"><span class="led"></span>DEMO DATA</span>
     <div class="sp"></div>
-    <button class="iconbtn" id="theme">◐ Theme</button>
-    <button class="iconbtn" id="connect">⚙ Connect</button>
+    <button class="iconbtn" id="theme">◐ <span class="btxt">Theme</span></button>
+    <button class="iconbtn" id="connect">⚙ <span class="btxt">Connect</span></button>
   </div>
   <nav id="nav">
     <div class="grp">Understand</div>
@@ -238,6 +271,12 @@
   <main id="main"></main>
   <div id="navbackdrop"></div>
 </div>
+<nav class="btmtabs" id="btmtabs" aria-label="Primary sections">
+  <a data-v="explorer"><span class="ic">◈</span><span>Explore</span></a>
+  <a data-v="discovery"><span class="ic">◔</span><span>Queue</span></a>
+  <a data-v="stream"><span class="ic">≋</span><span>Stream</span></a>
+  <a data-v="similarity"><span class="ic">✧</span><span>Map</span></a>
+</nav>
 <div id="overlay"></div>
 <div class="toast" id="toast"></div>
 
@@ -711,7 +750,7 @@ function connectModal(){
     $('#overlay').innerHTML='';toast('Connecting…');await boot();toast(state.live?'Connected.':'Could not reach API — showing demo data.');};
 }
 
-function render(){closeStream();const v=location.hash.replace('#','')||'explorer';$$('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));$('#main').innerHTML=(V[v]||V.explorer)();afterRender(v);}
+function render(){closeStream();const v=location.hash.replace('#','')||'explorer';$$('#nav a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));$$('#btmtabs a').forEach(a=>a.classList.toggle('on',a.dataset.v===v));$('#main').innerHTML=(V[v]||V.explorer)();afterRender(v);}
 function afterRender(v){
   if(v==='schemas'){const s=$('#schsearch');if(s)s.oninput=()=>{const q=s.value.toLowerCase();$('#schrows').innerHTML=schemaRows(state.data.families.filter(f=>f.label.toLowerCase().includes(q)||f.schema_id.includes(q)));};}
   if(v==='consolidation')loadUmbrellas('provisional');
@@ -738,7 +777,7 @@ $('#main').addEventListener('click',e=>{
   else if(t.dataset.act&&!t.disabled){if(t.dataset.act==='export-oapi')exportOpenAPI(t.dataset.id);else mutate(t.dataset.act,t.dataset.id);}
 });
 const _app=$('.app');
-$$('#nav a').forEach(a=>a.onclick=e=>{e.preventDefault();location.hash=a.dataset.v;_app.classList.remove('navopen');});
+$$('#nav a, #btmtabs a').forEach(a=>a.onclick=e=>{e.preventDefault();location.hash=a.dataset.v;_app.classList.remove('navopen');window.scrollTo(0,0);});
 $('#navtoggle').onclick=()=>_app.classList.toggle('navopen');
 $('#navbackdrop').onclick=()=>_app.classList.remove('navopen');
 window.addEventListener('hashchange',render);
