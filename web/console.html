@@ -168,6 +168,12 @@
   .banner.demo{background:var(--warn-soft);color:var(--warn)} .banner.ro{background:var(--accent-soft);color:var(--accent-ink)} .banner.mut{background:var(--risk-soft);color:var(--risk)}
   .empty{text-align:center;color:var(--faint);padding:40px;font-size:13px}
   .cand .lineage{font-size:11px;color:var(--faint);margin:9px 0 2px;line-height:1.5}
+  .ufl{margin-top:10px}
+  .fllane{border-top:1px solid var(--line);padding:8px 0}
+  .fllane:first-child{border-top:none}
+  .flhead{font-family:var(--mono);font-size:11.5px;margin-bottom:5px}
+  .flrow{display:flex;gap:8px;align-items:center;font-size:11px;padding:2px 0 2px 10px;flex-wrap:wrap}
+  .flarrow{color:var(--faint)}
   .cand .lineage code{background:var(--sunk);padding:1px 5px;border-radius:4px;font-family:var(--mono);color:var(--ink2)}
   .tabs{display:flex;gap:6px;margin:0 0 14px} .tab{background:var(--panel-2);border:1px solid var(--line);color:var(--ink2);padding:6px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;text-transform:capitalize} .tab.on{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
   .streamctl{display:flex;align-items:center;gap:12px;margin-bottom:10px} .streamctl #streamstat{font-size:12px}
@@ -204,6 +210,7 @@
     <a data-v="schemas"><span class="ic">≡</span>Schema catalogue</a>
     <a data-v="discovery"><span class="ic">◔</span>Discovery queue</a>
     <a data-v="families"><span class="ic">⑂</span>Families &amp; versions</a>
+    <a data-v="sources"><span class="ic">◎</span>Sources</a>
     <a data-v="consolidation"><span class="ic">▤</span>Consolidation</a>
     <a data-v="similarity"><span class="ic">✧</span>Similarity</a>
     <a data-v="stream"><span class="ic">≋</span>Live stream</a>
@@ -513,7 +520,8 @@ function umbCard(u,st){const s=u.schema||u;const fields=(s.fields||[]);
   return `<div class="cand"><div class="h"><div><div style="font-weight:600">${esc(s.label||s.umbrella_id)}</div><div class="num muted" style="font-size:11px;margin-top:3px">${esc(s.umbrella_id)} · v${s.version} · <span class="dec ${st==='active'?'match':st==='rejected'?'abstain':'new'}">${esc(st)}</span></div></div><span class="chip">${fields.length} fields</span></div>
     <div class="fields">${fields.map(f=>`<span class="chip">${esc((f.path&&String(f.path))||f.name||f.canonical_field_id)}<span class="muted">:${esc((f.ty&&(f.ty.kind||f.ty))||'?')}${f.unit?(' '+esc(f.unit.code||'')):''}${f.cardinality==='required'?' *':''}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
     <div class="lineage">▤ gold umbrella · <code>${esc(s.umbrella_id)}</code> · members via <code>/umbrellas/${esc(s.umbrella_id)}/transforms</code> · HITL: promotion to active requires human approval</div>
-    <div class="actions"><button class="btn good" data-uact="approve" data-id="${esc(s.umbrella_id)}" ${canAct?'':'disabled'}>Approve</button><button class="btn risk" data-uact="reject" data-id="${esc(s.umbrella_id)}" ${canMutate()&&st!=='rejected'?'':'disabled'}>Reject</button></div></div>`;
+    <div class="actions"><button class="btn good" data-uact="approve" data-id="${esc(s.umbrella_id)}" ${canAct?'':'disabled'}>Approve</button><button class="btn risk" data-uact="reject" data-id="${esc(s.umbrella_id)}" ${canMutate()&&st!=='rejected'?'':'disabled'}>Reject</button><button class="btn" data-ufl="${esc(s.umbrella_id)}">▤ Field lineage</button></div>
+    <div class="ufl" id="ufl-${esc(s.umbrella_id)}"></div></div>`;
 }
 function umbMutate(kind,id){
   const approve=kind==='approve';
@@ -533,13 +541,41 @@ function umbMutate(kind,id){
     }catch(e){toast('Failed: '+e.message);}
   };
 }
+// --- Sources (src_ registry — data lineage) --------------------------------
+V.sources=()=>`<div class="pagehead"><h1>Sources</h1><p>Every distinct data source Deblob has observed, each with a stable content-addressed <code>src_</code> id the lineage views reference instead of a raw topic string. Registration is <b>off the hot path</b> — <b>Reconcile</b> scans candidate provenance and registers any newly-seen source.</p></div>
+  ${banner()}
+  <div class="card"><div class="streamctl"><button class="btn ${canMutate()?'good':''}" id="srcreconcile" ${canMutate()?'':'disabled'}>↻ Reconcile</button> <span id="srcstat" class="muted">${canMutate()?'scans candidate sources and registers them':'read-only — connect with a token to reconcile'}</span></div></div>
+  <div id="srclist"><div class="card empty">Loading…</div></div>`;
+async function loadSources(){
+  if(!state.live){$('#srclist').innerHTML='<div class="card empty">Connect to a live instance to view the source registry.</div>';return;}
+  try{const r=await api('/api/v1/sources');const list=(r.data||[]).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
+    $('#srclist').innerHTML=list.length?`<div class="tw"><table><thead><tr><th>source</th><th><code>src_</code> id</th><th>first seen</th><th>last seen</th></tr></thead><tbody>${list.map(s=>`<tr><td>${esc(s.name)}</td><td class="num muted" title="${esc(s.source_id)}">${esc(shortId(s.source_id))}</td><td class="num muted">${esc(fmtTs(s.first_seen_ms))}</td><td class="num muted">${esc(fmtTs(s.last_seen_ms))}</td></tr>`).join('')}</tbody></table></div>`:'<div class="card empty">No sources registered yet — hit Reconcile to scan observed candidates.</div>';
+  }catch(e){$('#srclist').innerHTML='<div class="card empty">Sources API not available.</div>';}
+}
+async function reconcileSources(){
+  const st=$('#srcstat');if(st){st.textContent='reconciling…';st.className='muted';}
+  try{const r=await api('/api/v1/sources/reconcile',{method:'POST'});
+    if(st)st.textContent=`registered ${(r&&r.data&&r.data.registered)||0} source(s)`;await loadSources();
+  }catch(e){if(st)st.textContent='reconcile failed: '+e.message;}
+}
+// Field-level lineage: expand a gold umbrella into, per gold field, which child
+// schema + child field path feeds it (derived from persisted transform bindings
+// via GET /umbrellas/{id}/lineage/fields).
+async function toggleFieldLineage(id){
+  const box=document.getElementById('ufl-'+id);if(!box)return;
+  if(box.dataset.open==='1'){box.innerHTML='';box.dataset.open='';return;}
+  box.dataset.open='1';box.innerHTML='<div class="muted" style="font-size:12px;padding:6px 0">loading field lineage…</div>';
+  try{const r=await api('/api/v1/umbrellas/'+encodeURIComponent(id)+'/lineage/fields');const fields=r.data||[];
+    box.innerHTML=fields.map(f=>`<div class="fllane"><div class="flhead"><code>${esc(f.umbrella_path)}</code> <span class="muted">${esc(f.canonical_field_id)}</span></div>${(f.contributors||[]).map(c=>`<div class="flrow"><span class="num muted">${esc(shortId(c.child_schema_id))}</span><span class="flarrow">←</span><code>${esc(c.source_path)}</code><span class="muted">${c.op_count?c.op_count+' op'+(c.op_count>1?'s':''):'direct'} · ${esc(c.on_missing)}</span></div>`).join('')||'<div class="muted" style="font-size:12px;padding-left:10px">no contributors</div>'}</div>`).join('')||'<div class="muted" style="font-size:12px">no fields</div>';
+  }catch(e){box.innerHTML='<div class="muted" style="font-size:12px">field lineage unavailable</div>';box.dataset.open='';}
+}
 // --- Live stream (SSE tap; metadata only) ----------------------------------
 // Receive-rate is decoupled from render-rate: onmessage only pushes to a bounded
 // buffer (cheap); a requestAnimationFrame loop flushes to the DOM in batches
 // (≤~60/s), capped. This prevents a burst of events from freezing the tab.
 let _es=null, _streamPaused=false, _sbuf=[], _sraf=null, _sfirst=true;
 function closeStream(){if(_es){_es.close();_es=null;}if(_sraf){cancelAnimationFrame(_sraf);_sraf=null;}_sbuf=[];}
-function streamRow(d){const cls=d.outcome==='tagged'?'good':d.outcome==='quarantined'?'risk':d.outcome==='new_candidate'?'accent':'muted';
+function streamRow(d){const cls=d.outcome==='tagged'?'good':d.outcome==='quarantined'?'risk':d.outcome==='new_candidate'?'accent':d.outcome==='matched_candidate'?'good':'muted';
   const o=d.origin||{};const row=document.createElement('div');row.className='streamrow';
   row.innerHTML=`<span class="st-t">${new Date(d.ts_ms||Date.now()).toLocaleTimeString()}</span><span class="st-o ${cls}">${esc(d.outcome||'?')}</span><span class="num">${esc(shortId(d.schema_ref||''))}</span><span class="muted num">${esc((o.topic||'')+'/'+(o.partition!=null?o.partition:'')+'/'+(o.offset!=null?o.offset:''))}</span><span class="muted">${d.fields_count!=null?d.fields_count+'f':''}</span><span class="src">${d.source?esc(d.source):''}</span>`;
   return row;}
@@ -585,6 +621,7 @@ function render(){closeStream();const v=location.hash.replace('#','')||'explorer
 function afterRender(v){
   if(v==='schemas'){const s=$('#schsearch');if(s)s.oninput=()=>{const q=s.value.toLowerCase();$('#schrows').innerHTML=schemaRows(state.data.families.filter(f=>f.label.toLowerCase().includes(q)||f.schema_id.includes(q)));};}
   if(v==='consolidation')loadUmbrellas('provisional');
+  if(v==='sources'){loadSources();const b=$('#srcreconcile');if(b&&canMutate())b.onclick=reconcileSources;}
   if(v==='stream'){openStream();const p=$('#streampause');if(p)p.onclick=()=>{_streamPaused=!_streamPaused;p.textContent=_streamPaused?'Resume':'Pause';};}
   if(v==='operations'&&state.live){
     // Status-based probe (health endpoints return plain text/empty, not JSON, so
@@ -597,11 +634,12 @@ function afterRender(v){
 }
 // event delegation (no inline handlers -> CSP-safe)
 $('#main').addEventListener('click',e=>{
-  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate]');if(!t)return;
+  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate],[data-ufl]');if(!t)return;
   if(t.dataset.tab!=null){state.tab=+t.dataset.tab;render();}
   else if(t.dataset.sch){state.sel.schema=t.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===t.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x.dataset.sch===t.dataset.sch));}
   else if(t.dataset.umbstate){$$('#umbtabs .tab').forEach(x=>x.classList.toggle('on',x===t));loadUmbrellas(t.dataset.umbstate);}
   else if(t.dataset.uact&&!t.disabled){umbMutate(t.dataset.uact,t.dataset.id);}
+  else if(t.dataset.ufl){toggleFieldLineage(t.dataset.ufl);}
   else if(t.dataset.act&&!t.disabled){if(t.dataset.act==='export-oapi')exportOpenAPI(t.dataset.id);else mutate(t.dataset.act,t.dataset.id);}
 });
 const _app=$('.app');
