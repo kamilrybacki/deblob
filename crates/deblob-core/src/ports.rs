@@ -33,6 +33,152 @@ pub struct SchemaRecord {
     /// same back-compat reason as the other two.
     #[serde(default)]
     pub privacy_class: Option<PrivacyClass>,
+    /// Reference to this schema's durable value-profile snapshot (a
+    /// SIDECAR blob in the [`ValueProfileStore`], NOT embedded here — see
+    /// its docs). `None` for legacy schemas promoted before value-profile
+    /// capture existed, and NEVER a synthetic empty profile. Excluded from
+    /// the `sch_`/`sem_` identity digests (it is observability/governance
+    /// evidence, not shape identity), so back-filling it never changes a
+    /// schema's id. `#[serde(default)]` for back-compat with pre-existing
+    /// serialized records.
+    #[serde(default)]
+    pub value_profile_ref: Option<ValueProfileId>,
+    /// A tiny inline summary of the referenced value profile, cheap enough
+    /// to carry on every list/get without lazy-loading the full sidecar
+    /// (leaf count + observation count + capture time). `None` iff
+    /// `value_profile_ref` is `None`.
+    #[serde(default)]
+    pub value_profile_summary: Option<ValueProfileSummary>,
+}
+
+/// The five coarse, non-reversible numeric magnitude buckets, packed into a
+/// bitmask (mirrors `deblob_monoid::NumericBuckets`, kept here so
+/// `deblob-core` needn't depend on the monoid crate). Bit layout is stable
+/// and versioned by [`ValueProfileSnapshot::bucket_boundaries_version`].
+pub mod value_bucket {
+    pub const NEGATIVE: u8 = 1 << 0;
+    pub const ZERO: u8 = 1 << 1;
+    pub const SMALL_POSITIVE: u8 = 1 << 2; // (0, 10]
+    pub const MEDIUM_POSITIVE: u8 = 1 << 3; // (10, 100]
+    pub const LARGE_POSITIVE: u8 = 1 << 4; // > 100
+    /// All bits that can legitimately be set — used to validate a stored mask.
+    pub const ALL: u8 = NEGATIVE | ZERO | SMALL_POSITIVE | MEDIUM_POSITIVE | LARGE_POSITIVE;
+}
+
+/// Per-type observation counts for one leaf (mirror of
+/// `deblob_monoid::TypeCounts`; duplicated so `deblob-core` stays monoid-free).
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LeafTypeCounts {
+    pub null: u64,
+    pub bool: u64,
+    pub number: u64,
+    pub string: u64,
+    pub array: u64,
+    pub object: u64,
+}
+
+/// One leaf's durable value evidence within a [`ValueProfileSnapshot`].
+/// `path` is the exact canonical field reference (dotted object-key path,
+/// mirroring the schema-canonical walk) the value profile is bound to — a
+/// mis-attached leaf is worse than none, so this must be produced from the
+/// same path semantics the consolidation join uses.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct LeafValueProfile {
+    pub path: String,
+    pub present_count: u64,
+    pub explicit_null_count: u64,
+    pub type_counts: LeafTypeCounts,
+    /// The [`value_bucket`] bitmask observed for this leaf's numbers. OR-merged
+    /// booleans, NOT a distribution — an overlapping mask can never *prove*
+    /// compatibility, only a disjoint one can flag suspicion (see the joint
+    /// design doc's "one-sided negative" guard semantics).
+    pub numeric_bucket_mask: u8,
+    pub int_only: bool,
+    pub neg_zero_seen: bool,
+}
+
+/// An immutable, versioned value-profile snapshot captured atomically at
+/// PROMOTION time from the candidate's monoid profile (spec §9 lineage /
+/// joint design `dc-umbrella-signals-1907`). Stored as a compact sidecar
+/// referenced by [`SchemaRecord::value_profile_ref`]; NEVER embedded on the
+/// record and NEVER part of any identity digest. Bound to the exact inputs
+/// that produced it (`canonicalizer`, `schema_canonical_digest`,
+/// `candidate_id`, `candidate_profile_digest`) so a mis-attachment is
+/// detectable, and preserves `observation_count`/`captured_at_ms` so the
+/// guard can enforce minimum-support and reason about staleness.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ValueProfileSnapshot {
+    pub profile_id: ValueProfileId,
+    /// Snapshot schema version (`1` = value-profile-v1).
+    pub profile_version: u32,
+    /// Version of the bucket boundaries used (`1` = the (0,10]/(10,100]/>100
+    /// scheme). Persisted so a later boundary change never silently
+    /// reinterprets an old mask.
+    pub bucket_boundaries_version: u32,
+    pub canonicalizer: String,
+    pub schema_canonical_digest: String,
+    pub candidate_id: CandidateId,
+    pub candidate_profile_digest: String,
+    pub observation_count: u64,
+    pub captured_at_ms: i64,
+    pub leaves: Vec<LeafValueProfile>,
+}
+
+/// The tiny inline companion to a [`ValueProfileSnapshot`], carried on the
+/// `SchemaRecord` itself so listings need not lazy-load the sidecar.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ValueProfileSummary {
+    pub profile_id: ValueProfileId,
+    pub leaf_count: u32,
+    pub observation_count: u64,
+    pub captured_at_ms: i64,
+}
+
+impl ValueProfileSnapshot {
+    /// The tiny summary to stamp onto the `SchemaRecord`.
+    pub fn summary(&self) -> ValueProfileSummary {
+        ValueProfileSummary {
+            profile_id: self.profile_id.clone(),
+            leaf_count: self.leaves.len() as u32,
+            observation_count: self.observation_count,
+            captured_at_ms: self.captured_at_ms,
+        }
+    }
+}
+
+/// Durable sidecar store for [`ValueProfileSnapshot`]s (one compact blob per
+/// profile — never one key per leaf). Snapshots are immutable: `put` writes
+/// once, keyed by the content-addressed `profile_id`.
+#[async_trait]
+pub trait ValueProfileStore: Send + Sync {
+    async fn put_value_profile(&self, snapshot: &ValueProfileSnapshot) -> Result<(), CoreError>;
+    async fn get_value_profile(
+        &self,
+        id: &ValueProfileId,
+    ) -> Result<Option<ValueProfileSnapshot>, CoreError>;
+}
+
+/// Process-local [`ValueProfileStore`] for tests / in-memory deployments.
+#[derive(Debug, Default)]
+pub struct InMemoryValueProfileStore {
+    inner: std::sync::Mutex<std::collections::HashMap<String, ValueProfileSnapshot>>,
+}
+
+#[async_trait]
+impl ValueProfileStore for InMemoryValueProfileStore {
+    async fn put_value_profile(&self, snapshot: &ValueProfileSnapshot) -> Result<(), CoreError> {
+        self.inner
+            .lock()
+            .expect("poisoned")
+            .insert(snapshot.profile_id.as_str().to_string(), snapshot.clone());
+        Ok(())
+    }
+    async fn get_value_profile(
+        &self,
+        id: &ValueProfileId,
+    ) -> Result<Option<ValueProfileSnapshot>, CoreError> {
+        Ok(self.inner.lock().expect("poisoned").get(id.as_str()).cloned())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

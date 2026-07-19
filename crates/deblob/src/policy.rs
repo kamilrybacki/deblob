@@ -71,6 +71,13 @@ pub struct Promoter {
     registry: Arc<dyn Registry>,
     evidence: Arc<dyn EvidenceStore>,
     policy: PromotionPolicy,
+    /// Optional durable value-profile sidecar store (joint design
+    /// `dc-umbrella-signals-1907`, Stage 1). When set, `promote` captures an
+    /// immutable value-profile snapshot from the candidate's profile and
+    /// references it from the published `SchemaRecord`. `None` (the default)
+    /// keeps the pre-existing behavior verbatim — no capture — so every
+    /// current caller/test is unaffected until it opts in.
+    value_profiles: Option<Arc<dyn deblob_core::ports::ValueProfileStore>>,
 }
 
 impl Promoter {
@@ -90,8 +97,25 @@ impl Promoter {
             registry,
             evidence,
             policy,
+            value_profiles: None,
         }
     }
+
+    /// Opt in to durable value-profile capture at promotion.
+    pub fn with_value_profiles(
+        mut self,
+        store: Arc<dyn deblob_core::ports::ValueProfileStore>,
+    ) -> Self {
+        self.value_profiles = Some(store);
+        self
+    }
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
 }
 
 #[async_trait]
@@ -131,6 +155,28 @@ impl PromoterTrait for Promoter {
             "promoted_by": actor,
         });
 
+        let canonical = profile.generalized_canonical_json();
+
+        // Stage 1 (joint design dc-umbrella-signals-1907): capture an
+        // immutable value-profile snapshot from the candidate's profile and
+        // persist it to the sidecar store BEFORE publishing the schema that
+        // references it, so a referenced profile is always already durable.
+        // Only when a store is wired (`with_value_profiles`); otherwise the
+        // schema is published with `value_profile_ref: None`, exactly as
+        // before. Excluded from the `sch_` identity digest — `schema_id`
+        // above is already fixed from the generalized fingerprint.
+        let (value_profile_ref, value_profile_summary) =
+            if let Some(store) = &self.value_profiles {
+                let snapshot = crate::value_profile::build_snapshot(
+                    &schema_id, &canonical, cand, &profile, now_ms(),
+                );
+                let summary = snapshot.summary();
+                store.put_value_profile(&snapshot).await?;
+                (Some(snapshot.profile_id), Some(summary))
+            } else {
+                (None, None)
+            };
+
         // `version` here is only ever a caller-side guess (spec §6,
         // `Registry::publish` docs) — the registry is the sole authority
         // and overwrites it below with the value it actually allocated.
@@ -138,12 +184,14 @@ impl PromoterTrait for Promoter {
             schema_id,
             family_id,
             version: FamilyVersion(0),
-            canonical: profile.generalized_canonical_json(),
+            canonical,
             canonicalizer: GENERALIZER.to_string(),
             provenance,
             semantic: None,
             semantic_fingerprint: None,
             privacy_class: None,
+            value_profile_ref,
+            value_profile_summary,
         };
 
         let bucket = bucket_key(&generalized_shape_summary(&profile));
@@ -545,6 +593,82 @@ mod tests {
         ];
         expected.sort();
         assert_eq!(variants, expected);
+    }
+
+    #[tokio::test]
+    async fn promote_captures_value_profile_when_store_wired() {
+        use deblob_core::ports::{InMemoryValueProfileStore, ValueProfileStore};
+
+        let evidence = Arc::new(FakeEvidence::default());
+        let registry = Arc::new(FakeRegistry::new(1));
+        let cand_id = some_cand_id();
+        evidence
+            .upsert_candidate(candidate_record(
+                cand_id.clone(),
+                DEFAULT_MIN_SAMPLES,
+                0,
+                DEFAULT_MIN_AGE_MS + 1,
+            ))
+            .await
+            .unwrap();
+
+        let vp_store = Arc::new(InMemoryValueProfileStore::default());
+        let promoter = Promoter::new(registry.clone(), evidence)
+            .with_value_profiles(vp_store.clone());
+
+        let schema = promoter.promote(&cand_id, request(), "alice").await.unwrap();
+
+        // The published schema references a durable value profile...
+        let vp_ref = schema
+            .value_profile_ref
+            .clone()
+            .expect("value_profile_ref set when store wired");
+        let summary = schema.value_profile_summary.clone().expect("summary set");
+        assert_eq!(summary.profile_id, vp_ref);
+        assert_eq!(summary.leaf_count, 2); // {"a":1,"b":"x"} -> a, b
+
+        // ...and it was persisted to the sidecar store before publish, with
+        // the coarse per-leaf evidence but NO raw values.
+        let snap = vp_store
+            .get_value_profile(&vp_ref)
+            .await
+            .unwrap()
+            .expect("snapshot persisted");
+        assert_eq!(snap.candidate_id, cand_id);
+        assert_eq!(snap.leaves.len(), 2);
+        let a = snap.leaves.iter().find(|l| l.path == "a").unwrap();
+        // Counts come from the candidate PROFILE (built from one parsed doc
+        // here), not the candidate's `sample_count` metadata.
+        assert_eq!(a.type_counts.number, 1);
+        assert_eq!(snap.observation_count, 1);
+        // value 1 falls in (0,10] -> small_positive bit.
+        assert_eq!(
+            a.numeric_bucket_mask,
+            deblob_core::ports::value_bucket::SMALL_POSITIVE
+        );
+        let b = snap.leaves.iter().find(|l| l.path == "b").unwrap();
+        assert_eq!(b.numeric_bucket_mask, 0); // string leaf, no numeric buckets
+        assert!(b.type_counts.string > 0);
+    }
+
+    #[tokio::test]
+    async fn promote_without_store_leaves_value_profile_none() {
+        let evidence = Arc::new(FakeEvidence::default());
+        let registry = Arc::new(FakeRegistry::new(1));
+        let cand_id = some_cand_id();
+        evidence
+            .upsert_candidate(candidate_record(
+                cand_id.clone(),
+                DEFAULT_MIN_SAMPLES,
+                0,
+                DEFAULT_MIN_AGE_MS + 1,
+            ))
+            .await
+            .unwrap();
+        let promoter = Promoter::new(registry, evidence);
+        let schema = promoter.promote(&cand_id, request(), "alice").await.unwrap();
+        assert!(schema.value_profile_ref.is_none());
+        assert!(schema.value_profile_summary.is_none());
     }
 
     /// Task 14 fix: a candidate promoted with NO recorded variants (e.g.

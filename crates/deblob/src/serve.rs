@@ -358,6 +358,12 @@ pub async fn serve(
     let sources: Arc<dyn deblob_core::ports::SourceRegistry> =
         Arc::new(RedisSourceRegistry::connect(&secrets.redis_url).await?);
 
+    // Value-profile sidecar store (joint design dc-umbrella-signals-1907,
+    // Stage 1): its own connection, connect-and-go. The promoter captures
+    // into it at promotion; the API reads it back per schema.
+    let value_profiles: Arc<dyn deblob_core::ports::ValueProfileStore> =
+        Arc::new(deblob_redis::RedisValueProfile::connect(&secrets.redis_url).await?);
+
     // The health gate's background probe needs its OWN connection —
     // `RedisRegistry::conn()` is crate-private to `deblob-redis`, by
     // design (spec §6: the gate is a separate runtime concern from the
@@ -387,11 +393,14 @@ pub async fn serve(
     // `ColdLane::ingest` for each one, so candidates accumulate and
     // promotion has something to promote.
     let cold_lane = Arc::new(ColdLane::with_metrics(evidence.clone(), metrics.clone()));
-    let promoter: Arc<dyn PromoterTrait> = Arc::new(ConcretePromoter::with_policy(
-        registry.clone(),
-        evidence.clone(),
-        app_config.promotion.to_policy(),
-    ));
+    let promoter: Arc<dyn PromoterTrait> = Arc::new(
+        ConcretePromoter::with_policy(
+            registry.clone(),
+            evidence.clone(),
+            app_config.promotion.to_policy(),
+        )
+        .with_value_profiles(value_profiles.clone()),
+    );
 
     // --- Live-stream tap (Stage L1, payload-free): one broadcast channel,
     // a clone of the `Sender` handed to the relay (which broadcasts a
@@ -424,6 +433,7 @@ pub async fn serve(
         semantic_registries: Arc::new(app_config.semantic.to_registries()),
         umbrellas,
         sources,
+        value_profiles,
     };
     let management_addr: SocketAddr =
         app_config

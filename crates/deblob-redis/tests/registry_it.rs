@@ -22,6 +22,8 @@ fn sample_record() -> SchemaRecord {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     }
 }
 
@@ -38,6 +40,8 @@ fn record_with(digest: [u8; 32], family_id: FamilyId) -> SchemaRecord {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     }
 }
 

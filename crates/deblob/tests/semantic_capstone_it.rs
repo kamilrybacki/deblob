@@ -370,6 +370,8 @@ async fn publish_schema(
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     };
     let bucket = format!("bucket:capstone-it:{seed}");
     let cand = CandidateId::from_digest(&[seed; 32]);

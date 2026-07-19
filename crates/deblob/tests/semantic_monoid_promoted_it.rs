@@ -149,6 +149,7 @@ fn state(registry: Arc<RedisRegistry>, semantic: RedisRegistry) -> ApiState {
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
         umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
         sources: Arc::new(deblob_core::ports::InMemorySourceRegistry::default()),
+        value_profiles: Arc::new(deblob_core::ports::InMemoryValueProfileStore::default()),
         stream_tx: tokio::sync::broadcast::channel(16).0,
     }
 }
@@ -475,6 +476,8 @@ async fn canon_v1_schema_annotation_still_works_unchanged() {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     };
     let cand = CandidateId::from_digest(&[42u8; 32]);
     registry
@@ -522,6 +525,8 @@ async fn unknown_canonicalizer_reports_422_not_silent_accept() {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     };
     let cand = CandidateId::from_digest(&[8u8; 32]);
     registry

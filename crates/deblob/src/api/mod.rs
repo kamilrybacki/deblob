@@ -21,7 +21,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
-use deblob_core::ports::{EvidenceStore, Registry, SourceRegistry};
+use deblob_core::ports::{EvidenceStore, Registry, SourceRegistry, ValueProfileStore};
 use deblob_redis::health::HealthGate;
 use deblob_semantic::Registries;
 use deblob_umbrella::store::UmbrellaStore;
@@ -62,6 +62,11 @@ pub struct ApiState {
     /// and populated off-path by `POST /api/v1/sources/reconcile`. Same
     /// `Arc<dyn …>` injection pattern as every other store here.
     pub sources: Arc<dyn SourceRegistry>,
+    /// Durable value-profile sidecar store (joint design
+    /// `dc-umbrella-signals-1907`, Stage 1). Read surface: `GET
+    /// /api/v1/schemas/{id}/value-profile`. Populated at promotion by the
+    /// `Promoter` (`with_value_profiles`), never on the hot path.
+    pub value_profiles: Arc<dyn ValueProfileStore>,
     /// Live-stream tap (Stage L1, payload-free): `GET /api/v1/stream`
     /// subscribes a fresh `Receiver` from this per SSE connection
     /// (`Sender::subscribe`, cheap and `Clone`-free — the `Sender` itself
@@ -271,6 +276,10 @@ pub fn router(state: ApiState) -> Router {
     let authenticated = Router::new()
         .route("/schemas", get(schemas::list_schemas))
         .route("/schemas/{sch_id}", get(schemas::get_schema))
+        .route(
+            "/schemas/{sch_id}/value-profile",
+            get(schemas::get_schema_value_profile),
+        )
         .route(
             "/schemas/{sch_id}/semantic",
             get(semantic::get_semantic).put(semantic::put_semantic),

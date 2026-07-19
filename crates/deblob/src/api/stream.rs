@@ -291,6 +291,8 @@ mod tests {
             semantic: None,
             semantic_fingerprint: None,
             privacy_class: None,
+            value_profile_ref: None,
+            value_profile_summary: None,
         };
         let registry: Arc<dyn Registry> = Arc::new(FakeRegistry(Some(record)));
         let event = base_event(schema_id.as_str());
@@ -384,6 +386,8 @@ mod tests {
             semantic: None,
             semantic_fingerprint: None,
             privacy_class: None,
+            value_profile_ref: None,
+            value_profile_summary: None,
         };
         let registry: Arc<dyn Registry> = Arc::new(FakeRegistry(Some(record)));
         let mut event = base_event(schema_id.as_str());

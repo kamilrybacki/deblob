@@ -26,6 +26,8 @@ fn sample_record() -> SchemaRecord {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     }
 }
 

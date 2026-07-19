@@ -48,6 +48,8 @@ async fn publish_schema(reg: &RedisRegistry, json: &[u8], cand_seed: u8) -> Sche
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     };
     let bucket = format!("bucket:sem-it:{cand_seed}");
     let cand = CandidateId::from_digest(&[cand_seed; 32]);

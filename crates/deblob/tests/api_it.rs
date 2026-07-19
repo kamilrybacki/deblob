@@ -492,6 +492,8 @@ fn sample_schema(seed: u8) -> SchemaRecord {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     }
 }
 
@@ -513,6 +515,7 @@ fn make_state(
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
         umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
         sources: Arc::new(deblob_core::ports::InMemorySourceRegistry::default()),
+        value_profiles: Arc::new(deblob_core::ports::InMemoryValueProfileStore::default()),
         stream_tx: tokio::sync::broadcast::channel(16).0,
     }
 }
@@ -542,6 +545,8 @@ fn family_schema(seed: u8, family_id: deblob_core::id::FamilyId, version: u32) -
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     }
 }
 
@@ -560,6 +565,8 @@ fn semantic_schema(seed: u8) -> SchemaRecord {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     }
 }
 
@@ -1672,6 +1679,8 @@ fn lineage_child_schema() -> SchemaRecord {
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     }
 }
 

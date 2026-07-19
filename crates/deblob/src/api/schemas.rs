@@ -57,6 +57,35 @@ pub async fn get_schema(
     Ok(Json(DataEnvelope { data: record }))
 }
 
+/// `GET /api/v1/schemas/{sch_id}/value-profile` — the durable value-profile
+/// snapshot captured for this schema at promotion (joint design
+/// `dc-umbrella-signals-1907`, Stage 1). 404 if the schema doesn't exist OR
+/// has no value profile (a legacy schema promoted before capture existed).
+/// Returns coarse per-leaf evidence only (type counts + numeric-bucket mask),
+/// never a raw observed value.
+pub async fn get_schema_value_profile(
+    State(state): State<ApiState>,
+    Path(sch_id): Path<String>,
+) -> Result<Json<DataEnvelope<deblob_core::ports::ValueProfileSnapshot>>, ApiError> {
+    let id = SchemaId::parse(&sch_id).map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    let record = state
+        .registry
+        .get_schema(&id)
+        .await
+        .map_err(ApiError::from_core)?
+        .ok_or_else(|| ApiError::not_found("schema not found"))?;
+    let profile_id = record
+        .value_profile_ref
+        .ok_or_else(|| ApiError::not_found("schema has no value profile"))?;
+    let snapshot = state
+        .value_profiles
+        .get_value_profile(&profile_id)
+        .await
+        .map_err(ApiError::from_core)?
+        .ok_or_else(|| ApiError::not_found("value profile snapshot not found"))?;
+    Ok(Json(DataEnvelope { data: snapshot }))
+}
+
 /// `GET /api/v1/families/{fam_id}` — 200 with the family record
 /// (`Registry::get_family`, P2-D polish Task 2), or 404 if nothing has ever
 /// been published to it.

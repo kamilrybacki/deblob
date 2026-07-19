@@ -129,6 +129,8 @@ async fn publish_schema(reg: &RedisRegistry, json: &[u8], cand_seed: u8) -> Sche
         semantic: None,
         semantic_fingerprint: None,
         privacy_class: None,
+        value_profile_ref: None,
+        value_profile_summary: None,
     };
     let bucket = format!("bucket:neighbors-it:{cand_seed}");
     let cand = CandidateId::from_digest(&[cand_seed; 32]);
@@ -251,6 +253,7 @@ fn state(reg: RedisRegistry, sem: RedisRegistry) -> ApiState {
         semantic_registries: Arc::new(deblob_semantic::Registries::default()),
         umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
         sources: Arc::new(deblob_core::ports::InMemorySourceRegistry::default()),
+        value_profiles: Arc::new(deblob_core::ports::InMemoryValueProfileStore::default()),
         stream_tx: tokio::sync::broadcast::channel(16).0,
     }
 }

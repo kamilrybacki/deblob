@@ -15,6 +15,7 @@ pub mod registry;
 pub mod semantic;
 pub mod source_registry;
 pub mod umbrella;
+pub mod value_profile;
 
 pub use evidence::{RedisEvidence, RedisEvidenceOpts};
 pub use feedback_store::{
@@ -25,6 +26,7 @@ pub use feedback_store::{
 pub use health::{HealthGate, HealthState, PersistenceHealth};
 pub use source_registry::RedisSourceRegistry;
 pub use umbrella::RedisUmbrella;
+pub use value_profile::RedisValueProfile;
 pub use index::{bucket_key, bucket_member};
 pub use registry::{RedisOpts, RedisRegistry};
 pub use semantic::SEM_INDEX_KEY_PATTERN;

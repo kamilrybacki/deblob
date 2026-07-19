@@ -48,6 +48,7 @@ digest_id!(SchemaId, "sch_");
 digest_id!(CandidateId, "cand_");
 digest_id!(SemanticId, "sem_");
 digest_id!(SourceId, "src_");
+digest_id!(ValueProfileId, "vp_");
 
 impl SourceId {
     /// Stable content-addressed identity for a data SOURCE (the Kafka topic

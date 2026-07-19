@@ -625,6 +625,8 @@ mod child_fields_tests {
             semantic,
             semantic_fingerprint: None,
             privacy_class: None,
+            value_profile_ref: None,
+            value_profile_summary: None,
         }
     }
 
