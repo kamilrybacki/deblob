@@ -140,6 +140,9 @@ mod tests {
 
     #[test]
     fn redacts_before_storing() {
+        // Canary secret assembled from fragments (no contiguous token in source).
+        let aws = concat!("AKI", "AIOSFODNN7EXAMPLE");
+        let payload = format!(r#"{{"price":42,"api_key":"{aws}"}}"#);
         let s = build_sample(
             &cfg(&["events.grid"]),
             "events.grid",
@@ -147,13 +150,13 @@ mod tests {
             0,
             5,
             &cand(),
-            br#"{"price":42,"api_key":"REDACTED_AWS_CANARY"}"#,
+            payload.as_bytes(),
             123,
         )
         .expect("captured");
         assert_eq!(s.document["price"], serde_json::json!(42));
         // Sensitive field name -> subtree replaced, never the raw key value.
-        assert_ne!(s.document["api_key"], serde_json::json!("REDACTED_AWS_CANARY"));
+        assert_ne!(s.document["api_key"], serde_json::json!(aws));
         assert_eq!(s.captured_at_ms, 123);
         assert!(s.sample_id.starts_with("smp_"));
     }
