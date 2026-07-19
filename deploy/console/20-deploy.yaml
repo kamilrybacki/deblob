@@ -31,7 +31,7 @@ spec:
         - name: DEBLOB_SAMPLES_READ_TOKEN
           valueFrom: {secretKeyRef: {name: deblob-secrets, key: samples_read_token}}
         # Restrict envsubst to just these vars so nginx's own $host/$uri/$up survive.
-        - {name: NGINX_ENVSUBST_FILTER, value: "DEBLOB_API_TOKEN,DEBLOB_SAMPLES_READ_TOKEN"}
+        - {name: NGINX_ENVSUBST_FILTER, value: "DEBLOB_API_TOKEN|DEBLOB_SAMPLES_READ_TOKEN"}
         volumeMounts:
         - {name: html, mountPath: /usr/share/nginx/html, readOnly: true}
         # ConfigMap holds default.conf.template; the image entrypoint runs envsubst
