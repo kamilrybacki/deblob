@@ -10,6 +10,16 @@
 //! answerable. Evidence samples accumulate on a bounded Redis STREAM
 //! (`deblob:evidence:<id>`, `XTRIM MAXLEN ~ 1000`) so a chatty candidate can
 //! never grow Redis memory without bound.
+//!
+//! Listing is index-backed, not keyspace-scanned (fix2, mirrors
+//! `crate::registry`'s `SCHEMA_INDEX_KEY` / `crate::umbrella`'s per-state
+//! sets): `deblob:candidates:<state>` is a maintained `SET` of every
+//! candidate id currently in that state, `SADD`ed by `upsert_candidate` and
+//! kept to exactly one state's membership by `set_state`.
+//! `list_candidates` pages that one small, dense per-state SET via `SSCAN`
+//! — see `candidate_state_index_key` and `RedisEvidence::
+//! rebuild_candidate_index` for the full story, including the backfill path
+//! for candidates that predate this index.
 
 use crate::lua::SET_STATE_SCRIPT;
 use crate::registry::{redis_err, RedisOpts};
@@ -97,6 +107,37 @@ fn state_str(state: CandidateState) -> &'static str {
         CandidateState::Rejected => "rejected",
     }
 }
+
+/// The maintained per-state candidate-listing index (mirrors
+/// `crate::registry::SCHEMA_INDEX_KEY` / `crate::umbrella`'s
+/// `deblob:umbrellas:<state>`): a Redis `SET` of every candidate id
+/// currently in `state`, `SADD`ed on `upsert_candidate` and kept as
+/// exactly-one-membership by `set_state`. `list_candidates` pages over
+/// THIS one small, dense per-state SET via `SSCAN` — O(candidates in that
+/// state) — instead of `SCAN`ning the entire `deblob:*` keyspace for
+/// sparse `deblob:candidate:*` keys and filtering by state client-side,
+/// which previously produced partial/empty pages with a non-zero cursor
+/// even when candidates of the requested state existed (a `SCAN COUNT`
+/// batch over the whole keyspace can easily land on zero matching
+/// candidate keys among the thousands of evidence/audit/index/cluster/
+/// variant keys sharing the same prefix space) — exactly the bug fix1
+/// already fixed for `deblob:schemas`. `rebuild_candidate_index` below
+/// reconstructs these three SETs from the authoritative
+/// `deblob:candidate:*` hashes, so a store written before this index
+/// existed is repairable by running it once.
+fn candidate_state_index_key(state: CandidateState) -> String {
+    format!("deblob:candidates:{}", state_str(state))
+}
+
+/// Every `CandidateState`, for the "exactly one state-index membership at a
+/// time" `SADD`/`SREM` sweep in `set_state` and the full rebuild in
+/// `RedisEvidence::rebuild_candidate_index` — mirrors `crate::umbrella`'s
+/// `ALL_STATES`.
+const ALL_CANDIDATE_STATES: [CandidateState; 3] = [
+    CandidateState::Provisional,
+    CandidateState::Staged,
+    CandidateState::Rejected,
+];
 
 /// Reconstructs a `CandidateRecord` from the candidate hash's `record`
 /// blob, overwriting its `state` field with the AUTHORITATIVE value stored
@@ -192,6 +233,84 @@ impl RedisEvidence {
     fn conn(&self) -> redis::aio::ConnectionManager {
         self.conn.clone()
     }
+
+    /// Rebuild the three per-state candidate-listing index SETs
+    /// (`candidate_state_index_key`) from scratch, purely from the
+    /// authoritative `deblob:candidate:*` hashes — mirrors
+    /// `RedisRegistry::rebuild_index`'s drop-then-rebuild strategy for
+    /// `SCHEMA_INDEX_KEY`. This is the repair path for a store written (or
+    /// partially populated) before the per-state index existed: candidates
+    /// that predate it were never `SADD`ed anywhere, so `list_candidates`
+    /// silently misses them until this is run once.
+    ///
+    /// **Operator note:** this is NOT called automatically anywhere (by
+    /// `connect` or otherwise) — a deployment upgrading onto this index must
+    /// run it once, out of band, to backfill pre-existing candidates.
+    /// Idempotent and always safe to run again: it deletes and
+    /// re-`SADD`s all three sets from the current, authoritative
+    /// `deblob:candidate:*` state on every call, so a re-run after further
+    /// candidate activity just re-derives the same (now up to date)
+    /// membership rather than compounding stale entries.
+    ///
+    /// Returns the number of candidate hashes reindexed. A hash found with
+    /// no `state` field (never expected — `upsert_candidate` always writes
+    /// one) is skipped rather than failing the whole rebuild, matching
+    /// `rebuild_index`'s "defensive, skip rather than fail" posture.
+    pub async fn rebuild_candidate_index(&self) -> Result<u64, CoreError> {
+        let mut conn = self.conn();
+
+        for state in ALL_CANDIDATE_STATES {
+            let _: () = redis::cmd("DEL")
+                .arg(candidate_state_index_key(state))
+                .query_async(&mut conn)
+                .await
+                .map_err(redis_err)?;
+        }
+
+        let mut count: u64 = 0;
+        let mut cursor = "0".to_string();
+        loop {
+            // `deblob:candidate:*` never matches `deblob:candidate-audit:*`
+            // — see `list_candidates`'s prior use of this same pattern.
+            let (next_cursor, keys): (String, Vec<String>) = redis::cmd("SCAN")
+                .arg(&cursor)
+                .arg("MATCH")
+                .arg("deblob:candidate:*")
+                .arg("COUNT")
+                .arg(200)
+                .query_async(&mut conn)
+                .await
+                .map_err(redis_err)?;
+
+            for key in &keys {
+                let id_str = key.strip_prefix("deblob:candidate:").unwrap_or(key);
+                let state: Option<String> = redis::cmd("HGET")
+                    .arg(key)
+                    .arg("state")
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(redis_err)?;
+                let Some(state) = state else {
+                    continue;
+                };
+                let index_key = format!("deblob:candidates:{state}");
+                let _: () = redis::cmd("SADD")
+                    .arg(&index_key)
+                    .arg(id_str)
+                    .query_async(&mut conn)
+                    .await
+                    .map_err(redis_err)?;
+                count += 1;
+            }
+
+            cursor = next_cursor;
+            if cursor == "0" {
+                break;
+            }
+        }
+
+        Ok(count)
+    }
 }
 
 #[async_trait::async_trait]
@@ -232,9 +351,14 @@ impl EvidenceStore for RedisEvidence {
         .map_err(|e| CoreError::RegistryUnavailable(format!("serialize audit stub: {e}")))?;
 
         // One atomic round trip: refresh the ephemeral candidate hash + its
-        // TTL, and write the permanent audit stub IFF it doesn't already
-        // exist (`SET ... NX`, deliberately with no `EX`/`PX` — it must
-        // never be given an expiry).
+        // TTL, write the permanent audit stub IFF it doesn't already exist
+        // (`SET ... NX`, deliberately with no `EX`/`PX` — it must never be
+        // given an expiry), and `SADD` the id into its current state's
+        // listing-index SET (`candidate_state_index_key`, fix1-style —
+        // see its doc comment). A state CHANGE relative to a prior write is
+        // `set_state`'s job (it also `SREM`s the other two state sets); a
+        // fresh/refreshing upsert only ever needs to ensure membership in
+        // the one set matching `rec.state` as written here.
         let _: () = redis::pipe()
             .atomic()
             .cmd("HSET")
@@ -252,6 +376,10 @@ impl EvidenceStore for RedisEvidence {
             .arg(&audit_key)
             .arg(&stub_json)
             .arg("NX")
+            .ignore()
+            .cmd("SADD")
+            .arg(candidate_state_index_key(rec.state))
+            .arg(rec.candidate_id.as_str())
             .ignore()
             .query_async(&mut conn)
             .await
@@ -276,6 +404,24 @@ impl EvidenceStore for RedisEvidence {
         }
     }
 
+    /// fix2 (mirrors `RedisRegistry::list_schemas`'s fix1): pages over the
+    /// maintained per-state [`candidate_state_index_key`] SET via `SSCAN` —
+    /// never `SCAN`s the whole `deblob:*` keyspace. Every member of that SET
+    /// is a real candidate id currently in `state` (nothing else is ever
+    /// `SADD`ed into it, and `set_state` keeps membership to exactly one
+    /// state set at a time), so every batch `SSCAN` returns is, by
+    /// construction, a real, correctly-stated candidate id — O(candidates in
+    /// that state), not O(keyspace) — which is what makes a returned page
+    /// empty ONLY when there are genuinely no more candidates of that state
+    /// to return (`next_cursor` is then `None` too).
+    ///
+    /// Unlike the permanent schema vault, a candidate hash carries a TTL by
+    /// design (module docs) — so, unlike `list_schemas`'s "never expected"
+    /// defensive skip, a member whose `deblob:candidate:*` hash has expired
+    /// out from under it is EXPECTED, routine behaviour here: it's dropped
+    /// from the result and its now-stale index membership is proactively
+    /// `SREM`ed so the same expired id isn't repeatedly reconsidered on
+    /// future pages.
     async fn list_candidates(
         &self,
         state: CandidateState,
@@ -285,22 +431,20 @@ impl EvidenceStore for RedisEvidence {
         let mut conn = self.conn();
         let start_cursor = cursor.unwrap_or_else(|| "0".to_string());
         let count = limit.max(1);
-        // `deblob:candidate:*` never matches `deblob:candidate-audit:*` —
-        // the latter lacks the literal colon right after "candidate" that
-        // the pattern requires, so this scan can never accidentally sweep
-        // up (or filter against) the permanent audit stubs.
-        let (next_cursor, keys): (String, Vec<String>) = redis::cmd("SCAN")
+        let index_key = candidate_state_index_key(state);
+
+        let (next_cursor, ids): (String, Vec<String>) = redis::cmd("SSCAN")
+            .arg(&index_key)
             .arg(&start_cursor)
-            .arg("MATCH")
-            .arg("deblob:candidate:*")
             .arg("COUNT")
             .arg(count)
             .query_async(&mut conn)
             .await
             .map_err(redis_err)?;
 
-        let mut records = Vec::with_capacity(keys.len());
-        for key in keys {
+        let mut records = Vec::with_capacity(ids.len());
+        for id in ids {
+            let key = format!("deblob:candidate:{id}");
             let (record_json, rec_state): (Option<String>, Option<String>) = redis::cmd("HMGET")
                 .arg(&key)
                 .arg("record")
@@ -308,10 +452,19 @@ impl EvidenceStore for RedisEvidence {
                 .query_async(&mut conn)
                 .await
                 .map_err(redis_err)?;
-            if let Some(json) = record_json {
-                let rec = candidate_from_hash(&json, rec_state)?;
-                if rec.state == state {
-                    records.push(rec);
+            match record_json {
+                Some(json) => records.push(candidate_from_hash(&json, rec_state)?),
+                None => {
+                    // Stale membership: the candidate's TTL expired the hash
+                    // out from under the index. Repair the index while we're
+                    // here rather than leaving a dead id to be re-skipped on
+                    // every future page.
+                    let _: () = redis::cmd("SREM")
+                        .arg(&index_key)
+                        .arg(&id)
+                        .query_async(&mut conn)
+                        .await
+                        .map_err(redis_err)?;
                 }
             }
         }
@@ -361,7 +514,32 @@ impl EvidenceStore for RedisEvidence {
             .invoke_async(&mut conn)
             .await;
 
-        result.map(|_| ()).map_err(map_set_state_error)
+        result.map_err(map_set_state_error)?;
+
+        // The guarded transition above succeeded — now mirror it onto the
+        // per-state listing indexes (`RedisUmbrella::set_state`'s exact
+        // pattern): `SADD` into the new state's SET, `SREM` from the other
+        // two, in one atomic pipeline, so membership is always exactly one
+        // set at a time and `list_candidates` never returns a candidate
+        // under its stale, pre-transition state.
+        let mut pipe = redis::pipe();
+        pipe.atomic();
+        for s in ALL_CANDIDATE_STATES {
+            if s == state {
+                pipe.cmd("SADD")
+                    .arg(candidate_state_index_key(s))
+                    .arg(id.as_str())
+                    .ignore();
+            } else {
+                pipe.cmd("SREM")
+                    .arg(candidate_state_index_key(s))
+                    .arg(id.as_str())
+                    .ignore();
+            }
+        }
+        pipe.query_async::<()>(&mut conn).await.map_err(redis_err)?;
+
+        Ok(())
     }
 
     async fn get_cluster(&self, gen_fp: &str) -> Result<Option<CandidateId>, CoreError> {

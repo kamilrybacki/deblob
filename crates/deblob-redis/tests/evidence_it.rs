@@ -212,6 +212,162 @@ async fn state_transition_guarded() {
     assert!(matches!(err, CoreError::NotFound));
 }
 
+/// fix2: `list_candidates` must return EVERY candidate of the requested
+/// state, paging fully via its cursor, even when other-state candidates and
+/// unrelated keys (evidence stream, audit stub, cluster alias) share the
+/// keyspace. Proves the index-backed `SSCAN` path (not the old whole-
+/// keyspace `SCAN`) is what's driving the listing — this is the exact
+/// under-reporting bug fix1 already fixed for schemas.
+#[tokio::test]
+async fn list_candidates_returns_all_of_state_across_pages() {
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let ev = connect_evidence(&url).await;
+
+    // 25 distinct provisional candidates + a handful of staged/rejected
+    // decoys that must never show up in the provisional page.
+    let mut provisional_ids = std::collections::HashSet::new();
+    for i in 0..25u8 {
+        let mut digest = [0u8; 32];
+        digest[0] = i;
+        let rec = candidate_with(digest);
+        provisional_ids.insert(rec.candidate_id.as_str().to_string());
+        ev.upsert_candidate(rec).await.unwrap();
+    }
+    for i in 100..105u8 {
+        let mut digest = [0u8; 32];
+        digest[0] = i;
+        let rec = candidate_with(digest);
+        ev.upsert_candidate(rec.clone()).await.unwrap();
+        ev.set_state(&rec.candidate_id, CandidateState::Staged)
+            .await
+            .unwrap();
+    }
+
+    // Page through with a small limit, exactly like the API handler does,
+    // and accumulate every returned id.
+    let mut seen = std::collections::HashSet::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let (page, next) = ev
+            .list_candidates(CandidateState::Provisional, cursor.clone(), 5)
+            .await
+            .unwrap();
+        for rec in &page {
+            assert_eq!(rec.state, CandidateState::Provisional);
+            seen.insert(rec.candidate_id.as_str().to_string());
+        }
+        match next {
+            Some(c) => cursor = Some(c),
+            None => break,
+        }
+    }
+
+    assert_eq!(
+        seen, provisional_ids,
+        "list_candidates must return every provisional candidate across all pages, no under-reporting"
+    );
+}
+
+/// fix2: `set_state` must move index membership, not just the hash's own
+/// `state` field — a candidate staged after having been provisional must
+/// disappear from the provisional listing and appear in the staged one.
+#[tokio::test]
+async fn set_state_moves_index_membership() {
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let ev = connect_evidence(&url).await;
+
+    let rec = candidate_with([7u8; 32]);
+    ev.upsert_candidate(rec.clone()).await.unwrap();
+
+    let (provisional_before, _) = ev
+        .list_candidates(CandidateState::Provisional, None, 100)
+        .await
+        .unwrap();
+    assert!(provisional_before
+        .iter()
+        .any(|r| r.candidate_id == rec.candidate_id));
+
+    ev.set_state(&rec.candidate_id, CandidateState::Staged)
+        .await
+        .unwrap();
+
+    let (provisional_after, _) = ev
+        .list_candidates(CandidateState::Provisional, None, 100)
+        .await
+        .unwrap();
+    assert!(
+        !provisional_after
+            .iter()
+            .any(|r| r.candidate_id == rec.candidate_id),
+        "candidate must no longer be listed under its stale, pre-transition state"
+    );
+
+    let (staged, _) = ev
+        .list_candidates(CandidateState::Staged, None, 100)
+        .await
+        .unwrap();
+    assert!(
+        staged.iter().any(|r| r.candidate_id == rec.candidate_id),
+        "candidate must be listed under its new state"
+    );
+}
+
+/// fix2 backfill: candidates written before the per-state index existed
+/// (simulated here by writing the hash directly, bypassing
+/// `upsert_candidate`'s `SADD`) are invisible to `list_candidates` until
+/// `rebuild_candidate_index` runs once, after which they appear.
+#[tokio::test]
+async fn rebuild_candidate_index_backfills_pre_existing_candidates() {
+    let node = Redis::default().start().await.unwrap();
+    let url = format!(
+        "redis://127.0.0.1:{}",
+        node.get_host_port_ipv4(6379).await.unwrap()
+    );
+    let ev = connect_evidence(&url).await;
+
+    let rec = candidate_with([42u8; 32]);
+    let record_json = serde_json::to_string(&rec).unwrap();
+
+    let client = redis::Client::open(url.as_str()).unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    let _: () = redis::cmd("HSET")
+        .arg(format!("deblob:candidate:{}", rec.candidate_id.as_str()))
+        .arg("record")
+        .arg(&record_json)
+        .arg("state")
+        .arg("provisional")
+        .query_async(&mut conn)
+        .await
+        .unwrap();
+
+    // Not indexed yet: invisible to list_candidates.
+    let (before, _) = ev
+        .list_candidates(CandidateState::Provisional, None, 100)
+        .await
+        .unwrap();
+    assert!(!before.iter().any(|r| r.candidate_id == rec.candidate_id));
+
+    let reindexed = ev.rebuild_candidate_index().await.unwrap();
+    assert!(reindexed >= 1);
+
+    let (after, _) = ev
+        .list_candidates(CandidateState::Provisional, None, 100)
+        .await
+        .unwrap();
+    assert!(
+        after.iter().any(|r| r.candidate_id == rec.candidate_id),
+        "rebuild_candidate_index must backfill pre-existing candidates into the state index"
+    );
+}
+
 #[tokio::test]
 async fn refuses_volatile_redis_without_flag() {
     // container has no AOF → connect with allow_volatile: false must error
