@@ -25,7 +25,12 @@ data:
     [management]
     addr = "0.0.0.0:9615"
     [slm]
-    enabled = false
+    # SLM cold-discovery lane — decisions via the in-cluster Ollama (OpenAI-compatible,
+    # CPU, Qwen2.5-0.5B). The trust gate still requires deterministic corroboration
+    # before any SLM-proposed match is applied, so model quality never risks a merge.
+    enabled = true
+    base_url = "http://ollama.deblob.svc.cluster.local:11434/v1"
+    model = "qwen2.5:0.5b"
     [semantic]
     canonical_field_ids = ["cfid_amount","cfid_currency","cfid_user_id","cfid_order_id","cfid_status","cfid_timestamp"]
     event_types = ["event.order.placed","event.user.created","event.sensor.reading","event.payment.captured"]

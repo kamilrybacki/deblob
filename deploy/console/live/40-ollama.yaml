@@ -1,0 +1,45 @@
+# SLM inference server for Deblob's cold-discovery lane — Ollama (CPU),
+# OpenAI-compatible /v1/chat/completions. Serves Qwen2.5-0.5B (the arm-C base;
+# the tuned LoRA adapter is a follow-up). The trust gate still requires
+# deterministic corroboration before any SLM-proposed match is applied, so model
+# quality never risks a false merge.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: ollama, namespace: deblob, labels: {app: ollama}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: ollama}}
+  strategy: {type: Recreate}
+  template:
+    metadata: {labels: {app: ollama}}
+    spec:
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+      securityContext: {runAsNonRoot: true, runAsUser: 1000, fsGroup: 1000, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: ollama
+        image: ollama/ollama:latest
+        ports: [{name: http, containerPort: 11434}]
+        env:
+        - {name: OLLAMA_HOST, value: "0.0.0.0:11434"}
+        - {name: OLLAMA_KEEP_ALIVE, value: "-1"}          # keep the 0.5B model resident
+        - {name: OLLAMA_MAX_LOADED_MODELS, value: "1"}
+        - {name: HOME, value: /home/ollama}
+        securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "3", memory: 3Gi}}
+        volumeMounts:
+        - {name: models, mountPath: /home/ollama/.ollama}
+        readinessProbe: {httpGet: {path: /, port: 11434}, initialDelaySeconds: 5, periodSeconds: 10}
+      volumes:
+      - {name: models, emptyDir: {sizeLimit: 4Gi}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: ollama, namespace: deblob, labels: {app: ollama}}
+spec:
+  selector: {app: ollama}
+  ports: [{name: http, port: 11434, targetPort: 11434}]

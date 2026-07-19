@@ -15,7 +15,7 @@ spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, runAsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
       - name: deblob
-        image: ghcr.io/kamilandrzejrybacki-inc/deblob:b7
+        image: ghcr.io/kamilandrzejrybacki-inc/deblob:b8
         imagePullPolicy: IfNotPresent
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         args: [--config, /app/deblob.toml]
@@ -24,6 +24,7 @@ spec:
         - {name: DEBLOB_KAFKA_BROKERS, value: "redpanda.deblob.svc.cluster.local:9092"}
         - {name: DEBLOB_REDIS_URL, value: "redis://redis-vault.deblob.svc.cluster.local:6379"}
         - {name: DEBLOB_API_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}}
+        - {name: DEBLOB_SLM_API_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: slm_api_token}}}
         - {name: RUST_LOG, value: "info,deblob=info"}
         volumeMounts: [{name: config, mountPath: /app/deblob.toml, subPath: deblob.toml}]
         resources: {requests: {cpu: 300m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
