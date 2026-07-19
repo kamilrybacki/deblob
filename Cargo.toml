@@ -4,6 +4,7 @@ members = [
     "crates/deblob",
     "crates/deblob-bench",
     "crates/deblob-core",
+    "crates/deblob-dlp",
     "crates/deblob-eval",
     "crates/deblob-experiment",
     "crates/deblob-fingerprint",
@@ -30,6 +31,7 @@ thiserror = "2"
 sha2 = "0.10"
 data-encoding = "2"
 unicode-normalization = "0.1"
+regex = "1"
 uuid = { version = "1", features = ["v7", "serde"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 tracing = "0.1"
