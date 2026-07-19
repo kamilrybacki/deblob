@@ -12,6 +12,18 @@
 //! values, spec §9). Newly-minted candidates are rate-limited per source
 //! (`governor`) so a misbehaving/compromised producer can't create an
 //! unbounded number of candidates.
+//!
+//! CANDIDATE clustering is SOURCE-SCOPED (Hermes lineage gap 3): the
+//! generalized-fingerprint cluster map convergence described above only
+//! ever merges observations from the SAME `meta.source` — see
+//! [`scoped_gen_fp`]. Two different sources (Kafka topics, or an HTTP
+//! proxy route's `origin_prefix`) that happen to observe the exact same
+//! shape mint and cluster onto DISTINCT candidates: "source co-occurrence
+//! is provenance, not semantic evidence," never grounds for merging. This
+//! is deliberately narrower than [`deblob_core::ports::Registry::
+//! resolve_structural`]'s KNOWN-schema structural retrieval, which stays
+//! GLOBAL/source-blind for now — widening retrieval the same way is a
+//! documented follow-up, out of scope here.
 
 use std::num::NonZeroU32;
 use std::sync::Arc;
@@ -120,9 +132,12 @@ impl ColdLane {
     /// `cand_id` is the hot path's raw-shape-derived candidate id (spec
     /// §3.1/§3.2) — the *first* observation of a brand-new generalized
     /// schema always ingests under this id; every later observation of an
-    /// optional-field variant of the *same* generalized schema converges
-    /// onto whichever candidate the cluster map already points at, even
-    /// though its own raw `cand_id` differs.
+    /// optional-field variant of the *same* generalized schema, FROM THE
+    /// SAME `meta.source` (Hermes lineage gap 3), converges onto whichever
+    /// candidate the cluster map already points at, even though its own raw
+    /// `cand_id` differs. An observation from a DIFFERENT source never
+    /// clusters onto another source's candidate, even sharing the exact
+    /// same generalized fingerprint — see [`scoped_gen_fp`].
     pub async fn ingest(
         &self,
         cand_id: CandidateId,
@@ -140,7 +155,8 @@ impl ColdLane {
         let mut clustered = None;
         for fp in &candidate_fps {
             let hex = HEXLOWER.encode(fp);
-            if let Some(existing) = self.evidence.get_cluster(&hex).await? {
+            let scoped = scoped_gen_fp(&meta.source, &hex);
+            if let Some(existing) = self.evidence.get_cluster(&scoped).await? {
                 clustered = Some(existing);
                 break;
             }
@@ -189,9 +205,14 @@ impl ColdLane {
             // than a static config value), persisted onto the candidate so
             // `GET /api/v1/candidates` can surface it. Always set from this
             // observation's `meta.source` (last-observation-wins, same
-            // "latest write" posture as `last_seen_ms` above) — never used
-            // as a clustering or retrieval key; clustering stays GLOBAL
-            // (source-scoped clustering is deferred).
+            // "latest write" posture as `last_seen_ms` above). This FIELD
+            // itself is provenance/observability only, never read back as a
+            // key — CANDIDATE clustering (Hermes lineage gap 3) is instead
+            // source-scoped via this same `meta.source` value folded into
+            // the candidate id mint (`HotMatcher::classify`) and the
+            // cluster-map key (`scoped_gen_fp`, below); KNOWN-schema
+            // structural retrieval (`Registry::resolve_structural`) stays
+            // GLOBAL/source-blind, a documented follow-up.
             source: Some(meta.source.clone()),
         };
 
@@ -211,7 +232,8 @@ impl ColdLane {
         // first.
         for fp in &candidate_fps {
             let hex = HEXLOWER.encode(fp);
-            self.evidence.set_cluster(&hex, &target_id).await?;
+            let scoped = scoped_gen_fp(&meta.source, &hex);
+            self.evidence.set_cluster(&scoped, &target_id).await?;
         }
 
         // Task 14 fix (promote→resolve round trip): record this
@@ -245,6 +267,26 @@ impl ColdLane {
 
         Ok(IngestOutcome::Ingested)
     }
+}
+
+/// Source-scopes a generalized-fingerprint cluster key (Hermes lineage gap
+/// 3): "source co-occurrence is provenance, not semantic evidence" — two
+/// DIFFERENT sources (Kafka topics, or an HTTP proxy route's
+/// `origin_prefix`) that happen to share the exact same generalized shape
+/// must never converge onto the same candidate cluster, even though
+/// [`EvidenceStore::get_cluster`]/[`EvidenceStore::set_cluster`]'s own
+/// trait signature stays a plain `&str` key (deliberately unchanged, lowest
+/// blast radius — every `EvidenceStore` implementation, real or fake,
+/// keeps working unmodified; only `ColdLane::ingest`, the sole production
+/// caller, needs to change).
+///
+/// `:` is a safe, unambiguous delimiter: Kafka topic names are restricted
+/// to `[a-zA-Z0-9._-]` (`:` never appears in one), and `gen_fp_hex` is
+/// always a fixed-width lowercase-hex string (`HEXLOWER` of a 32-byte
+/// SHA-256 digest) — so no `(source, gen_fp_hex)` pair can collide with a
+/// different pair's concatenation.
+fn scoped_gen_fp(source: &str, gen_fp_hex: &str) -> String {
+    format!("{source}:{gen_fp_hex}")
 }
 
 /// The clustering key set for one profile: its own full generalized
@@ -546,6 +588,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(evidence.candidates.lock().unwrap().len(), 2);
+    }
+
+    // Hermes lineage gap 3 (the core fix): two DIFFERENT sources observing
+    // the EXACT SAME shape must NOT converge onto one candidate — "source
+    // co-occurrence is provenance, not semantic evidence." Candidate ids
+    // here are minted exactly like the real hot path does
+    // (`CandidateId::from_source_and_digest`), not the source-blind
+    // `cand_id_of` fixture helper used elsewhere in this file, so this
+    // test exercises the actual `(source, raw_fp) -> cand_id` contract
+    // end to end, not just the cluster-map half of it.
+    #[tokio::test]
+    async fn different_sources_same_shape_do_not_cluster() {
+        let evidence = Arc::new(FakeEvidence::default());
+        let lane = ColdLane::new(evidence.clone());
+
+        let shape = r#"{"shared_shape":1}"#;
+        let node = node_of(shape);
+        let raw_fp = deblob_fingerprint::fingerprint(&deblob_fingerprint::shape_of(&node));
+        let cand_a = CandidateId::from_source_and_digest("src-a", &raw_fp);
+        let cand_b = CandidateId::from_source_and_digest("src-b", &raw_fp);
+        assert_ne!(
+            cand_a, cand_b,
+            "sanity: source-scoped mint must differ across sources"
+        );
+
+        lane.ingest(cand_a.clone(), &node, meta("src-a"))
+            .await
+            .unwrap();
+        lane.ingest(cand_b.clone(), &node, meta("src-b"))
+            .await
+            .unwrap();
+
+        let candidates = evidence.candidates.lock().unwrap();
+        assert_eq!(
+            candidates.len(),
+            2,
+            "different sources must never cluster onto one candidate: {candidates:?}"
+        );
+        assert!(candidates.contains_key(&cand_a));
+        assert!(candidates.contains_key(&cand_b));
+    }
+
+    // The SAME source re-observing the SAME shape must still reuse the one
+    // candidate it already created (sample_count accumulates rather than a
+    // second `CandidateRecord` being minted) — the positive counterpart to
+    // `different_sources_same_shape_do_not_cluster` above, proving
+    // source-scoping didn't accidentally make EVERY ingest a fresh
+    // candidate.
+    #[tokio::test]
+    async fn same_source_same_shape_reuses_one_candidate() {
+        let evidence = Arc::new(FakeEvidence::default());
+        let lane = ColdLane::new(evidence.clone());
+
+        let shape = r#"{"repeated_shape":1}"#;
+        let node = node_of(shape);
+        let raw_fp = deblob_fingerprint::fingerprint(&deblob_fingerprint::shape_of(&node));
+        let cand_id = CandidateId::from_source_and_digest("src-a", &raw_fp);
+
+        lane.ingest(cand_id.clone(), &node, meta("src-a"))
+            .await
+            .unwrap();
+        lane.ingest(cand_id.clone(), &node, meta("src-a"))
+            .await
+            .unwrap();
+
+        let candidates = evidence.candidates.lock().unwrap();
+        assert_eq!(candidates.len(), 1, "same source must reuse one candidate");
+        let stored = candidates.get(&cand_id).expect("candidate stored");
+        assert_eq!(stored.sample_count, 2);
     }
 
     #[tokio::test]

@@ -55,8 +55,15 @@ pub struct Classification {
 /// | bounded parse fails | `Malformed` + reason, no registry call |
 /// | LRU exact-match hit | `Known`, zero registry calls |
 /// | LRU miss, index hit | `Known`, LRU filled for next time |
-/// | LRU miss, index miss | `Provisional(cand_<raw shape digest>)` |
+/// | LRU miss, index miss | `Provisional(cand_<source-scoped raw shape digest>)` |
 /// | registry error | `Unresolved` (never `cand_`) |
+///
+/// The `Known`/index-hit path (`Registry::resolve_structural`) stays
+/// GLOBAL, source-blind — deliberately out of scope here (Hermes lineage
+/// gap 3 only source-scopes CANDIDATE identity; widening known-schema
+/// structural retrieval to be source-aware too is a documented follow-up,
+/// not done by this change). Only the `Provisional` mint below folds
+/// `source` in, via [`CandidateId::from_source_and_digest`].
 pub struct HotMatcher {
     registry: Arc<dyn Registry>,
     lru: Mutex<LruCache<[u8; 32], SchemaId>>,
@@ -82,12 +89,21 @@ impl HotMatcher {
     /// `parse_bounded` becomes `Malformed` with a reason, and a registry
     /// error becomes `Unresolved` rather than propagating.
     ///
+    /// `source` (Hermes lineage gap 3, spec §4/§9) is the caller's stable
+    /// source identity — the Kafka topic the record was actually consumed
+    /// from (`deblob_kafka::relay`), or the HTTP proxy's configured
+    /// `origin_prefix` (`deblob_http::proxy`) — folded into any freshly
+    /// minted `Provisional` candidate id so two sources sharing the exact
+    /// same raw shape never collide on one candidate. It plays no role in
+    /// the `Known`/`Unresolved`/`Malformed` outcomes, which stay exactly as
+    /// before.
+    ///
     /// Every outcome increments `deblob_messages_total{fate}` and observes
     /// `deblob_tag_latency_seconds` exactly once (spec §11); the payload
     /// itself is never touched by a metric label or a log field — only
     /// bounded, derived values (fate, quarantine reason, latency) ever
     /// leave this function via `self.metrics`.
-    pub async fn classify(&self, payload: &[u8], limits: &Limits) -> Classification {
+    pub async fn classify(&self, source: &str, payload: &[u8], limits: &Limits) -> Classification {
         let started = Instant::now();
 
         let node = match parse_bounded(payload, limits) {
@@ -144,7 +160,9 @@ impl HotMatcher {
                 self.lru.lock().put(raw_fp, known.clone());
                 SchemaRef::Known(known)
             }
-            Ok(None) => SchemaRef::Provisional(CandidateId::from_digest(&raw_fp)),
+            Ok(None) => {
+                SchemaRef::Provisional(CandidateId::from_source_and_digest(source, &raw_fp))
+            }
             // A registry outage must never mint a candidate: that would
             // create a candidate storm once the registry recovers (§10).
             Err(_) => SchemaRef::Unresolved,
@@ -310,7 +328,7 @@ mod tests {
         let fake = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
         let m = matcher(fake.clone());
 
-        let out = m.classify(b"{not json", &Limits::default()).await;
+        let out = m.classify("test-source", b"{not json", &Limits::default()).await;
 
         assert_eq!(out.schema_ref, SchemaRef::Malformed);
         assert!(out.quarantine.is_some());
@@ -327,13 +345,13 @@ mod tests {
         let m = matcher(fake.clone());
         let payload = br#"{"a":1,"b":"x"}"#;
 
-        let first = m.classify(payload, &Limits::default()).await;
+        let first = m.classify("test-source", payload, &Limits::default()).await;
         assert_eq!(first.schema_ref, SchemaRef::Known(known.clone()));
         assert_eq!(fake.resolve_call_count(), 1);
 
         // Second classify of the identical payload must be an LRU hit:
         // same answer, no growth in registry calls.
-        let second = m.classify(payload, &Limits::default()).await;
+        let second = m.classify("test-source", payload, &Limits::default()).await;
         assert_eq!(second.schema_ref, SchemaRef::Known(known));
         assert_eq!(fake.resolve_call_count(), 1);
     }
@@ -346,33 +364,63 @@ mod tests {
         let m = matcher(fake.clone());
         let payload = br#"{"x":1}"#;
 
-        let out = m.classify(payload, &Limits::default()).await;
+        let out = m.classify("test-source", payload, &Limits::default()).await;
         assert_eq!(out.schema_ref, SchemaRef::Known(known));
         assert_eq!(fake.resolve_call_count(), 1);
 
         // LRU is now filled for this payload's fingerprint: a second
         // classify must not touch the registry again.
-        let _ = m.classify(payload, &Limits::default()).await;
+        let _ = m.classify("test-source", payload, &Limits::default()).await;
         assert_eq!(fake.resolve_call_count(), 1);
     }
 
-    // Row 4: index miss → Provisional(cand_<raw digest>), deterministic.
+    // Row 4: index miss → Provisional(cand_<source-scoped raw digest>),
+    // deterministic.
     #[tokio::test]
     async fn index_miss_returns_deterministic_provisional() {
         let fake = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
         let m = matcher(fake.clone());
         let payload = br#"{"unseen":true}"#;
 
-        let out = m.classify(payload, &Limits::default()).await;
+        let out = m.classify("test-source", payload, &Limits::default()).await;
 
         let node = parse_bounded(payload, &Limits::default()).unwrap();
         let raw_fp = fingerprint(&shape_of(&node));
-        let expected = CandidateId::from_digest(&raw_fp);
+        let expected = CandidateId::from_source_and_digest("test-source", &raw_fp);
 
         assert_eq!(out.schema_ref, SchemaRef::Provisional(expected));
         assert_eq!(out.raw_fp, Some(raw_fp));
         assert!(out.bucket.is_some());
         assert_eq!(fake.resolve_call_count(), 1);
+    }
+
+    // Hermes lineage gap 3: the SAME raw shape from DIFFERENT sources must
+    // mint DIFFERENT provisional candidate ids — "source co-occurrence is
+    // provenance, not semantic evidence," never grounds for merging.
+    #[tokio::test]
+    async fn provisional_cand_id_is_source_scoped() {
+        let fake_a = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
+        let m_a = matcher(fake_a);
+        let fake_b = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
+        let m_b = matcher(fake_b);
+        let payload = br#"{"shared_shape":true}"#;
+
+        let out_a = m_a.classify("topic-a", payload, &Limits::default()).await;
+        let out_b = m_b.classify("topic-b", payload, &Limits::default()).await;
+
+        assert_ne!(
+            out_a.schema_ref, out_b.schema_ref,
+            "identical shape from different sources must mint different cand_ ids"
+        );
+        // Same raw shape underneath — the divergence is purely source-driven.
+        assert_eq!(out_a.raw_fp, out_b.raw_fp);
+
+        // And re-classifying "topic-a" again reproduces the SAME id
+        // (deterministic per source), never a fresh one.
+        let fake_a2 = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
+        let m_a2 = matcher(fake_a2);
+        let out_a_again = m_a2.classify("topic-a", payload, &Limits::default()).await;
+        assert_eq!(out_a.schema_ref, out_a_again.schema_ref);
     }
 
     // Row 5: registry error → Unresolved, NEVER Provisional/cand_ (an
@@ -382,7 +430,7 @@ mod tests {
         let fake = Arc::new(FakeRegistry::new(ResolveResponse::Err));
         let m = matcher(fake.clone());
 
-        let out = m.classify(br#"{"x":1}"#, &Limits::default()).await;
+        let out = m.classify("test-source", br#"{"x":1}"#, &Limits::default()).await;
 
         assert_eq!(out.schema_ref, SchemaRef::Unresolved);
         assert_ne!(
@@ -402,7 +450,7 @@ mod tests {
         let payload = br#"{"repeat":1}"#;
 
         for _ in 0..3 {
-            let _ = m.classify(payload, &Limits::default()).await;
+            let _ = m.classify("test-source", payload, &Limits::default()).await;
         }
 
         assert_eq!(fake.resolve_call_count(), 1);
@@ -417,8 +465,8 @@ mod tests {
         let m = matcher(fake.clone());
         let payload = br#"{"never":"seen","before":1}"#;
 
-        let first = m.classify(payload, &Limits::default()).await;
-        let second = m.classify(payload, &Limits::default()).await;
+        let first = m.classify("test-source", payload, &Limits::default()).await;
+        let second = m.classify("test-source", payload, &Limits::default()).await;
 
         assert_eq!(first.schema_ref, second.schema_ref);
         match first.schema_ref {
@@ -436,7 +484,9 @@ mod tests {
         let fake = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
         let (m, metrics) = matcher_with_metrics(fake);
 
-        let out = m.classify(br#"{"a":1,"a":2}"#, &Limits::default()).await;
+        let out = m
+            .classify("test-source", br#"{"a":1,"a":2}"#, &Limits::default())
+            .await;
         assert_eq!(out.schema_ref, SchemaRef::Malformed);
         assert_eq!(out.quarantine, Some(QuarantineReason::DuplicateKey));
 
@@ -470,7 +520,7 @@ mod tests {
         let (m, metrics) = matcher_with_metrics(fake.clone());
         let payload = br#"{"cached":true}"#;
 
-        let first = m.classify(payload, &Limits::default()).await;
+        let first = m.classify("test-source", payload, &Limits::default()).await;
         assert!(matches!(first.schema_ref, SchemaRef::Known(_)));
 
         let families = metrics.registry().gather();
@@ -488,7 +538,7 @@ mod tests {
             "first classify is a registry hit, not an LRU cache hit"
         );
 
-        let second = m.classify(payload, &Limits::default()).await;
+        let second = m.classify("test-source", payload, &Limits::default()).await;
         assert!(matches!(second.schema_ref, SchemaRef::Known(_)));
         assert_eq!(
             fake.resolve_call_count(),

@@ -1,6 +1,7 @@
 //! Identity types. Spec §5.
 
 use data_encoding::BASE32_NOPAD;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IdError {
@@ -46,6 +47,43 @@ macro_rules! digest_id {
 digest_id!(SchemaId, "sch_");
 digest_id!(CandidateId, "cand_");
 digest_id!(SemanticId, "sem_");
+
+impl CandidateId {
+    /// Source-scoped candidate identity (Hermes lineage gap 3, spec §4/§9):
+    /// folds `source` (the Kafka topic — or other source identity, e.g. the
+    /// HTTP proxy's `origin_prefix` — a record was consumed from) into the
+    /// digest preimage alongside the raw shape `digest`, so two records
+    /// from DIFFERENT sources that happen to share the exact same
+    /// structural shape mint DIFFERENT `cand_` ids. "Source co-occurrence
+    /// is provenance, not semantic evidence" — it must never be grounds for
+    /// merging two sources' candidates into one.
+    ///
+    /// Pure function of `(source, digest)` only — no clock, no random —
+    /// so the SAME source observing the SAME raw shape always mints the
+    /// IDENTICAL `cand_` id (replay-safe, spec §3.2), while a DIFFERENT
+    /// source never collides with it even when `digest` is identical.
+    ///
+    /// This is the canonical way to mint a `cand_` id from a raw shape
+    /// fingerprint plus its source; every such mint site (currently
+    /// `deblob_match::matcher::HotMatcher::classify`) should go through
+    /// this rather than [`Self::from_digest`] directly, so source-scoping
+    /// can never silently regress at a new call site.
+    pub fn from_source_and_digest(source: &str, digest: &[u8; 32]) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(source.as_bytes());
+        // Domain-separates `source`'s bytes from `digest`'s: without this,
+        // a source `"ab"` + digest `[0xCD, ..]` could theoretically be
+        // constructed to alias a source `"a"` + a different digest sharing
+        // the same concatenated byte stream. `source` is never attacker-
+        // supplied raw payload (it's the consumed topic / configured
+        // origin prefix), but this is a one-byte cost for an unconditional
+        // guarantee rather than a "never happens in practice" assumption.
+        hasher.update([0u8]);
+        hasher.update(digest);
+        let folded: [u8; 32] = hasher.finalize().into();
+        Self::from_digest(&folded)
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(transparent)]
@@ -124,6 +162,39 @@ impl SchemaRef {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Hermes lineage gap 3: same source + same raw digest always mints the
+    // identical cand_ id (deterministic/replay-safe — spec §3.2).
+    #[test]
+    fn candidate_id_from_source_and_digest_is_deterministic_per_source() {
+        let d = [7u8; 32];
+        let a1 = CandidateId::from_source_and_digest("topic-a", &d);
+        let a2 = CandidateId::from_source_and_digest("topic-a", &d);
+        assert_eq!(a1, a2);
+        assert!(a1.as_str().starts_with("cand_"));
+    }
+
+    // Hermes lineage gap 3 (the core fix): the SAME raw shape digest from
+    // DIFFERENT sources must mint DIFFERENT candidate ids — "source
+    // co-occurrence is provenance, not semantic evidence."
+    #[test]
+    fn candidate_id_from_source_and_digest_differs_across_sources() {
+        let d = [7u8; 32];
+        let a = CandidateId::from_source_and_digest("topic-a", &d);
+        let b = CandidateId::from_source_and_digest("topic-b", &d);
+        assert_ne!(a, b);
+    }
+
+    // Source-scoping must not collapse back onto the plain source-blind
+    // `from_digest` mint — folding `source` in actually changes the digest
+    // preimage, not just tag along unused.
+    #[test]
+    fn candidate_id_from_source_and_digest_differs_from_source_blind_digest() {
+        let d = [7u8; 32];
+        let scoped = CandidateId::from_source_and_digest("topic-a", &d);
+        let blind = CandidateId::from_digest(&d);
+        assert_ne!(scoped, blind);
+    }
 
     #[test]
     fn schema_id_from_digest_roundtrips() {

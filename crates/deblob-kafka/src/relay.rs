@@ -568,7 +568,11 @@ async fn run_transaction_body(
 
     let mut deliveries = Vec::with_capacity(2);
 
-    let classification = matcher.classify(&payload, &cfg.limits).await;
+    // `cursor.topic` (Hermes lineage gap 3, spec §4/§9) is the ACTUAL
+    // consumed topic — folded into any freshly minted `Provisional`
+    // candidate id by `HotMatcher::classify` so two sources sharing the
+    // exact same raw shape never collide on one candidate.
+    let classification = matcher.classify(&cursor.topic, &payload, &cfg.limits).await;
 
     // Live-stream tap (Stage L1): emitted immediately once the
     // classification is decided — the SAME timing `HotMatcher::classify`

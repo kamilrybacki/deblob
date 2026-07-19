@@ -48,12 +48,24 @@ pub struct CandidateRecord {
     /// per-record source, spec §4/§9). Threaded through from
     /// `deblob::coldlane::SampleMeta::source`, which is itself now the
     /// ACTUAL consumed record's topic rather than a static config value
-    /// (see `deblob-kafka::relay`'s `DiscoveryMsg.source` fix). Clustering
-    /// stays GLOBAL — this field is provenance/observability only, never a
-    /// clustering or retrieval key (source-scoped clustering is deferred to
-    /// a later stage). `#[serde(default)]` so every pre-existing
-    /// `CandidateRecord` JSON in storage (which lacks this field entirely)
-    /// still deserializes, yielding `None`.
+    /// (see `deblob-kafka::relay`'s `DiscoveryMsg.source` fix). This FIELD
+    /// itself is provenance/observability only, surfaced by `GET
+    /// /api/v1/candidates` — never read back as a key by this crate.
+    ///
+    /// CANDIDATE clustering IS source-scoped (Hermes lineage gap 3, fixed):
+    /// the same `meta.source` value is folded into the candidate id mint
+    /// (`deblob_match::matcher::HotMatcher::classify` via
+    /// [`CandidateId::from_source_and_digest`]) and into the
+    /// generalized-fingerprint cluster-map key
+    /// (`deblob::coldlane::scoped_gen_fp`) — via those two SEPARATE code
+    /// paths, not via this field — so two different sources sharing the
+    /// exact same shape never converge onto one candidate. KNOWN-schema
+    /// structural retrieval (`Registry::resolve_structural`) stays
+    /// GLOBAL/source-blind for now; widening it the same way is a
+    /// documented follow-up, not done here.
+    /// `#[serde(default)]` so every pre-existing `CandidateRecord` JSON in
+    /// storage (which lacks this field entirely) still deserializes,
+    /// yielding `None`.
     #[serde(default)]
     pub source: Option<String>,
 }
@@ -246,8 +258,21 @@ pub trait EvidenceStore: Send + Sync {
     /// currently clusters onto, so optional-field variants of one emerging
     /// schema converge onto ONE candidate even when the hot path's raw
     /// shape digest mints a different `cand_` id per variant.
+    ///
+    /// `gen_fp` is an OPAQUE key as far as this trait is concerned — this
+    /// trait's signature is deliberately unchanged by Hermes lineage gap 3
+    /// (source-scoped candidate clustering): the sole production caller,
+    /// `deblob::coldlane::ColdLane::ingest`, is responsible for
+    /// source-scoping the key it passes here (via `deblob::coldlane::
+    /// scoped_gen_fp`, prefixing the source before the hex fingerprint) so
+    /// two different sources sharing the exact same generalized shape never
+    /// share a cluster entry. An implementation must simply treat `gen_fp`
+    /// as an opaque string key — it must never itself try to parse a
+    /// source back out of it.
     async fn get_cluster(&self, gen_fp: &str) -> Result<Option<CandidateId>, CoreError>;
-    /// Records (or refreshes) that `gen_fp` clusters onto `cand_id`.
+    /// Records (or refreshes) that `gen_fp` clusters onto `cand_id`. See
+    /// [`EvidenceStore::get_cluster`]'s docs on `gen_fp` being an opaque,
+    /// caller-scoped key.
     async fn set_cluster(&self, gen_fp: &str, cand_id: &CandidateId) -> Result<(), CoreError>;
 
     /// Records (idempotently, de-duplicated) that a CONCRETE shape observed

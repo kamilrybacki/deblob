@@ -403,7 +403,15 @@ async fn ingest_handler(State(state): State<ProxyState>, request: Request<Body>)
         }
     };
 
-    let classification = state.matcher.classify(&body, &state.limits).await;
+    // `state.origin_prefix` (Hermes lineage gap 3, spec §4/§9) is this
+    // proxy route's stable source identity — folded into any freshly
+    // minted `Provisional` candidate id by `HotMatcher::classify` so a
+    // shape shared with a different source/route never collides on one
+    // candidate.
+    let classification = state
+        .matcher
+        .classify(&state.origin_prefix, &body, &state.limits)
+        .await;
 
     if classification.schema_ref == SchemaRef::Malformed {
         let reason = classification

@@ -88,6 +88,12 @@ fn evidence_key(id: &CandidateId) -> String {
 
 /// Cold-lane cluster-alias key (Task 14, spec §4): maps a hex-encoded
 /// generalized fingerprint onto the one candidate its variants converge on.
+/// `gen_fp` is opaque here (see [`deblob_core::ports::EvidenceStore::
+/// get_cluster`]'s docs) — as of Hermes lineage gap 3, the caller
+/// (`deblob::coldlane::ColdLane::ingest`) always source-scopes it first
+/// (`"<source>:<hex>"`), so this key ends up `deblob:cluster:<source>:<hex>`
+/// in practice, but that structure is the caller's convention, not
+/// something this function parses or relies on.
 fn cluster_key(gen_fp: &str) -> String {
     format!("deblob:cluster:{gen_fp}")
 }
