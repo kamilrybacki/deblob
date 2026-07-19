@@ -625,4 +625,12 @@ impl EvidenceStore for RedisEvidence {
             })
             .collect())
     }
+
+    /// `EvidenceStore::rebuild_candidate_index` — delegates to the inherent
+    /// [`RedisEvidence::rebuild_candidate_index`] (the only implementation),
+    /// which the trait can't see directly since the management API only
+    /// ever holds an `Arc<dyn EvidenceStore>`.
+    async fn rebuild_candidate_index(&self) -> Result<u64, CoreError> {
+        RedisEvidence::rebuild_candidate_index(self).await
+    }
 }

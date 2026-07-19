@@ -138,6 +138,33 @@ pub async fn reject(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Response body for `POST /api/v1/candidates/reindex`.
+#[derive(Debug, Serialize)]
+pub struct ReindexResponse {
+    /// The number of candidate records reindexed by
+    /// `EvidenceStore::rebuild_candidate_index`.
+    pub reindexed: u64,
+}
+
+/// `POST /api/v1/candidates/reindex` — authenticated backfill/repair
+/// endpoint for the per-state candidate-listing index (spec §6's
+/// `RedisEvidence::rebuild_candidate_index`, previously only reachable as
+/// an inherent method with no API surface). Idempotent and always safe to
+/// run again — see that method's own docs.
+pub async fn reindex(
+    State(state): State<ApiState>,
+) -> Result<Json<DataEnvelope<ReindexResponse>>, ApiError> {
+    let reindexed = state
+        .evidence
+        .rebuild_candidate_index()
+        .await
+        .map_err(ApiError::from_core)?;
+
+    Ok(Json(DataEnvelope {
+        data: ReindexResponse { reindexed },
+    }))
+}
+
 #[derive(Debug, Serialize)]
 pub struct QuarantineEntry {
     // Placeholder shape: the quarantine stream itself is Kafka-side (spec

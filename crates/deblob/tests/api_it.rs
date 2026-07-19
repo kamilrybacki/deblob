@@ -20,7 +20,7 @@ use deblob_core::revision::{
 };
 use deblob_core::semantic::SemanticMetadata;
 use deblob_redis::health::HealthGate;
-use deblob_umbrella::store::InMemoryUmbrellaStore;
+use deblob_umbrella::store::{InMemoryUmbrellaStore, UmbrellaStore};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -1608,4 +1608,188 @@ async fn family_endpoints_require_bearer() {
         .await
         .unwrap();
     assert_eq!(resp2.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------
+// Candidate reindex (backfill endpoint)
+// ---------------------------------------------------------------------
+
+#[tokio::test]
+async fn reindex_calls_through_evidence_store() {
+    let app = api::router(empty_state());
+
+    let resp = app
+        .oneshot(post_json(
+            "/api/v1/candidates/reindex",
+            Some(TOKEN),
+            &serde_json::json!({}),
+        ))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    // `FakeEvidence` doesn't override `rebuild_candidate_index`, so it runs
+    // the trait's default `Ok(0)` — still proves the route reaches
+    // `EvidenceStore::rebuild_candidate_index` end to end.
+    assert_eq!(body["data"]["reindexed"], 0);
+}
+
+#[tokio::test]
+async fn reindex_requires_bearer() {
+    let app = api::router(empty_state());
+
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/v1/candidates/reindex")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------
+// Umbrella governance: approve + lineage assertion
+// ---------------------------------------------------------------------
+
+/// A minimal, monoid-canonical child schema whose one top-level field
+/// (`"dt"`, a number) is the source of the transform built by
+/// [`approve_fixture`].
+fn lineage_child_schema() -> SchemaRecord {
+    SchemaRecord {
+        schema_id: SchemaId::from_digest(&[42u8; 32]),
+        family_id: deblob_core::id::FamilyId::new_v7(),
+        version: FamilyVersion(1),
+        canonical: r#"{"optional":false,"types":["object"],"children":{"dt":{"optional":false,"types":["number"]}}}"#.to_string(),
+        canonicalizer: deblob_monoid::GENERALIZER.to_string(),
+        provenance: serde_json::json!({}),
+        semantic: None,
+        semantic_fingerprint: None,
+        privacy_class: None,
+    }
+}
+
+/// A provisional umbrella + its one statically-sound transform, sourced
+/// from [`lineage_child_schema`] — everything `approve` needs to reach
+/// `promote_bundle`/`put_lineage_assertion` without hitting any
+/// verification issue.
+fn approve_fixture() -> (
+    deblob_umbrella::types::UmbrellaSchema,
+    deblob_umbrella::types::ChildTransform,
+) {
+    use deblob_umbrella::types::{
+        Binding, Cardinality, ChildTransform, FieldType, JsonPath, OnError, OnMissing,
+        ScalarType, UmbrellaField, UmbrellaSchema,
+    };
+
+    let child_id = lineage_child_schema().schema_id.as_str().to_string();
+
+    let umbrella = UmbrellaSchema {
+        umbrella_id: "umb_test".into(),
+        label: "test".into(),
+        version: 1,
+        fields: vec![UmbrellaField {
+            canonical_field_id: deblob_core::semantic::CanonicalFieldId::new("event_time"),
+            path: JsonPath::parse("$.event_time").unwrap(),
+            name: "event_time".into(),
+            ty: FieldType::Scalar(ScalarType::Decimal),
+            unit: None,
+            cardinality: Cardinality::Required,
+        }],
+    };
+
+    let transform = ChildTransform {
+        child_schema_id: child_id.clone(),
+        umbrella_id: "umb_test".into(),
+        child_revision: format!("{child_id}@1"),
+        umbrella_revision: "umb_test@1".into(),
+        bindings: vec![Binding {
+            source: JsonPath::parse("$.dt").unwrap(),
+            target: JsonPath::parse("$.event_time").unwrap(),
+            ops: vec![],
+            on_missing: OnMissing::Reject,
+            on_error: OnError::Reject,
+        }],
+        unmapped_source_paths: vec![],
+    };
+
+    (umbrella, transform)
+}
+
+#[tokio::test]
+async fn approve_writes_lineage_assertion() {
+    use deblob_umbrella::store::UmbrellaState;
+
+    let child_schema = lineage_child_schema();
+    let child_id = child_schema.schema_id.as_str().to_string();
+    let (umbrella, transform) = approve_fixture();
+
+    let umbrella_store = InMemoryUmbrellaStore::new();
+    umbrella_store
+        .put_umbrella(&umbrella, UmbrellaState::Provisional)
+        .await
+        .unwrap();
+    umbrella_store.put_transform(&transform).await.unwrap();
+
+    let mut state = make_state(
+        FakeRegistry::new(vec![child_schema]),
+        FakeEvidence::default(),
+        FakePromoter::conflict("unused"),
+        HealthGate::new(),
+        Arc::new(FakeSemanticStore::default()),
+    );
+    state.umbrellas = Arc::new(umbrella_store);
+    let app = api::router(state);
+
+    // Not yet approved: no lineage assertion exists.
+    let resp = app
+        .clone()
+        .oneshot(get("/api/v1/umbrellas/umb_test/lineage", Some(TOKEN)))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+    let resp = app
+        .clone()
+        .oneshot(post_json(
+            "/api/v1/umbrellas/umb_test/approve",
+            Some(TOKEN),
+            &serde_json::json!({"reason": "consolidating weather sources"}),
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK, "{:?}", body_json(resp).await);
+
+    let resp = app
+        .oneshot(get("/api/v1/umbrellas/umb_test/lineage", Some(TOKEN)))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    let body = body_json(resp).await;
+    assert_eq!(body["data"]["umbrella_id"], "umb_test");
+    assert_eq!(body["data"]["umbrella_version"], 1);
+    assert_eq!(
+        body["data"]["approved_reason"],
+        "consolidating weather sources"
+    );
+    assert_eq!(body["data"]["members"].as_array().unwrap().len(), 1);
+    assert_eq!(body["data"]["members"][0]["child_schema_id"], child_id);
+    assert_eq!(body["data"]["members"][0]["transform_present"], true);
+}
+
+#[tokio::test]
+async fn lineage_404_for_unknown_umbrella() {
+    let app = api::router(empty_state());
+
+    let resp = app
+        .oneshot(get("/api/v1/umbrellas/umb_missing/lineage", Some(TOKEN)))
+        .await
+        .unwrap();
+
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

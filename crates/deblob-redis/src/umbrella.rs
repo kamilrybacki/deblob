@@ -6,6 +6,9 @@
 //!     `list_umbrellas` is O(state) with NO empty pages, unlike the SCAN candidate list)
 //!   * `deblob:umbrella-transform:<umb>:<child>`  STRING <transform json>
 //!   * `deblob:umbrella-transforms:<umb>`   SET of child ids for that umbrella
+//!   * `deblob:umbrella-lineage:<umb>`      STRING <lineage assertion json>, written
+//!     once by `approve` right after `promote_bundle` succeeds (never in the same
+//!     pipeline — see `put_lineage_assertion`'s docs)
 //!
 //! `set_state` only rewrites the hash's `state` field + moves the id between state
 //! index sets — it never re-serialises the schema. `promote_bundle` writes the
@@ -13,7 +16,7 @@
 
 use async_trait::async_trait;
 use deblob_umbrella::store::{
-    StoreError, StoredUmbrella, UmbrellaBundle, UmbrellaState, UmbrellaStore,
+    LineageAssertion, StoreError, StoredUmbrella, UmbrellaBundle, UmbrellaState, UmbrellaStore,
 };
 use deblob_umbrella::types::{ChildTransform, UmbrellaSchema};
 
@@ -39,6 +42,9 @@ fn transform_key(umb: &str, child: &str) -> String {
 }
 fn transforms_index(umb: &str) -> String {
     format!("deblob:umbrella-transforms:{umb}")
+}
+fn lineage_key(umb: &str) -> String {
+    format!("deblob:umbrella-lineage:{umb}")
 }
 fn state_str(state: UmbrellaState) -> &'static str {
     match state {
@@ -193,5 +199,31 @@ impl UmbrellaStore for RedisUmbrella {
         }
         pipe.query_async::<()>(&mut conn).await.map_err(backend)?;
         Ok(())
+    }
+
+    async fn put_lineage_assertion(&self, a: &LineageAssertion) -> Result<(), StoreError> {
+        let mut conn = self.conn.clone();
+        let json = serde_json::to_string(a).map_err(backend)?;
+        redis::cmd("SET")
+            .arg(lineage_key(&a.umbrella_id))
+            .arg(json)
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get_lineage_assertion(
+        &self,
+        umbrella_id: &str,
+    ) -> Result<Option<LineageAssertion>, StoreError> {
+        let mut conn = self.conn.clone();
+        let json: Option<String> = redis::cmd("GET")
+            .arg(lineage_key(umbrella_id))
+            .query_async(&mut conn)
+            .await
+            .map_err(backend)?;
+        json.map(|j| serde_json::from_str(&j).map_err(backend))
+            .transpose()
     }
 }

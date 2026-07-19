@@ -296,6 +296,20 @@ pub trait EvidenceStore: Send + Sync {
     /// for that case.
     async fn get_variants(&self, cand_id: &CandidateId)
         -> Result<Vec<(String, String)>, CoreError>;
+
+    /// Backfill/repair the per-state candidate-listing index (operator
+    /// path, e.g. `deblob-redis::RedisEvidence::rebuild_candidate_index`):
+    /// reconstructs whatever index a store maintains for
+    /// [`EvidenceStore::list_candidates`] from its own authoritative
+    /// records, and returns the number of candidates reindexed.
+    ///
+    /// Defaults to a no-op returning `Ok(0)` so every implementation that
+    /// doesn't maintain such an index (in-memory fakes, test doubles) keeps
+    /// compiling unchanged; only a store with a real backfill path (Redis)
+    /// needs to override this.
+    async fn rebuild_candidate_index(&self) -> Result<u64, CoreError> {
+        Ok(0)
+    }
 }
 
 #[async_trait]

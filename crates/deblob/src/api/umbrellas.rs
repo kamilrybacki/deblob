@@ -14,8 +14,10 @@ use axum::http::StatusCode;
 use axum::Json;
 use deblob_core::id::SchemaId;
 use deblob_core::ports::SchemaRecord;
-use deblob_core::semantic::{FieldSemantics, PathSegment};
-use deblob_umbrella::store::{StoreError, StoredUmbrella, UmbrellaBundle, UmbrellaState};
+use deblob_core::semantic::{FieldSemantics, PathSegment, SemanticMetadata};
+use deblob_umbrella::store::{
+    LineageAssertion, LineageMember, StoreError, StoredUmbrella, UmbrellaBundle, UmbrellaState,
+};
 use deblob_umbrella::types::{ChildTransform, JsonPath, ScalarType};
 use deblob_umbrella::verify::{self, ChildField};
 use serde::{Deserialize, Serialize};
@@ -90,6 +92,24 @@ pub async fn get_umbrella(
         .ok_or_else(|| ApiError::not_found("umbrella not found"))?;
 
     Ok(Json(DataEnvelope { data: umbrella }))
+}
+
+/// `GET /api/v1/umbrellas/{umbrella_id}/lineage` — the immutable
+/// governance-lineage assertion written by `approve` at promotion time, or
+/// 404 if the umbrella was never approved (including if it doesn't exist at
+/// all).
+pub async fn get_lineage(
+    State(state): State<ApiState>,
+    Path(umbrella_id): Path<String>,
+) -> Result<Json<DataEnvelope<LineageAssertion>>, ApiError> {
+    let assertion = state
+        .umbrellas
+        .get_lineage_assertion(&umbrella_id)
+        .await
+        .map_err(ApiError::from_umbrella_store)?
+        .ok_or_else(|| ApiError::not_found("lineage assertion not found"))?;
+
+    Ok(Json(DataEnvelope { data: assertion }))
 }
 
 /// `GET /api/v1/umbrellas/{umbrella_id}/transforms`.
@@ -202,7 +222,22 @@ pub async fn approve(
                 ))
             })?;
 
-        let child_fields = child_fields_from_schema(&child_record);
+        // The registry's own `SchemaRecord::semantic` is always `None` in
+        // practice (semantic annotations live in the append-only
+        // `SemanticStore`, spec P2-D Task 5/6) — fetch the schema's CURRENT
+        // active annotation from there instead. Best-effort: a store error
+        // or "no active revision yet" both fall back to `None`
+        // (unannotated), matching `child_fields_from_schema`'s own posture
+        // that a missing annotation is a legitimate, common case, not a
+        // reason to fail verification outright.
+        let active_semantic = state.semantic.active_semantic(&child_id).await;
+        let semantic_metadata = match active_semantic {
+            Ok(Some((metadata, _, _))) => Some(metadata),
+            Ok(None) => None,
+            Err(_) => None,
+        };
+
+        let child_fields = child_fields_from_schema(&child_record, semantic_metadata.as_ref());
         for issue in verify::verify_static(transform, &stored.schema, &child_fields) {
             issues.push(format!("{}: {issue}", transform.child_schema_id));
         }
@@ -224,6 +259,31 @@ pub async fn approve(
     state
         .umbrellas
         .promote_bundle(&bundle)
+        .await
+        .map_err(ApiError::from_umbrella_store)?;
+
+    // Governed lineage assertion (payload-free, immutable): captures
+    // exactly what was consolidated into this umbrella at the moment a
+    // human approved it. Written right after `promote_bundle` succeeds —
+    // see `LineageAssertion`'s own docs for why a separate call (rather
+    // than folding it into the same atomic write) is sufficient here.
+    let lineage = LineageAssertion {
+        umbrella_id: bundle.umbrella.umbrella_id.clone(),
+        umbrella_version: bundle.umbrella.version,
+        members: bundle
+            .transforms
+            .iter()
+            .map(|t| LineageMember {
+                child_schema_id: t.child_schema_id.clone(),
+                child_revision: t.child_revision.clone(),
+                transform_present: true,
+            })
+            .collect(),
+        approved_reason: req.reason.clone(),
+    };
+    state
+        .umbrellas
+        .put_lineage_assertion(&lineage)
         .await
         .map_err(ApiError::from_umbrella_store)?;
 
@@ -309,7 +369,20 @@ pub async fn propose(
 /// None` / `unit: None` — `verify::verify_static` doesn't require either to
 /// check structural/type/unit soundness, so this is a legitimate, common
 /// case, not an error.
-pub(crate) fn child_fields_from_schema(rec: &SchemaRecord) -> Vec<ChildField> {
+///
+/// `semantic` is the schema's CURRENT active semantic annotation, fetched
+/// separately by the caller via `SemanticStore::active_semantic` —
+/// `SchemaRecord::semantic` itself is always `None` in practice (semantic
+/// annotations live in the append-only `SemanticStore`, spec P2-D Task 5/6,
+/// never on the registry record), so reading `rec.semantic` here would
+/// silently see zero annotations for every schema. `None` means either "no
+/// active revision" or "caller couldn't/didn't fetch one" — both are
+/// legitimate, common cases (a schema with no semantic annotations yet),
+/// not an error.
+pub(crate) fn child_fields_from_schema(
+    rec: &SchemaRecord,
+    semantic: Option<&SemanticMetadata>,
+) -> Vec<ChildField> {
     if rec.canonicalizer != deblob_monoid::GENERALIZER {
         return Vec::new();
     }
@@ -318,9 +391,7 @@ pub(crate) fn child_fields_from_schema(rec: &SchemaRecord) -> Vec<ChildField> {
         return Vec::new();
     };
 
-    let semantic_by_path: BTreeMap<Vec<String>, &FieldSemantics> = rec
-        .semantic
-        .as_ref()
+    let semantic_by_path: BTreeMap<Vec<String>, &FieldSemantics> = semantic
         .map(|sem| {
             sem.fields
                 .iter()
@@ -521,8 +592,8 @@ mod child_fields_tests {
             }],
         };
 
-        let rec = schema_record(&canonical, Some(semantic));
-        let mut fields = child_fields_from_schema(&rec);
+        let rec = schema_record(&canonical, Some(semantic.clone()));
+        let mut fields = child_fields_from_schema(&rec, Some(&semantic));
         fields.sort_by(|a, b| String::from(a.path.clone()).cmp(&String::from(b.path.clone())));
 
         assert_eq!(fields.len(), 3);
@@ -558,12 +629,12 @@ mod child_fields_tests {
             None,
         );
         rec.canonicalizer = "deblob-canon-v1".to_string();
-        assert!(child_fields_from_schema(&rec).is_empty());
+        assert!(child_fields_from_schema(&rec, None).is_empty());
     }
 
     #[test]
     fn malformed_canonical_yields_no_fields() {
         let rec = schema_record("not json", None);
-        assert!(child_fields_from_schema(&rec).is_empty());
+        assert!(child_fields_from_schema(&rec, None).is_empty());
     }
 }

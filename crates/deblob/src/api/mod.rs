@@ -284,6 +284,7 @@ pub fn router(state: ApiState) -> Router {
             get(schemas::get_family_versions),
         )
         .route("/candidates", get(candidates::list_candidates))
+        .route("/candidates/reindex", post(candidates::reindex))
         .route("/candidates/{cand_id}/promote", post(candidates::promote))
         .route("/candidates/{cand_id}/reject", post(candidates::reject))
         .route("/quarantine", get(candidates::quarantine))
@@ -297,6 +298,10 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/umbrellas/{umbrella_id}/approve", post(umbrellas::approve))
         .route("/umbrellas/{umbrella_id}/reject", post(umbrellas::reject))
+        .route(
+            "/umbrellas/{umbrella_id}/lineage",
+            get(umbrellas::get_lineage),
+        )
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,

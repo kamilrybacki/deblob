@@ -37,6 +37,37 @@ pub struct UmbrellaBundle {
     pub transforms: Vec<ChildTransform>,
 }
 
+/// One consolidated child's identity, captured at umbrella-approval time —
+/// IDs/revisions only, never a payload/binding/canonical byte. See
+/// [`LineageAssertion`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineageMember {
+    pub child_schema_id: String,
+    pub child_revision: String,
+    /// Always `true` for a member built from an actually-persisted
+    /// `ChildTransform` (the only way `approve` builds these today) —
+    /// reserved for a future member derived by some other means that
+    /// couldn't confirm a transform exists.
+    pub transform_present: bool,
+}
+
+/// An IMMUTABLE, payload-free governance record of exactly what was
+/// consolidated into an umbrella at the moment a human approved it (design
+/// §trust gate lineage): the umbrella's own version, the identity of every
+/// child that was folded in (id + revision only — never bindings, canonical
+/// bytes, or raw values), and the human's stated reason. Written once, by
+/// [`UmbrellaStore::put_lineage_assertion`], right after
+/// [`UmbrellaStore::promote_bundle`] succeeds — an umbrella can only ever be
+/// approved once (`approve` rejects a non-`Provisional` umbrella), so in
+/// practice there is exactly one assertion per `umbrella_id`, not a history.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineageAssertion {
+    pub umbrella_id: String,
+    pub umbrella_version: u32,
+    pub members: Vec<LineageMember>,
+    pub approved_reason: String,
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("umbrella {0} not found")]
@@ -61,6 +92,22 @@ pub trait UmbrellaStore: Send + Sync {
     /// Atomically persist a promoted bundle: the umbrella becomes `Active` and all
     /// its transforms are stored together. Every transform must name this umbrella.
     async fn promote_bundle(&self, bundle: &UmbrellaBundle) -> Result<(), StoreError>;
+
+    /// Persist the IMMUTABLE governance-lineage assertion for `a.umbrella_id`
+    /// (spec: governed lineage on umbrella approval). Called once, right
+    /// after a successful [`UmbrellaStore::promote_bundle`] — see
+    /// [`LineageAssertion`]'s own docs.
+    async fn put_lineage_assertion(&self, a: &LineageAssertion) -> Result<(), StoreError>;
+
+    /// The lineage assertion written by [`UmbrellaStore::
+    /// put_lineage_assertion`] for `umbrella_id`, or `None` if the umbrella
+    /// was never approved (including if it doesn't exist at all) — never an
+    /// error for that case, mirroring [`UmbrellaStore::get_umbrella`]'s own
+    /// "absent is a valid answer" posture.
+    async fn get_lineage_assertion(
+        &self,
+        umbrella_id: &str,
+    ) -> Result<Option<LineageAssertion>, StoreError>;
 }
 
 /// In-memory store — the reference implementation the lifecycle tests pin, and a
@@ -69,6 +116,7 @@ pub trait UmbrellaStore: Send + Sync {
 pub struct InMemoryUmbrellaStore {
     umbrellas: Mutex<BTreeMap<String, StoredUmbrella>>,
     transforms: Mutex<BTreeMap<(String, String), ChildTransform>>,
+    lineage: Mutex<BTreeMap<String, LineageAssertion>>,
 }
 
 impl InMemoryUmbrellaStore {
@@ -134,6 +182,19 @@ impl UmbrellaStore for InMemoryUmbrellaStore {
             ts.insert((t.umbrella_id.clone(), t.child_schema_id.clone()), t.clone());
         }
         Ok(())
+    }
+    async fn put_lineage_assertion(&self, a: &LineageAssertion) -> Result<(), StoreError> {
+        self.lineage
+            .lock()
+            .unwrap()
+            .insert(a.umbrella_id.clone(), a.clone());
+        Ok(())
+    }
+    async fn get_lineage_assertion(
+        &self,
+        umbrella_id: &str,
+    ) -> Result<Option<LineageAssertion>, StoreError> {
+        Ok(self.lineage.lock().unwrap().get(umbrella_id).cloned())
     }
 }
 
@@ -210,5 +271,35 @@ mod tests {
         assert!(matches!(s.promote_bundle(&bundle).await, Err(StoreError::BundleMismatch { .. })));
         // nothing persisted
         assert!(s.get_umbrella("umb_w").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn put_get_lineage_assertion() {
+        let s = InMemoryUmbrellaStore::new();
+        assert!(s.get_lineage_assertion("umb_w").await.unwrap().is_none());
+
+        let assertion = LineageAssertion {
+            umbrella_id: "umb_w".into(),
+            umbrella_version: 1,
+            members: vec![
+                LineageMember {
+                    child_schema_id: "sch_a".into(),
+                    child_revision: "sch_a@1".into(),
+                    transform_present: true,
+                },
+                LineageMember {
+                    child_schema_id: "sch_b".into(),
+                    child_revision: "sch_b@1".into(),
+                    transform_present: true,
+                },
+            ],
+            approved_reason: "consolidating weather sources".into(),
+        };
+        s.put_lineage_assertion(&assertion).await.unwrap();
+
+        let fetched = s.get_lineage_assertion("umb_w").await.unwrap().unwrap();
+        assert_eq!(fetched, assertion);
+        // A different umbrella's lineage is unaffected.
+        assert!(s.get_lineage_assertion("umb_other").await.unwrap().is_none());
     }
 }

@@ -93,10 +93,23 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
             .await
             .map_err(ApiError::from_core)?;
         for rec in page {
-            let annotated: Vec<ChildField> = child_fields_from_schema(&rec)
-                .into_iter()
-                .filter(|f| f.canonical_field_id.is_some())
-                .collect();
+            // `SchemaRecord::semantic` is always `None` in practice —
+            // annotations live in the append-only `SemanticStore` (spec
+            // P2-D Task 5/6), so fetch the schema's CURRENT active
+            // annotation from there instead (mirrors `approve`'s own fix
+            // for the exact same gap). Best-effort: a store error or "no
+            // active revision yet" both fall back to unannotated, which
+            // simply excludes the schema from this run's grouping.
+            let semantic_metadata = match state.semantic.active_semantic(&rec.schema_id).await {
+                Ok(Some((metadata, _, _))) => Some(metadata),
+                Ok(None) | Err(_) => None,
+            };
+
+            let annotated: Vec<ChildField> =
+                child_fields_from_schema(&rec, semantic_metadata.as_ref())
+                    .into_iter()
+                    .filter(|f| f.canonical_field_id.is_some())
+                    .collect();
             if !annotated.is_empty() {
                 schemas.push((rec, annotated));
             }
