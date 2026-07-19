@@ -29,7 +29,7 @@ impl ApiError {
     /// rather than a caller mistake (bundle promotion isn't exposed as an
     /// API surface here, so `BundleMismatch` should never actually surface
     /// through these handlers — still mapped defensively).
-    fn from_umbrella_store(err: StoreError) -> Self {
+    pub(crate) fn from_umbrella_store(err: StoreError) -> Self {
         match &err {
             StoreError::UmbrellaNotFound(_) => Self::not_found(err.to_string()),
             StoreError::BundleMismatch { .. } | StoreError::Backend(_) => {
@@ -309,7 +309,7 @@ pub async fn propose(
 /// None` / `unit: None` — `verify::verify_static` doesn't require either to
 /// check structural/type/unit soundness, so this is a legitimate, common
 /// case, not an error.
-fn child_fields_from_schema(rec: &SchemaRecord) -> Vec<ChildField> {
+pub(crate) fn child_fields_from_schema(rec: &SchemaRecord) -> Vec<ChildField> {
     if rec.canonicalizer != deblob_monoid::GENERALIZER {
         return Vec::new();
     }
