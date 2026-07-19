@@ -289,19 +289,14 @@ pub fn router(state: ApiState) -> Router {
         .route("/quarantine", get(candidates::quarantine))
         .route("/stream", get(stream::get_stream))
         .route("/umbrellas", get(umbrellas::list_umbrellas))
+        .route("/umbrellas/propose", post(umbrellas::propose))
         .route("/umbrellas/{umbrella_id}", get(umbrellas::get_umbrella))
         .route(
             "/umbrellas/{umbrella_id}/transforms",
             get(umbrellas::list_transforms),
         )
-        .route(
-            "/umbrellas/{umbrella_id}/approve",
-            post(umbrellas::approve),
-        )
-        .route(
-            "/umbrellas/{umbrella_id}/reject",
-            post(umbrellas::reject),
-        )
+        .route("/umbrellas/{umbrella_id}/approve", post(umbrellas::approve))
+        .route("/umbrellas/{umbrella_id}/reject", post(umbrellas::reject))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             auth::require_bearer,

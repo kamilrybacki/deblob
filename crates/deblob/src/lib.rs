@@ -32,5 +32,6 @@ pub mod semantic_store;
 pub mod serve;
 pub mod shadow;
 pub mod trusted;
+pub mod umbrella_controller;
 
 pub use deblob_match::{matcher, metrics};
