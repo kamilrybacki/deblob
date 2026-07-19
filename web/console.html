@@ -534,27 +534,40 @@ function umbMutate(kind,id){
   };
 }
 // --- Live stream (SSE tap; metadata only) ----------------------------------
-let _es=null, _streamPaused=false;
-function closeStream(){if(_es){_es.close();_es=null;}}
+// Receive-rate is decoupled from render-rate: onmessage only pushes to a bounded
+// buffer (cheap); a requestAnimationFrame loop flushes to the DOM in batches
+// (≤~60/s), capped. This prevents a burst of events from freezing the tab.
+let _es=null, _streamPaused=false, _sbuf=[], _sraf=null, _sfirst=true;
+function closeStream(){if(_es){_es.close();_es=null;}if(_sraf){cancelAnimationFrame(_sraf);_sraf=null;}_sbuf=[];}
+function streamRow(d){const cls=d.outcome==='tagged'?'good':d.outcome==='quarantined'?'risk':d.outcome==='new_candidate'?'accent':'muted';
+  const o=d.origin||{};const row=document.createElement('div');row.className='streamrow';
+  row.innerHTML=`<span class="st-t">${new Date(d.ts_ms||Date.now()).toLocaleTimeString()}</span><span class="st-o ${cls}">${esc(d.outcome||'?')}</span><span class="num">${esc(shortId(d.schema_ref||''))}</span><span class="muted num">${esc((o.topic||'')+'/'+(o.partition!=null?o.partition:'')+'/'+(o.offset!=null?o.offset:''))}</span><span class="muted">${d.fields_count!=null?d.fields_count+'f':''}</span><span class="src">${d.source?esc(d.source):''}</span>`;
+  return row;}
+function streamFlush(){
+  _sraf=null;const feed=$('#streamfeed');
+  if(feed&&!_streamPaused&&_sbuf.length){
+    if(_sfirst){feed.innerHTML='';_sfirst=false;}
+    const batch=_sbuf.slice(-200);_sbuf.length=0;
+    const frag=document.createDocumentFragment();
+    for(let i=batch.length-1;i>=0;i--)frag.appendChild(streamRow(batch[i]));
+    feed.insertBefore(frag,feed.firstChild);
+    const el=feed.querySelectorAll('.streamrow');for(let i=200;i<el.length;i++)el[i].remove();
+  }
+  if(_es)_sraf=requestAnimationFrame(streamFlush);
+}
 V.stream=()=>`<div class="pagehead"><h1>Live stream</h1><p>Events flowing through Deblob in real time — raw record → tag decision (tagged / new candidate / matched / quarantined). Metadata only: ids, origin coordinates, decision, source — <b>never payloads</b>.</p></div>
   <div class="card"><div class="streamctl"><button class="btn" id="streampause">Pause</button> <span id="streamstat" class="muted">connecting…</span></div>
   <div id="streamfeed" class="streamfeed"><div class="muted" style="font-size:12px;padding:10px">waiting for events…</div></div></div>`;
 function openStream(){
-  closeStream();_streamPaused=false;
-  if(!state.live){$('#streamstat').textContent='not live';return;}
-  const feed=$('#streamfeed');let first=true;
+  closeStream();_streamPaused=false;_sfirst=true;_sbuf=[];
+  const stat=()=>$('#streamstat');
+  if(!state.live){const s=stat();if(s)s.textContent='not live';return;}
   try{_es=new EventSource(state.base.replace(/\/$/,'')+'/api/v1/stream');}
-  catch(e){$('#streamstat').textContent='unavailable';return;}
-  _es.onopen=()=>{$('#streamstat').textContent='● live';$('#streamstat').className='';};
-  _es.onerror=()=>{$('#streamstat').textContent='stream unavailable (needs the live-stream tap)';$('#streamstat').className='muted';};
-  _es.onmessage=ev=>{ if(_streamPaused)return; let d;try{d=JSON.parse(ev.data);}catch(_){return;}
-    if(first){feed.innerHTML='';first=false;}
-    const cls=d.outcome==='tagged'?'good':d.outcome==='quarantined'?'risk':d.outcome==='new_candidate'?'accent':'muted';
-    const o=d.origin||{};const row=document.createElement('div');row.className='streamrow';
-    row.innerHTML=`<span class="st-t">${new Date(d.ts_ms||Date.now()).toLocaleTimeString()}</span><span class="st-o ${cls}">${esc(d.outcome||'?')}</span><span class="num">${esc(shortId(d.schema_ref||''))}</span><span class="muted num">${esc((o.topic||'')+'/'+(o.partition!=null?o.partition:'')+'/'+(o.offset!=null?o.offset:''))}</span><span class="muted">${d.fields_count!=null?d.fields_count+'f':''}</span><span class="src">${d.source?esc(d.source):''}</span>`;
-    feed.insertBefore(row,feed.firstChild);
-    while(feed.childNodes.length>200)feed.removeChild(feed.lastChild);
-  };
+  catch(e){const s=stat();if(s)s.textContent='unavailable';return;}
+  _es.onopen=()=>{const s=stat();if(s){s.textContent='● live';s.className='';}};
+  _es.onerror=()=>{const s=stat();if(s){s.textContent='reconnecting…';s.className='muted';}};
+  _es.onmessage=ev=>{let d;try{d=JSON.parse(ev.data);}catch(_){return;}_sbuf.push(d);if(_sbuf.length>400)_sbuf.splice(0,_sbuf.length-400);};
+  _sraf=requestAnimationFrame(streamFlush);
 }
 function connectModal(){
   $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>Connect to Deblob</h3><p>Point the console at a running management API. Blank = bundled demo data. The token is held in this tab only (sessionStorage), never persisted to disk.</p>

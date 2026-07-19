@@ -31,6 +31,9 @@ data:
     enabled = true
     base_url = "http://ollama.deblob.svc.cluster.local:11434/v1"
     model = "qwen2.5:0.5b"
+    # CPU 0.5B inference is slow; give it headroom so the sweep doesn't 500 on the
+    # 8s default (the trust gate never applies an SLM match without corroboration).
+    timeout_ms = 25000
     [semantic]
-    canonical_field_ids = ["cfid_amount","cfid_currency","cfid_user_id","cfid_order_id","cfid_status","cfid_timestamp"]
+    canonical_field_ids = ["cfid_amount","cfid_currency","cfid_user_id","cfid_order_id","cfid_status","cfid_timestamp","cfid_scopetest","cfid_v","cfid_w"]
     event_types = ["event.order.placed","event.user.created","event.sensor.reading","event.payment.captured"]
