@@ -27,11 +27,36 @@ fn from_store(e: StoreError) -> ApiError {
     ApiError::from_umbrella_store(e)
 }
 
-/// Stable, deterministic umbrella id from the (sorted) canonical-field-id set — so
+/// The per-field grouping signature: one `(canonical_field_id, type_tag)` pair.
+/// Grouping on the FULL typed signature — not the bare cfid set — is what keeps
+/// two schemas that agree on field *identity* but disagree on field *type*
+/// (e.g. `scopetest: bool` vs `scopetest: number`) in SEPARATE candidate
+/// umbrellas. Merging them would force `build_umbrella` to pick one type,
+/// silently dropping the other member's transform at `verify_static` (a lossy
+/// cast is not a valid binding) — precision-over-coverage, per the joint design.
+type FieldSig = (String, String);
+
+/// A stable, order-independent type tag for one child field (scalar type +
+/// array-ness). `Debug` of `ScalarType` is a stable enum name; the array
+/// wrapper distinguishes `array<T>` from a bare scalar `T`.
+fn field_type_tag(f: &ChildField) -> String {
+    if f.is_array {
+        format!("array<{:?}>", f.ty)
+    } else {
+        format!("{:?}", f.ty)
+    }
+}
+
+/// Stable, deterministic umbrella id from the (sorted) typed field signature — so
 /// re-running propose over the same cohort targets the SAME umbrella rather than
-/// minting duplicates. FNV-1a, no external dep, no clock/random.
-fn umbrella_id_for(cfids: &[String]) -> String {
-    let joined = cfids.join("\u{1f}");
+/// minting duplicates, while two type-incompatible cohorts (same cfids, different
+/// types) map to DISTINCT umbrellas. FNV-1a, no external dep, no clock/random.
+fn umbrella_id_for(sig: &[FieldSig]) -> String {
+    let joined = sig
+        .iter()
+        .map(|(c, t)| format!("{c}={t}"))
+        .collect::<Vec<_>>()
+        .join("\u{1f}");
     let mut h: u64 = 0xcbf29ce4_84222325;
     for b in joined.bytes() {
         h ^= b as u64;
@@ -120,25 +145,34 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
         }
     }
 
-    // 2. group by IDENTICAL canonical-field-id set (conservative)
-    let mut groups: BTreeMap<Vec<String>, Vec<usize>> = BTreeMap::new();
+    // 2. group by IDENTICAL typed field signature (cfid + type). Conservative:
+    // schemas consolidate only when they agree on BOTH which canonical fields
+    // they carry AND each field's scalar type — a type disagreement means a
+    // genuinely different field, left for a human to reconcile, never merged
+    // here (see `FieldSig`).
+    let mut groups: BTreeMap<Vec<FieldSig>, Vec<usize>> = BTreeMap::new();
     for (i, (_, fields)) in schemas.iter().enumerate() {
-        let mut cfids: Vec<String> = fields
+        let mut sig: Vec<FieldSig> = fields
             .iter()
-            .filter_map(|f| f.canonical_field_id.as_ref().map(|c| c.as_str().to_string()))
+            .filter_map(|f| {
+                f.canonical_field_id
+                    .as_ref()
+                    .map(|c| (c.as_str().to_string(), field_type_tag(f)))
+            })
             .collect();
-        cfids.sort();
-        cfids.dedup();
-        groups.entry(cfids).or_default().push(i);
+        sig.sort();
+        sig.dedup();
+        groups.entry(sig).or_default().push(i);
     }
 
     let anchor = DeterministicAnchor;
     let mut created = Vec::new();
-    for (cfids, member_idxs) in groups {
+    for (sig, member_idxs) in groups {
         if member_idxs.len() < 2 {
             continue; // need ≥2 sources to consolidate
         }
-        let umbrella_id = umbrella_id_for(&cfids);
+        let cfids: Vec<String> = sig.iter().map(|(c, _)| c.clone()).collect();
+        let umbrella_id = umbrella_id_for(&sig);
         if let Some(existing) = state.umbrellas.get_umbrella(&umbrella_id).await.map_err(from_store)? {
             if existing.state != UmbrellaState::Provisional {
                 continue; // never clobber a human-decided umbrella
@@ -175,4 +209,154 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
         created.push(umbrella_id);
     }
     Ok(created)
+}
+
+#[cfg(test)]
+mod repro {
+    use super::*;
+    use deblob_core::id::{FamilyId, FamilyVersion, SchemaId};
+    use deblob_core::ports::SchemaRecord;
+    use deblob_core::semantic::{
+        CanonicalFieldId, FieldEntry, FieldSemantics, PathSegment, SemanticMetadata,
+    };
+
+    fn rec(seed: u8, canonical: &str) -> SchemaRecord {
+        SchemaRecord {
+            schema_id: SchemaId::from_digest(&[seed; 32]),
+            family_id: FamilyId::new_v7(),
+            version: FamilyVersion(1),
+            canonical: canonical.to_string(),
+            canonicalizer: deblob_monoid::GENERALIZER.to_string(),
+            provenance: serde_json::json!({}),
+            semantic: None,
+            semantic_fingerprint: None,
+            privacy_class: None,
+        }
+    }
+
+    fn meta(keys: [&str; 3], cfids: [&str; 3]) -> SemanticMetadata {
+        SemanticMetadata {
+            event_type: None,
+            fields: keys
+                .iter()
+                .zip(cfids.iter())
+                .map(|(k, c)| FieldEntry {
+                    path: vec![PathSegment::Key((*k).to_string())],
+                    semantics: FieldSemantics {
+                        canonical_field_id: Some(CanonicalFieldId::new((*c).to_string())),
+                        identifier_namespace: None,
+                        unit: None,
+                        numeric_scale: None,
+                        temporal: None,
+                        enum_semantics: None,
+                    },
+                })
+                .collect(),
+        }
+    }
+
+    const CFIDS: [&str; 3] = ["cfid_scopetest", "cfid_v", "cfid_w"];
+
+    fn canon3(keys: [&str; 3], types: [&str; 3]) -> String {
+        format!(
+            r#"{{"optional":false,"types":["object"],"children":{{"{}":{{"optional":false,"types":["{}"]}},"{}":{{"optional":false,"types":["{}"]}},"{}":{{"optional":false,"types":["{}"]}}}}}}"#,
+            keys[0], types[0], keys[1], types[1], keys[2], types[2]
+        )
+    }
+
+    fn annotated_fields(rec: &SchemaRecord, m: &SemanticMetadata) -> Vec<ChildField> {
+        child_fields_from_schema(rec, Some(m))
+            .into_iter()
+            .filter(|f| f.canonical_field_id.is_some())
+            .collect()
+    }
+
+    fn typed_sig(fields: &[ChildField]) -> Vec<FieldSig> {
+        let mut sig: Vec<FieldSig> = fields
+            .iter()
+            .filter_map(|f| {
+                f.canonical_field_id
+                    .as_ref()
+                    .map(|c| (c.as_str().to_string(), field_type_tag(f)))
+            })
+            .collect();
+        sig.sort();
+        sig.dedup();
+        sig
+    }
+
+    /// Runs the propose inner loop (group by typed sig -> build -> verify) over
+    /// a set of already-annotated members, returning `(umbrella_id, verified
+    /// transform count)` for every group that reached >=2 verified transforms.
+    fn consolidate(members: &[&[ChildField]]) -> Vec<(String, usize)> {
+        let mut groups: BTreeMap<Vec<FieldSig>, Vec<usize>> = BTreeMap::new();
+        for (i, fields) in members.iter().enumerate() {
+            groups.entry(typed_sig(fields)).or_default().push(i);
+        }
+        let anchor = DeterministicAnchor;
+        let mut out = Vec::new();
+        for (sig, idxs) in groups {
+            if idxs.len() < 2 {
+                continue;
+            }
+            let cfids: Vec<String> = sig.iter().map(|(c, _)| c.clone()).collect();
+            let umb_id = umbrella_id_for(&sig);
+            let group_members: Vec<&[ChildField]> = idxs.iter().map(|&i| members[i]).collect();
+            let umbrella = build_umbrella(&umb_id, &cfids, &group_members);
+            let umb_rev = format!("{umb_id}@{}", umbrella.version);
+            let verified = idxs
+                .iter()
+                .filter(|&&i| {
+                    let t = assemble_transform("c", "c", &umbrella, &umb_rev, members[i], &anchor);
+                    verify_static(&t, &umbrella, members[i]).is_empty()
+                })
+                .count();
+            if verified >= 2 {
+                out.push((umb_id, verified));
+            }
+        }
+        out
+    }
+
+    // Mirrors the two live demo schemas: identical typed signature {scopetest,v,w}
+    // all `number` over DIFFERENT shapes (aaa/bbb/ccc vs xxx/yyy/zzz) -> ONE
+    // umbrella with 2 verified transforms.
+    #[test]
+    fn two_flat_schemas_same_cfids_consolidate() {
+        let r1 = rec(1, &canon3(["aaa", "bbb", "ccc"], ["number"; 3]));
+        let f1 = annotated_fields(&r1, &meta(["aaa", "bbb", "ccc"], CFIDS));
+        let r2 = rec(2, &canon3(["xxx", "yyy", "zzz"], ["number"; 3]));
+        let f2 = annotated_fields(&r2, &meta(["xxx", "yyy", "zzz"], CFIDS));
+        assert_eq!(f1.len(), 3);
+        assert_eq!(f2.len(), 3);
+
+        let out = consolidate(&[f1.as_slice(), f2.as_slice()]);
+        assert_eq!(out.len(), 1, "expected exactly one umbrella: {out:?}");
+        assert_eq!(out[0].1, 2, "both members must verify");
+    }
+
+    // Regression for the live `npush` poisoning bug: a THIRD schema carrying the
+    // SAME cfid set but with `scopetest: bool` (vs the pair's `number`) must NOT
+    // pull the two number-typed schemas out of consolidation. Type-partitioned
+    // grouping puts the bool schema in its own (singleton, dropped) group; the
+    // number pair still yields its umbrella.
+    #[test]
+    fn type_incompatible_third_schema_does_not_poison_pair() {
+        let r1 = rec(1, &canon3(["aaa", "bbb", "ccc"], ["number"; 3]));
+        let f1 = annotated_fields(&r1, &meta(["aaa", "bbb", "ccc"], CFIDS));
+        let r2 = rec(2, &canon3(["xxx", "yyy", "zzz"], ["number"; 3]));
+        let f2 = annotated_fields(&r2, &meta(["xxx", "yyy", "zzz"], CFIDS));
+        // The poisoner: scopetest is `bool`, not `number`.
+        let r3 = rec(3, &canon3(["p", "q", "r"], ["bool", "number", "number"]));
+        let f3 = annotated_fields(&r3, &meta(["p", "q", "r"], CFIDS));
+        assert_eq!(f3.len(), 3);
+
+        let out = consolidate(&[f1.as_slice(), f2.as_slice(), f3.as_slice()]);
+        assert_eq!(
+            out.len(),
+            1,
+            "bool-typed third schema must form its own group, not block the number pair: {out:?}"
+        );
+        assert_eq!(out[0].1, 2, "the number pair must still both verify");
+    }
 }
