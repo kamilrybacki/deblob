@@ -174,6 +174,12 @@
   .flhead{font-family:var(--mono);font-size:11.5px;margin-bottom:5px}
   .flrow{display:flex;gap:8px;align-items:center;font-size:11px;padding:2px 0 2px 10px;flex-wrap:wrap}
   .flarrow{color:var(--faint)}
+  .gbadge{font-family:var(--mono);font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;padding:2px 6px;border-radius:5px;background:var(--sunk)}
+  .gbadge.good{color:var(--good);background:var(--good-soft)} .gbadge.risk{color:var(--risk);background:var(--risk-soft)} .gbadge.warn{color:var(--warn);background:var(--warn-soft)} .gbadge.muted{color:var(--faint)}
+  .causes{display:flex;flex-wrap:wrap;gap:4px;padding:2px 0 4px 10px}
+  .cchip{font-family:var(--mono);font-size:9px;color:var(--ink2);background:var(--sunk);border:1px solid var(--line);padding:1px 5px;border-radius:4px}
+  .uchip{font-family:var(--mono);font-size:10px;color:var(--accent-ink);background:var(--accent-soft);padding:1px 5px;border-radius:4px}
+  .bchip{font-family:var(--mono);font-size:10px;color:var(--ink2);background:var(--sunk);border:1px solid var(--line);padding:1px 5px;border-radius:4px}
   .cand .lineage code{background:var(--sunk);padding:1px 5px;border-radius:4px;font-family:var(--mono);color:var(--ink2)}
   .tabs{display:flex;gap:6px;margin:0 0 14px} .tab{background:var(--panel-2);border:1px solid var(--line);color:var(--ink2);padding:6px 14px;border-radius:8px;font-size:12.5px;cursor:pointer;text-transform:capitalize} .tab.on{background:var(--accent-soft);color:var(--accent-ink);border-color:var(--accent)}
   .streamctl{display:flex;align-items:center;gap:12px;margin-bottom:10px} .streamctl #streamstat{font-size:12px}
@@ -561,12 +567,19 @@ async function reconcileSources(){
 // Field-level lineage: expand a gold umbrella into, per gold field, which child
 // schema + child field path feeds it (derived from persisted transform bindings
 // via GET /umbrellas/{id}/lineage/fields).
+// Shadow value/name guard (joint design Stage 2/4) — verdict badge + cause codes.
+function guardBadge(g){if(!g)return '';const v=g.value_verdict||'unknown';
+  const cls={compatible:'good',contradictory:'risk',not_comparable:'warn',unknown:'muted'}[v]||'muted';
+  const lbl={compatible:'values compatible',contradictory:'values CONTRADICT',not_comparable:'not comparable',unknown:'values unknown'}[v]||v;
+  return ` <span class="gbadge ${cls}" title="Deterministic value-bucket guard (shadow — not enforced)">${esc(lbl)}</span>${g.name_corroborated?' <span class="gbadge good" title="Field names agree across sources">name ✓</span>':''}`;}
+function causeChips(g){if(!g||!g.causes||!g.causes.length)return '';
+  return `<div class="causes">${g.causes.map(c=>`<span class="cchip">${esc(c)}</span>`).join('')}</div>`;}
 async function toggleFieldLineage(id){
   const box=document.getElementById('ufl-'+id);if(!box)return;
   if(box.dataset.open==='1'){box.innerHTML='';box.dataset.open='';return;}
   box.dataset.open='1';box.innerHTML='<div class="muted" style="font-size:12px;padding:6px 0">loading field lineage…</div>';
   try{const r=await api('/api/v1/umbrellas/'+encodeURIComponent(id)+'/lineage/fields');const fields=r.data||[];
-    box.innerHTML=fields.map(f=>`<div class="fllane"><div class="flhead"><code>${esc(f.umbrella_path)}</code> <span class="muted">${esc(f.canonical_field_id)}</span></div>${(f.contributors||[]).map(c=>`<div class="flrow"><span class="num muted">${esc(shortId(c.child_schema_id))}</span><span class="flarrow">←</span><code>${esc(c.source_path)}</code><span class="muted">${c.op_count?c.op_count+' op'+(c.op_count>1?'s':''):'direct'} · ${esc(c.on_missing)}</span></div>`).join('')||'<div class="muted" style="font-size:12px;padding-left:10px">no contributors</div>'}</div>`).join('')||'<div class="muted" style="font-size:12px">no fields</div>';
+    box.innerHTML=fields.map(f=>`<div class="fllane"><div class="flhead"><code>${esc(f.umbrella_path)}</code> <span class="muted">${esc(f.canonical_field_id)}</span>${guardBadge(f.guard)}</div>${causeChips(f.guard)}${(f.contributors||[]).map(c=>`<div class="flrow"><span class="num muted">${esc(shortId(c.child_schema_id))}</span><span class="flarrow">←</span><code>${esc(c.source_name||c.source_path)}</code>${c.unit?`<span class="uchip">${esc(c.unit)}</span>`:''}${(c.value_buckets&&c.value_buckets.length)?`<span class="bchip">${c.value_buckets.map(esc).join('·')}${c.numeric_count?` <span class="muted">n=${c.numeric_count}</span>`:''}</span>`:(c.has_value_profile?'<span class="muted" style="font-size:10px">non-numeric</span>':'<span class="muted" style="font-size:10px">no profile</span>')}<span class="muted">${c.op_count?c.op_count+' op'+(c.op_count>1?'s':''):'direct'} · ${esc(c.on_missing)}</span></div>`).join('')||'<div class="muted" style="font-size:12px;padding-left:10px">no contributors</div>'}</div>`).join('')||'<div class="muted" style="font-size:12px">no fields</div>';
   }catch(e){box.innerHTML='<div class="muted" style="font-size:12px">field lineage unavailable</div>';box.dataset.open='';}
 }
 // --- Live stream (SSE tap; metadata only) ----------------------------------

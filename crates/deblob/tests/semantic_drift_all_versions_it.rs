@@ -155,6 +155,7 @@ fn state(reg: RedisRegistry, sem: RedisRegistry, metrics: Arc<Metrics>) -> ApiSt
         umbrellas: Arc::new(InMemoryUmbrellaStore::new()),
         sources: Arc::new(deblob_core::ports::InMemorySourceRegistry::default()),
         value_profiles: Arc::new(deblob_core::ports::InMemoryValueProfileStore::default()),
+        enforce_value_guard: false,
         stream_tx: tokio::sync::broadcast::channel(16).0,
     }
 }

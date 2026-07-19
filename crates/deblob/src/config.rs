@@ -52,6 +52,28 @@ pub struct Config {
     /// annotation then still `422`s, exactly Task 6's original behavior.
     #[serde(default)]
     pub semantic: SemanticConfig,
+    /// `[umbrella]` — gold-umbrella consolidation policy (joint design
+    /// `dc-umbrella-signals-1907`). Absent, or present with fields unset,
+    /// defaults to [`UmbrellaConfig::default`] — the value guard runs in
+    /// SHADOW (records/logs, never enforces) unless an operator explicitly
+    /// opts into enforcement, same "off unless opted in" contract as `[slm]`.
+    #[serde(default)]
+    pub umbrella: UmbrellaConfig,
+}
+
+/// `[umbrella]` consolidation policy.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct UmbrellaConfig {
+    /// When `true`, a proposed umbrella that has ANY field the value guard
+    /// judges `CONTRADICTORY` (disjoint bucket masks among comparable units,
+    /// above minimum support) is SUPPRESSED from auto-proposal and logged for
+    /// human review instead of being persisted as provisional. When `false`
+    /// (the default), the guard runs in shadow: the verdict is computed and
+    /// logged, but every proposal is persisted exactly as before. Enforcement
+    /// should only be enabled after shadow observation on real cohorts.
+    #[serde(default)]
+    pub enforce_value_guard: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

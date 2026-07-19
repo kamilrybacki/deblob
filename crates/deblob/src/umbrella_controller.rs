@@ -197,12 +197,22 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
             continue; // need ≥2 members with a verified transform
         }
 
-        // 3b. SHADOW name/value corroboration (joint design Stage 2): compute
-        // and LOG the per-field guard verdict, but NEVER exclude a member or
-        // change grouping — enforcement is a later, config-gated stage. This
-        // is the deterministic gate running in shadow so its behavior can be
-        // observed on real cohorts before it is allowed to block anything.
-        shadow_evaluate_guard(state, &umbrella_id, &umbrella, &member_idxs, &schemas).await;
+        // 3b. Name/value corroboration guard (joint design Stage 2/4). Always
+        // computes + LOGS the per-field verdict (shadow). Returns whether any
+        // field is CONTRADICTORY. Stage 4: only when `enforce_value_guard` is
+        // on does a contradiction actually SUPPRESS the auto-proposal (routed
+        // to human review via the log) — off by default, so the guard's
+        // behavior is observable on real cohorts before it can block anything.
+        let any_contradictory =
+            shadow_evaluate_guard(state, &umbrella_id, &umbrella, &member_idxs, &schemas).await;
+        if state.enforce_value_guard && any_contradictory {
+            tracing::warn!(
+                target: "umbrella_guard_shadow",
+                umbrella = umbrella_id.as_str(),
+                "auto-proposal SUPPRESSED: value guard found a CONTRADICTORY field (enforcement on) — left for human review"
+            );
+            continue;
+        }
 
         // 4. persist PROVISIONAL only (HITL gate promotes to active)
         state
@@ -229,9 +239,11 @@ async fn shadow_evaluate_guard(
     umbrella: &UmbrellaSchema,
     member_idxs: &[usize],
     schemas: &[(SchemaRecord, Vec<ChildField>)],
-) {
-    use crate::umbrella_guard::{evaluate_field, MemberEvidence};
+) -> bool {
+    use crate::umbrella_guard::{evaluate_field, MemberEvidence, ValueVerdict};
     use std::collections::HashMap;
+
+    let mut any_contradictory = false;
 
     // Fetch each member's value-profile leaves once (path -> (mask, count)).
     let mut member_leaves: HashMap<usize, HashMap<String, (u8, u64)>> = HashMap::new();
@@ -282,6 +294,9 @@ async fn shadow_evaluate_guard(
             });
         }
         let guard = evaluate_field(&evidence);
+        if guard.value_verdict == ValueVerdict::Contradictory {
+            any_contradictory = true;
+        }
         tracing::info!(
             target: "umbrella_guard_shadow",
             umbrella = umbrella_id,
@@ -290,9 +305,10 @@ async fn shadow_evaluate_guard(
             verdict = ?guard.value_verdict,
             name_corroborated = guard.name_corroborated,
             causes = ?guard.causes,
-            "shadow guard verdict (not enforced)"
+            "shadow guard verdict"
         );
     }
+    any_contradictory
 }
 
 #[cfg(test)]

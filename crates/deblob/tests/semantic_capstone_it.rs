@@ -536,6 +536,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
             canonical_field_ids: vec![REGISTERED_CFID.to_string()],
             event_types: vec![REGISTERED_EVENT.to_string()],
         },
+        umbrella: Default::default(),
     };
     let secrets = Secrets {
         api_token: TOKEN.to_string(),

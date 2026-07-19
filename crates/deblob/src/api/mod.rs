@@ -67,6 +67,11 @@ pub struct ApiState {
     /// /api/v1/schemas/{id}/value-profile`. Populated at promotion by the
     /// `Promoter` (`with_value_profiles`), never on the hot path.
     pub value_profiles: Arc<dyn ValueProfileStore>,
+    /// `[umbrella].enforce_value_guard` (joint design dc-umbrella-signals-1907,
+    /// Stage 4): when `true`, `propose_umbrellas` SUPPRESSES an auto-proposal
+    /// with any `CONTRADICTORY` field; when `false` (default) the guard runs in
+    /// shadow (logged, never enforced).
+    pub enforce_value_guard: bool,
     /// Live-stream tap (Stage L1, payload-free): `GET /api/v1/stream`
     /// subscribes a fresh `Receiver` from this per SSE connection
     /// (`Sender::subscribe`, cheap and `Clone`-free — the `Sender` itself
