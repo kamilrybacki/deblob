@@ -154,9 +154,19 @@ fn redact_value(v: &Value, ctx: &mut Ctx, depth: u32) -> Value {
             }
             ScalarClass::Clean => Value::String(s.clone()),
         },
-        // Numbers / bools / null carry no string secret; kept as-is. (A card in
-        // a JSON *number* has already lost formatting; deblob treats numeric
-        // magnitude as non-sensitive — see the value-profile design.)
+        // A JSON *number* can still be a payment card (`{"pan": 4111111111111111}`)
+        // — run the scalar classifier over its digit string so a Luhn-valid card
+        // is caught even unnamed. Ordinary magnitudes (a price, a count) match no
+        // detector and pass through. (Bool/null carry no secret.)
+        Value::Number(n) => {
+            if classify_scalar(&n.to_string()) == ScalarClass::Secret {
+                ctx.counts.secret_pattern += 1;
+                ctx.check_budget();
+                Value::String(MARK_SECRET.to_string())
+            } else {
+                v.clone()
+            }
+        }
         other => other.clone(),
     }
 }
@@ -213,6 +223,16 @@ mod tests {
         let out = red(json!({"pan": "4111 1111 1111 1111", "qty": "1234567890123"}));
         assert_eq!(out.document["pan"], json!(MARK_SECRET));
         assert_eq!(out.document["qty"], json!("1234567890123")); // fails Luhn -> kept
+    }
+
+    #[test]
+    fn payment_card_as_a_json_number_is_redacted() {
+        // Unnamed Luhn-valid card as a NUMBER must not bypass the value layer.
+        let out = red(json!({"pan": 4111111111111111i64, "qty": 142, "price": 42.5}));
+        assert_eq!(out.document["pan"], json!(MARK_SECRET));
+        assert_eq!(out.document["qty"], json!(142)); // ordinary number kept
+        assert_eq!(out.document["price"], json!(42.5));
+        assert_eq!(out.counts.secret_pattern, 1);
     }
 
     #[test]

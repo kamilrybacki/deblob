@@ -36,12 +36,16 @@ pub async fn get_candidate_samples(
         _ => return Err(ApiError::not_found("sample store not enabled")),
     };
     // Separate samples:read capability (constant-time compare via SecretToken).
+    // A missing/wrong capability returns the SAME 404 as a disabled feature, so
+    // whether capture is enabled is NOT probeable by callers lacking the cap
+    // (Hermes review). The rejection is audit-logged for the operator instead.
     let provided = headers
         .get("x-samples-read-token")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
     if !read_token.verify(provided) {
-        return Err(ApiError::forbidden("samples:read capability required"));
+        tracing::warn!(target: "samples_access", "samples:read denied (missing/invalid capability)");
+        return Err(ApiError::not_found("sample store not enabled"));
     }
     let id = CandidateId::parse(&cand_id)
         .map_err(|e| ApiError::unprocessable(e.to_string()))?;

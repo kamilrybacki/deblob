@@ -25,23 +25,28 @@ use redis::Script;
 
 use crate::registry::redis_err;
 
-/// `KEYS[1]`=zset `KEYS[2]`=hash · `ARGV`: sample_id, score_ms, record_json,
+/// `KEYS[1]`=zset `KEYS[2]`=hash · `ARGV`: sample_id, record_json,
 /// retention_ms, max_count, ttl_secs. Returns 1 if newly inserted, 0 if replay.
+///
+/// The ZSET score is the SERVER's `TIME` (not a client-supplied `captured_at`),
+/// so age-pruning compares scores and the retention cutoff against the SAME
+/// clock — immune to client/server skew (Hermes review §7). `ZADD NX` keeps the
+/// original score on a replay, so retention is measured from FIRST capture.
 const PUT_SAMPLE_LUA: &str = r#"
-local added = redis.call('ZADD', KEYS[1], 'NX', ARGV[2], ARGV[1])
-if added == 1 then
-  redis.call('HSET', KEYS[2], ARGV[1], ARGV[3])
-end
 local t = redis.call('TIME')
 local now_ms = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
-local cutoff = now_ms - tonumber(ARGV[4])
+local added = redis.call('ZADD', KEYS[1], 'NX', now_ms, ARGV[1])
+if added == 1 then
+  redis.call('HSET', KEYS[2], ARGV[1], ARGV[2])
+end
+local cutoff = now_ms - tonumber(ARGV[3])
 local old = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', '(' .. cutoff)
 if #old > 0 then
   redis.call('ZREM', KEYS[1], unpack(old))
   redis.call('HDEL', KEYS[2], unpack(old))
 end
 local card = redis.call('ZCARD', KEYS[1])
-local maxc = tonumber(ARGV[5])
+local maxc = tonumber(ARGV[4])
 if card > maxc then
   local rm = redis.call('ZRANGE', KEYS[1], 0, card - maxc - 1)
   if #rm > 0 then
@@ -49,8 +54,8 @@ if card > maxc then
     redis.call('HDEL', KEYS[2], unpack(rm))
   end
 end
-redis.call('EXPIRE', KEYS[1], ARGV[6])
-redis.call('EXPIRE', KEYS[2], ARGV[6])
+redis.call('EXPIRE', KEYS[1], ARGV[5])
+redis.call('EXPIRE', KEYS[2], ARGV[5])
 return added
 "#;
 
@@ -108,7 +113,6 @@ impl SampleStore for RedisSampleStore {
             .key(zkey(&sample.candidate_id))
             .key(hkey(&sample.candidate_id))
             .arg(&sample.sample_id)
-            .arg(sample.captured_at_ms)
             .arg(record)
             .arg((self.opts.retention_secs as i64) * 1000)
             .arg(self.opts.max_per_candidate as i64)
