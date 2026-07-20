@@ -1,0 +1,1157 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>Deblob Visual Identity</title>
+  <style>
+    /*
+      Aesthetic direction:
+      - Three adjectives: deterministic, forensic, crystalline.
+      - Type: mono-forward system stack for product truth; compact system sans for support copy.
+      - Color: dark graphite base with sulfur verdict accent. No indigo, no teal.
+      - Density: compact operator-console density on an 8px scale.
+      - Radius: sharp 2-8px geometry; no soft SaaS cards.
+      - Motif: opaque blob resolves through a trust gate into an addressable schema lattice.
+      - Motion: quiet, user-triggered theme change only.
+    */
+
+    :root {
+      color-scheme: dark;
+      --bg: #0f0e0a;
+      --surface: #171510;
+      --surface-2: #211e16;
+      --surface-3: #2a261b;
+      --fg: #f1ead6;
+      --muted: #afa68d;
+      --faint: #756e5d;
+      --border: #3b3526;
+      --border-strong: #5c5134;
+      --accent: #dfff3f;
+      --accent-ink: #15170a;
+      --good: #98d35b;
+      --warn: #ffb13d;
+      --risk: #ff604a;
+      --defer: #b7aa8b;
+      --shadow: rgba(0, 0, 0, 0.34);
+
+      --font-mono: ui-monospace, "SFMono-Regular", "Cascadia Mono", "Liberation Mono", Menlo, Consolas, monospace;
+      --font-sans: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+      --step--1: clamp(0.78rem, 0.75rem + 0.12vw, 0.86rem);
+      --step-0: clamp(0.92rem, 0.88rem + 0.18vw, 1rem);
+      --step-1: clamp(1.08rem, 1rem + 0.34vw, 1.28rem);
+      --step-2: clamp(1.38rem, 1.2rem + 0.72vw, 1.8rem);
+      --step-3: clamp(1.9rem, 1.5rem + 1.55vw, 2.85rem);
+      --step-4: clamp(2.6rem, 1.85rem + 3vw, 4.6rem);
+
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 16px;
+      --space-4: 24px;
+      --space-5: 32px;
+      --space-6: 48px;
+      --space-7: 64px;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root:not([data-theme="dark"]) {
+        color-scheme: light;
+        --bg: #f4f0e2;
+        --surface: #fff9e8;
+        --surface-2: #ebe3cc;
+        --surface-3: #ded2b3;
+        --fg: #17150f;
+        --muted: #6c624d;
+        --faint: #92866b;
+        --border: #c9b98e;
+        --border-strong: #887648;
+        --accent: #5c6800;
+        --accent-ink: #fbf4d9;
+        --good: #476d20;
+        --warn: #9f5c00;
+        --risk: #a93425;
+        --defer: #6e644e;
+        --shadow: rgba(52, 43, 20, 0.18);
+      }
+    }
+
+    [data-theme="light"] {
+      color-scheme: light;
+      --bg: #f4f0e2;
+      --surface: #fff9e8;
+      --surface-2: #ebe3cc;
+      --surface-3: #ded2b3;
+      --fg: #17150f;
+      --muted: #6c624d;
+      --faint: #92866b;
+      --border: #c9b98e;
+      --border-strong: #887648;
+      --accent: #5c6800;
+      --accent-ink: #fbf4d9;
+      --good: #476d20;
+      --warn: #9f5c00;
+      --risk: #a93425;
+      --defer: #6e644e;
+      --shadow: rgba(52, 43, 20, 0.18);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      min-width: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font-family: var(--font-sans);
+      text-rendering: geometricPrecision;
+    }
+
+    body {
+      min-width: 0;
+      margin: 0;
+      overflow-x: hidden;
+      background:
+        linear-gradient(90deg, color-mix(in srgb, var(--border) 26%, transparent) 1px, transparent 1px),
+        linear-gradient(0deg, color-mix(in srgb, var(--border) 20%, transparent) 1px, transparent 1px),
+        var(--bg);
+      background-size: 44px 44px;
+      color: var(--fg);
+    }
+
+    body::before {
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      content: "";
+      background:
+        radial-gradient(circle at 78% 10%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 30%),
+        linear-gradient(115deg, transparent 0 56%, color-mix(in srgb, var(--accent) 8%, transparent) 56% 57%, transparent 57%);
+      opacity: 0.52;
+    }
+
+    a {
+      color: inherit;
+    }
+
+    button {
+      font: inherit;
+    }
+
+    .page {
+      width: min(100%, 1440px);
+      margin: 0 auto;
+      padding: var(--space-4);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      min-width: 0;
+      padding: var(--space-3) 0 var(--space-5);
+    }
+
+    .identity-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .chip-node {
+      width: 11px;
+      height: 11px;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 12%, transparent);
+      clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+    }
+
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 40px;
+      padding: 0 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--fg);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+      cursor: pointer;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 0.68fr);
+      gap: var(--space-5);
+      align-items: stretch;
+      min-width: 0;
+      padding-bottom: var(--space-6);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .hero-copy {
+      min-width: 0;
+      padding: var(--space-6) 0;
+    }
+
+    .kicker {
+      margin: 0 0 var(--space-3);
+      color: var(--accent);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    h1,
+    h2,
+    h3,
+    p {
+      margin-block-start: 0;
+    }
+
+    h1 {
+      max-width: 12ch;
+      margin-bottom: var(--space-4);
+      font-family: var(--font-mono);
+      font-size: var(--step-4);
+      line-height: 0.92;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .lede {
+      max-width: 68ch;
+      margin-bottom: var(--space-4);
+      color: var(--muted);
+      font-size: var(--step-1);
+      line-height: 1.55;
+      text-wrap: pretty;
+    }
+
+    .principles {
+      display: flex;
+      flex-wrap: wrap;
+      gap: var(--space-2);
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .principles li {
+      padding: 8px 10px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--surface);
+      color: var(--fg);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+    }
+
+    .mark-stage {
+      position: relative;
+      min-width: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--surface-2) 82%, transparent), var(--surface)),
+        var(--surface);
+      box-shadow: 16px 16px 0 var(--shadow);
+      overflow: hidden;
+    }
+
+    .mark-stage::before {
+      position: absolute;
+      inset: 0;
+      content: "";
+      background:
+        linear-gradient(90deg, transparent 0 48%, color-mix(in srgb, var(--accent) 18%, transparent) 48% 49%, transparent 49%),
+        repeating-linear-gradient(135deg, transparent 0 18px, color-mix(in srgb, var(--border) 38%, transparent) 18px 19px);
+      opacity: 0.76;
+    }
+
+    .big-mark {
+      position: relative;
+      z-index: 1;
+      display: block;
+      width: 100%;
+      height: auto;
+      padding: var(--space-4);
+    }
+
+    .section {
+      min-width: 0;
+      padding: var(--space-6) 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .section-head {
+      display: grid;
+      grid-template-columns: minmax(0, 0.7fr) minmax(260px, 0.3fr);
+      gap: var(--space-4);
+      align-items: end;
+      min-width: 0;
+      margin-bottom: var(--space-4);
+    }
+
+    h2 {
+      margin-bottom: 0;
+      font-family: var(--font-mono);
+      font-size: var(--step-3);
+      line-height: 1;
+      letter-spacing: 0;
+      text-wrap: balance;
+    }
+
+    .section-note {
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: var(--step-0);
+      line-height: 1.45;
+    }
+
+    .logo-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+      gap: var(--space-3);
+      min-width: 0;
+    }
+
+    .logo-panel {
+      min-width: 0;
+      padding: var(--space-4);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+
+    .logo-panel.light {
+      --panel-bg: #f4f0e2;
+      --panel-fg: #17150f;
+      --panel-muted: #6c624d;
+      --panel-border: #c9b98e;
+      --panel-accent: #5c6800;
+      background:
+        linear-gradient(90deg, rgba(201, 185, 142, 0.36) 1px, transparent 1px),
+        linear-gradient(0deg, rgba(201, 185, 142, 0.32) 1px, transparent 1px),
+        var(--panel-bg);
+      background-size: 30px 30px;
+      color: var(--panel-fg);
+    }
+
+    .logo-panel.dark {
+      background:
+        linear-gradient(90deg, color-mix(in srgb, var(--border) 42%, transparent) 1px, transparent 1px),
+        linear-gradient(0deg, color-mix(in srgb, var(--border) 38%, transparent) 1px, transparent 1px),
+        var(--surface);
+      background-size: 30px 30px;
+    }
+
+    .lockups {
+      display: grid;
+      gap: var(--space-4);
+      min-width: 0;
+    }
+
+    .logo-row {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+    }
+
+    .wordmark {
+      font-family: var(--font-mono);
+      font-weight: 800;
+      letter-spacing: -0.04em;
+      line-height: 1;
+    }
+
+    .wordmark.large {
+      font-size: clamp(2.8rem, 7vw, 6.5rem);
+    }
+
+    .wordmark.medium {
+      font-size: clamp(1.7rem, 4vw, 3.4rem);
+    }
+
+    .wordmark.small {
+      font-size: 1.12rem;
+      letter-spacing: -0.02em;
+    }
+
+    .mark-svg {
+      flex: 0 0 auto;
+      width: 96px;
+      height: 96px;
+      color: var(--fg);
+    }
+
+    .logo-panel.light .mark-svg {
+      color: var(--panel-fg);
+    }
+
+    .logo-panel.light .mark-accent {
+      fill: var(--panel-accent);
+      stroke: var(--panel-accent);
+    }
+
+    .logo-panel.light .mark-line {
+      stroke: var(--panel-border);
+    }
+
+    .small-mark {
+      width: 38px;
+      height: 38px;
+    }
+
+    .medium-mark {
+      width: 58px;
+      height: 58px;
+    }
+
+    .swatch-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .swatch {
+      min-width: 0;
+      min-height: 154px;
+      padding: var(--space-3);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+
+    .swatch strong,
+    .swatch span {
+      display: block;
+      overflow-wrap: anywhere;
+      font-family: var(--font-mono);
+    }
+
+    .swatch strong {
+      color: var(--swatch-fg, var(--fg));
+      font-size: var(--step-0);
+    }
+
+    .swatch span {
+      color: var(--swatch-fg, var(--fg));
+      opacity: 0.76;
+      font-size: var(--step--1);
+    }
+
+    .swatch.bg { background: #0f0e0a; --swatch-fg: #f1ead6; }
+    .swatch.surface { background: #171510; --swatch-fg: #f1ead6; }
+    .swatch.ink { background: #f1ead6; --swatch-fg: #17150f; }
+    .swatch.sulfur { background: #dfff3f; --swatch-fg: #15170a; }
+    .swatch.good { background: #98d35b; --swatch-fg: #11140a; }
+    .swatch.warn { background: #ffb13d; --swatch-fg: #201100; }
+    .swatch.risk { background: #ff604a; --swatch-fg: #260903; }
+    .swatch.border-token { background: #3b3526; --swatch-fg: #f1ead6; }
+    .swatch.light-bg { background: #f4f0e2; --swatch-fg: #17150f; }
+    .swatch.light-accent { background: #5c6800; --swatch-fg: #fbf4d9; }
+
+    .type-specimen {
+      display: grid;
+      grid-template-columns: minmax(0, 0.45fr) minmax(0, 0.55fr);
+      gap: var(--space-4);
+      min-width: 0;
+    }
+
+    .specimen-panel {
+      min-width: 0;
+      padding: var(--space-4);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+
+    .type-line {
+      display: flex;
+      justify-content: space-between;
+      gap: var(--space-3);
+      padding: var(--space-2) 0;
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+    }
+
+    .type-line:last-child {
+      border-bottom: 0;
+    }
+
+    .type-line code {
+      color: var(--accent);
+      font-family: var(--font-mono);
+      white-space: nowrap;
+    }
+
+    .spec-display {
+      margin-bottom: var(--space-4);
+      font-family: var(--font-mono);
+      font-size: var(--step-3);
+      font-weight: 800;
+      line-height: 0.98;
+      letter-spacing: -0.03em;
+      text-wrap: balance;
+    }
+
+    .spec-body {
+      max-width: 62ch;
+      margin-bottom: 0;
+      color: var(--muted);
+      font-size: var(--step-0);
+      line-height: 1.6;
+    }
+
+    .motif-board {
+      position: relative;
+      min-width: 0;
+      min-height: 340px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background:
+        linear-gradient(90deg, color-mix(in srgb, var(--border) 52%, transparent) 1px, transparent 1px),
+        linear-gradient(0deg, color-mix(in srgb, var(--border) 48%, transparent) 1px, transparent 1px),
+        var(--surface);
+      background-size: 36px 36px;
+      overflow: hidden;
+    }
+
+    .motif-board::before {
+      position: absolute;
+      inset: 0;
+      content: "";
+      background:
+        linear-gradient(120deg, transparent 0 42%, color-mix(in srgb, var(--accent) 40%, transparent) 42% 43%, transparent 43%),
+        repeating-linear-gradient(60deg, transparent 0 34px, color-mix(in srgb, var(--accent) 18%, transparent) 34px 35px);
+    }
+
+    .motif-svg {
+      position: relative;
+      display: block;
+      width: 100%;
+      height: 340px;
+    }
+
+    .console {
+      min-width: 0;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: var(--surface);
+      box-shadow: 12px 12px 0 var(--shadow);
+      overflow: hidden;
+    }
+
+    .console-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-3);
+      min-width: 0;
+      padding: var(--space-3);
+      border-bottom: 1px solid var(--border);
+      background: var(--surface-2);
+    }
+
+    .console-title {
+      min-width: 0;
+      font-family: var(--font-mono);
+      font-size: var(--step-0);
+      font-weight: 800;
+      overflow-wrap: anywhere;
+    }
+
+    .console-meta {
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+      white-space: nowrap;
+    }
+
+    .trace-scroll {
+      overflow-x: auto;
+      overscroll-behavior-x: contain;
+    }
+
+    .trace {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(220px, 1fr));
+      min-width: 980px;
+    }
+
+    .trace-step {
+      position: relative;
+      min-width: 0;
+      padding: var(--space-3);
+      border-right: 1px solid var(--border);
+      background: linear-gradient(180deg, color-mix(in srgb, var(--surface-2) 74%, transparent), var(--surface));
+    }
+
+    .trace-step:last-child {
+      border-right: 0;
+    }
+
+    .step-index {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      margin-bottom: var(--space-3);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+      color: var(--muted);
+      text-transform: uppercase;
+    }
+
+    .gate {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 22px;
+      height: 22px;
+      border: 1px solid var(--border-strong);
+      color: var(--accent);
+      clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+    }
+
+    .trace-step h3 {
+      margin-bottom: var(--space-3);
+      font-family: var(--font-mono);
+      font-size: var(--step-1);
+      line-height: 1.1;
+    }
+
+    .trace-step p {
+      min-height: 70px;
+      margin-bottom: var(--space-3);
+      color: var(--muted);
+      font-size: var(--step--1);
+      line-height: 1.45;
+    }
+
+    .code-stack {
+      display: grid;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+
+    .code-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-2);
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      background: var(--bg);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+    }
+
+    .code-row span {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .chip {
+      flex: 0 0 auto;
+      padding: 3px 7px;
+      border: 1px solid currentColor;
+      border-radius: 2px;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      text-transform: uppercase;
+    }
+
+    .chip.good {
+      color: var(--good);
+    }
+
+    .chip.warn {
+      color: var(--warn);
+    }
+
+    .chip.risk {
+      color: var(--risk);
+    }
+
+    .chip.defer {
+      color: var(--defer);
+    }
+
+    .decision {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-3);
+      align-items: center;
+      padding: var(--space-3);
+      border-top: 1px solid var(--border);
+      background: color-mix(in srgb, var(--accent) 9%, var(--surface));
+    }
+
+    .decision strong {
+      display: block;
+      margin-bottom: 4px;
+      font-family: var(--font-mono);
+      font-size: var(--step-0);
+    }
+
+    .decision span {
+      color: var(--muted);
+      font-size: var(--step--1);
+    }
+
+    .verdict {
+      padding: 10px 12px;
+      border-radius: 3px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+      font-weight: 800;
+      text-transform: uppercase;
+      white-space: nowrap;
+    }
+
+    .rationale {
+      display: grid;
+      grid-template-columns: minmax(0, 0.62fr) minmax(280px, 0.38fr);
+      gap: var(--space-4);
+      min-width: 0;
+    }
+
+    .rationale-card {
+      min-width: 0;
+      padding: var(--space-4);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--surface);
+    }
+
+    .rationale-card h3 {
+      margin-bottom: var(--space-3);
+      font-family: var(--font-mono);
+      font-size: var(--step-1);
+    }
+
+    .rationale-card p,
+    .rationale-card li {
+      color: var(--muted);
+      font-size: var(--step-0);
+      line-height: 1.55;
+    }
+
+    .rationale-card ul {
+      display: grid;
+      gap: var(--space-2);
+      margin: 0;
+      padding-left: 1.1rem;
+    }
+
+    .token-summary {
+      display: grid;
+      gap: var(--space-2);
+      min-width: 0;
+      margin: 0;
+    }
+
+    .token-summary div {
+      display: grid;
+      grid-template-columns: 90px minmax(0, 1fr);
+      gap: var(--space-2);
+      padding-bottom: var(--space-2);
+      border-bottom: 1px solid var(--border);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+    }
+
+    .token-summary div:last-child {
+      border-bottom: 0;
+    }
+
+    .token-summary dt {
+      color: var(--accent);
+    }
+
+    .token-summary dd {
+      margin: 0;
+      color: var(--muted);
+      overflow-wrap: anywhere;
+    }
+
+    .footer-note {
+      padding: var(--space-5) 0 var(--space-3);
+      color: var(--muted);
+      font-family: var(--font-mono);
+      font-size: var(--step--1);
+    }
+
+    @media (max-width: 980px) {
+      .hero,
+      .section-head,
+      .type-specimen,
+      .rationale {
+        grid-template-columns: 1fr;
+      }
+
+      .hero-copy {
+        padding: var(--space-4) 0 0;
+      }
+
+      .swatch-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+
+    @media (max-width: 680px) {
+      .page {
+        padding: var(--space-3);
+      }
+
+      .topbar {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .logo-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .logo-row {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .swatch-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .decision {
+        grid-template-columns: 1fr;
+      }
+
+      .verdict {
+        width: max-content;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="page" data-od-id="identity-page">
+    <header class="topbar" data-od-id="identity-header">
+      <div class="identity-chip" data-od-id="identity-system-chip"><span class="chip-node" aria-hidden="true"></span>Deblob identity system / v0.1</div>
+      <button class="theme-toggle" type="button" data-od-id="theme-toggle" aria-label="Toggle light and dark theme">toggle theme</button>
+    </header>
+
+    <section class="hero" data-od-id="identity-hero">
+      <div class="hero-copy">
+        <p class="kicker" data-od-id="identity-kicker">determinism over inference</p>
+        <h1 data-od-id="identity-title">Opaque blobs resolve into governed form.</h1>
+        <p class="lede" data-od-id="identity-lede">Deblob's identity is a schema foundry: irregular event shape enters from the left, passes through a visible trust gate, and leaves as an addressable lattice. The model may propose. The system decides.</p>
+        <ul class="principles" data-od-id="identity-principles">
+          <li>content-addressed</li>
+          <li>redacted by default</li>
+          <li>human-approved umbrellas</li>
+          <li>static verdicts</li>
+        </ul>
+      </div>
+
+      <div class="mark-stage" data-od-id="hero-logomark-stage" aria-label="Deblob mark showing a blob resolving into a lattice">
+        <svg class="big-mark" viewBox="0 0 620 520" role="img" aria-labelledby="heroMarkTitle">
+          <title id="heroMarkTitle">Deblob blob-to-lattice logomark</title>
+          <path d="M71 267 C33 211 62 143 132 121 C196 101 236 142 274 112 C320 76 388 83 416 132 C440 175 423 218 462 243 C512 276 519 344 474 386 C423 435 356 400 312 426 C259 457 189 438 172 382 C157 332 105 319 71 267 Z" fill="var(--surface-3)" stroke="var(--border-strong)" stroke-width="4"/>
+          <path d="M106 258 C83 220 103 175 147 162 C190 149 214 178 240 158 C272 134 318 142 336 174 C353 205 337 230 366 248 C400 270 403 314 374 341 C341 372 295 350 265 369 C228 391 182 376 170 337 C160 305 128 297 106 258 Z" fill="none" stroke="var(--muted)" stroke-width="3" stroke-dasharray="8 9"/>
+          <path d="M309 96 L560 96 L560 390 L309 390 Z" fill="none" stroke="var(--accent)" stroke-width="5"/>
+          <path d="M360 96 L360 390 M411 96 L411 390 M462 96 L462 390 M513 96 L513 390 M309 145 L560 145 M309 194 L560 194 M309 243 L560 243 M309 292 L560 292 M309 341 L560 341" stroke="var(--border-strong)" stroke-width="3"/>
+          <path d="M309 96 L560 390 M360 96 L560 292 M411 96 L560 194 M309 194 L462 390 M309 292 L411 390" stroke="var(--accent)" stroke-width="3" opacity="0.82"/>
+          <path d="M260 244 L329 244" stroke="var(--accent)" stroke-width="7"/>
+          <path d="M292 212 L329 244 L292 276" fill="none" stroke="var(--accent)" stroke-width="7" stroke-linejoin="miter"/>
+          <circle cx="126" cy="215" r="8" fill="var(--accent)"/>
+          <circle cx="193" cy="169" r="6" fill="var(--muted)"/>
+          <circle cx="223" cy="342" r="6" fill="var(--muted)"/>
+          <circle cx="462" cy="243" r="9" fill="var(--accent)"/>
+          <text x="64" y="466" fill="var(--fg)" font-family="var(--font-mono)" font-size="76" font-weight="800" letter-spacing="-6">deblob</text>
+          <text x="67" y="498" fill="var(--muted)" font-family="var(--font-mono)" font-size="17">trust gate: corroborate / defer / canonicalize</text>
+        </svg>
+      </div>
+    </section>
+
+    <section class="section" data-od-id="logo-section">
+      <div class="section-head">
+        <h2 data-od-id="logo-section-title">Logo System</h2>
+        <p class="section-note" data-od-id="logo-section-note">The mark is not a mascot or abstract sparkle. It is a repeatable diagram: blob, gate, lattice, address.</p>
+      </div>
+
+      <div class="logo-grid" data-od-id="logo-lockup-grid">
+        <div class="logo-panel dark" data-od-id="dark-logo-panel">
+          <div class="lockups">
+            <div class="logo-row" data-od-id="dark-logo-large">
+              <svg class="mark-svg" viewBox="0 0 120 120" aria-hidden="true">
+                <path d="M12 64 C3 47 14 28 34 27 C50 26 57 37 68 29 C82 18 101 26 104 45 C108 62 94 72 101 86 C108 101 92 113 77 105 C63 98 55 108 41 101 C27 94 28 78 12 64 Z" fill="var(--surface-3)" stroke="currentColor" stroke-width="4"/>
+                <path class="mark-line" d="M57 24 L108 24 L108 96 L57 96 Z M74 24 L74 96 M91 24 L91 96 M57 48 L108 48 M57 72 L108 72 M57 24 L108 96 M57 72 L74 96 M74 24 L108 72" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <path class="mark-accent" d="M42 60 L62 60 M54 50 L66 60 L54 70" fill="none" stroke="var(--accent)" stroke-width="5"/>
+              </svg>
+              <span class="wordmark large">deblob</span>
+            </div>
+            <div class="logo-row" data-od-id="dark-logo-medium">
+              <svg class="mark-svg medium-mark" viewBox="0 0 120 120" aria-hidden="true">
+                <path d="M12 64 C3 47 14 28 34 27 C50 26 57 37 68 29 C82 18 101 26 104 45 C108 62 94 72 101 86 C108 101 92 113 77 105 C63 98 55 108 41 101 C27 94 28 78 12 64 Z" fill="var(--surface-3)" stroke="currentColor" stroke-width="4"/>
+                <path d="M57 24 L108 24 L108 96 L57 96 Z M74 24 L74 96 M91 24 L91 96 M57 48 L108 48 M57 72 L108 72 M57 24 L108 96 M57 72 L74 96 M74 24 L108 72" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <path d="M42 60 L62 60 M54 50 L66 60 L54 70" fill="none" stroke="var(--accent)" stroke-width="5"/>
+              </svg>
+              <span class="wordmark medium">deblob</span>
+            </div>
+            <div class="logo-row" data-od-id="dark-logo-small">
+              <svg class="mark-svg small-mark" viewBox="0 0 120 120" aria-hidden="true">
+                <path d="M12 64 C3 47 14 28 34 27 C50 26 57 37 68 29 C82 18 101 26 104 45 C108 62 94 72 101 86 C108 101 92 113 77 105 C63 98 55 108 41 101 C27 94 28 78 12 64 Z" fill="var(--surface-3)" stroke="currentColor" stroke-width="4"/>
+                <path d="M57 24 L108 24 L108 96 L57 96 Z M74 24 L74 96 M91 24 L91 96 M57 48 L108 48 M57 72 L108 72 M57 24 L108 96 M57 72 L74 96 M74 24 L108 72" fill="none" stroke="var(--accent)" stroke-width="3"/>
+                <path d="M42 60 L62 60 M54 50 L66 60 L54 70" fill="none" stroke="var(--accent)" stroke-width="5"/>
+              </svg>
+              <span class="wordmark small">deblob</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="logo-panel light" data-od-id="light-logo-panel">
+          <div class="lockups">
+            <div class="logo-row" data-od-id="light-logo-large">
+              <svg class="mark-svg" viewBox="0 0 120 120" aria-hidden="true">
+                <path d="M12 64 C3 47 14 28 34 27 C50 26 57 37 68 29 C82 18 101 26 104 45 C108 62 94 72 101 86 C108 101 92 113 77 105 C63 98 55 108 41 101 C27 94 28 78 12 64 Z" fill="#ded2b3" stroke="currentColor" stroke-width="4"/>
+                <path class="mark-line" d="M57 24 L108 24 L108 96 L57 96 Z M74 24 L74 96 M91 24 L91 96 M57 48 L108 48 M57 72 L108 72 M57 24 L108 96 M57 72 L74 96 M74 24 L108 72" fill="none" stroke="#5c6800" stroke-width="3"/>
+                <path class="mark-accent" d="M42 60 L62 60 M54 50 L66 60 L54 70" fill="none" stroke="#5c6800" stroke-width="5"/>
+              </svg>
+              <span class="wordmark large">deblob</span>
+            </div>
+            <div class="logo-row" data-od-id="light-logo-medium">
+              <svg class="mark-svg medium-mark" viewBox="0 0 120 120" aria-hidden="true">
+                <path d="M12 64 C3 47 14 28 34 27 C50 26 57 37 68 29 C82 18 101 26 104 45 C108 62 94 72 101 86 C108 101 92 113 77 105 C63 98 55 108 41 101 C27 94 28 78 12 64 Z" fill="#ded2b3" stroke="currentColor" stroke-width="4"/>
+                <path d="M57 24 L108 24 L108 96 L57 96 Z M74 24 L74 96 M91 24 L91 96 M57 48 L108 48 M57 72 L108 72 M57 24 L108 96 M57 72 L74 96 M74 24 L108 72" fill="none" stroke="#5c6800" stroke-width="3"/>
+                <path d="M42 60 L62 60 M54 50 L66 60 L54 70" fill="none" stroke="#5c6800" stroke-width="5"/>
+              </svg>
+              <span class="wordmark medium">deblob</span>
+            </div>
+            <div class="logo-row" data-od-id="light-logo-small">
+              <svg class="mark-svg small-mark" viewBox="0 0 120 120" aria-hidden="true">
+                <path d="M12 64 C3 47 14 28 34 27 C50 26 57 37 68 29 C82 18 101 26 104 45 C108 62 94 72 101 86 C108 101 92 113 77 105 C63 98 55 108 41 101 C27 94 28 78 12 64 Z" fill="#ded2b3" stroke="currentColor" stroke-width="4"/>
+                <path d="M57 24 L108 24 L108 96 L57 96 Z M74 24 L74 96 M91 24 L91 96 M57 48 L108 48 M57 72 L108 72 M57 24 L108 96 M57 72 L74 96 M74 24 L108 72" fill="none" stroke="#5c6800" stroke-width="3"/>
+                <path d="M42 60 L62 60 M54 50 L66 60 L54 70" fill="none" stroke="#5c6800" stroke-width="5"/>
+              </svg>
+              <span class="wordmark small">deblob</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-od-id="palette-section">
+      <div class="section-head">
+        <h2 data-od-id="palette-section-title">Palette</h2>
+        <p class="section-note" data-od-id="palette-section-note">Sulfur is the verdict color: high-signal, uncomfortable enough to feel like a gate, never decorative.</p>
+      </div>
+      <div class="swatch-grid" data-od-id="palette-swatch-grid">
+        <article class="swatch bg" data-od-id="swatch-bg"><strong>Graphite Void</strong><span>#0f0e0a<br>dark canvas</span></article>
+        <article class="swatch surface" data-od-id="swatch-surface"><strong>Ledger Carbon</strong><span>#171510<br>console surface</span></article>
+        <article class="swatch ink" data-od-id="swatch-ink"><strong>Schema Ink</strong><span>#f1ead6<br>primary text</span></article>
+        <article class="swatch sulfur" data-od-id="swatch-sulfur"><strong>Verdict Sulfur</strong><span>#dfff3f<br>canonical action</span></article>
+        <article class="swatch border-token" data-od-id="swatch-border"><strong>Rule Line</strong><span>#3b3526<br>grid + borders</span></article>
+        <article class="swatch good" data-od-id="swatch-good"><strong>Corroborated</strong><span>#98d35b<br>semantic good</span></article>
+        <article class="swatch warn" data-od-id="swatch-warn"><strong>Needs Review</strong><span>#ffb13d<br>semantic warn</span></article>
+        <article class="swatch risk" data-od-id="swatch-risk"><strong>Rejected</strong><span>#ff604a<br>semantic risk</span></article>
+        <article class="swatch light-bg" data-od-id="swatch-light-bg"><strong>Light Ledger</strong><span>#f4f0e2<br>light canvas</span></article>
+        <article class="swatch light-accent" data-od-id="swatch-light-accent"><strong>Olive Verdict</strong><span>#5c6800<br>light action</span></article>
+      </div>
+    </section>
+
+    <section class="section" data-od-id="type-section">
+      <div class="section-head">
+        <h2 data-od-id="type-section-title">Type System</h2>
+        <p class="section-note" data-od-id="type-section-note">Deblob speaks in IDs, hashes, and governance states. The mono is not decoration; it is the product voice.</p>
+      </div>
+      <div class="type-specimen" data-od-id="type-specimen">
+        <div class="specimen-panel" data-od-id="type-scale-panel">
+          <div class="type-line"><span>xs / labels</span><code>0.78-0.86rem</code></div>
+          <div class="type-line"><span>base / body</span><code>0.92-1rem</code></div>
+          <div class="type-line"><span>h3 / modules</span><code>1.08-1.28rem</code></div>
+          <div class="type-line"><span>h2 / sections</span><code>1.9-2.85rem</code></div>
+          <div class="type-line"><span>h1 / wordmark</span><code>2.6-4.6rem</code></div>
+        </div>
+        <div class="specimen-panel" data-od-id="type-copy-panel">
+          <p class="spec-display" data-od-id="type-display-sample">sch_9fd7 resolves under umbrella_gold.004</p>
+          <p class="spec-body" data-od-id="type-body-sample">Body copy moves back to a compact system sans when prose needs to explain governance. IDs, verdicts, chips, timestamps, and trace labels stay in mono so every console surface feels inspectable.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-od-id="motif-section">
+      <div class="section-head">
+        <h2 data-od-id="motif-section-title">Signature Motif</h2>
+        <p class="section-note" data-od-id="motif-section-note">Use the lattice rail behind empty states, headers, trace views, and schema family cards. It should feel generated by rules, not sprayed on as texture.</p>
+      </div>
+      <div class="motif-board" data-od-id="lattice-motif">
+        <svg class="motif-svg" viewBox="0 0 1220 340" role="img" aria-labelledby="motifTitle">
+          <title id="motifTitle">Repeatable Deblob lattice motif</title>
+          <path d="M52 171 C21 132 44 77 95 70 C139 64 165 101 196 77 C236 47 289 57 307 103 C324 148 286 178 314 214 C348 257 313 309 260 301 C215 294 205 252 163 272 C111 297 68 245 52 171 Z" fill="var(--surface-3)" stroke="var(--border-strong)" stroke-width="3"/>
+          <path d="M302 170 H402" stroke="var(--accent)" stroke-width="6"/>
+          <path d="M384 148 L408 170 L384 192" fill="none" stroke="var(--accent)" stroke-width="6"/>
+          <path d="M420 70 H1136 V286 H420 Z" fill="none" stroke="var(--accent)" stroke-width="3"/>
+          <g stroke="var(--border-strong)" stroke-width="2">
+            <path d="M492 70 V286 M564 70 V286 M636 70 V286 M708 70 V286 M780 70 V286 M852 70 V286 M924 70 V286 M996 70 V286 M1068 70 V286"/>
+            <path d="M420 142 H1136 M420 214 H1136"/>
+          </g>
+          <g stroke="var(--accent)" stroke-width="2" opacity="0.82">
+            <path d="M420 70 L636 286 M492 70 L708 286 M564 70 L780 286 M636 70 L852 286 M708 70 L924 286 M780 70 L996 286 M852 70 L1068 286 M924 70 L1136 286"/>
+            <path d="M420 214 L492 286 M420 142 L564 286 M420 70 L636 286"/>
+          </g>
+          <g fill="var(--accent)">
+            <rect x="412" y="62" width="16" height="16"/>
+            <rect x="700" y="206" width="16" height="16"/>
+            <rect x="1128" y="278" width="16" height="16"/>
+          </g>
+        </svg>
+      </div>
+    </section>
+
+    <section class="section" data-od-id="console-section">
+      <div class="section-head">
+        <h2 data-od-id="console-section-title">Decision Explorer</h2>
+        <p class="section-note" data-od-id="console-section-note">A real console surface proves the identity can carry dense governance work. Content is structural and synthetic; no raw payload appears.</p>
+      </div>
+
+      <div class="console" data-od-id="decision-explorer">
+        <div class="console-top" data-od-id="decision-explorer-topbar">
+          <div class="console-title">trace / event_shape → retrieval → proposal → trust_gate → final_action</div>
+          <div class="console-meta">cand_7b1a · redacted · 2026-07-20</div>
+        </div>
+        <div class="trace-scroll" data-od-id="decision-trace-scroll">
+          <div class="trace" data-od-id="decision-trace">
+            <article class="trace-step" data-od-id="trace-step-event-shape">
+              <div class="step-index"><span>01 event shape</span><span class="gate">◇</span></div>
+              <h3>Field skeleton only</h3>
+              <p>Observed keys, nesting, and type signatures are retained. Values are discarded before the decision surface.</p>
+              <div class="code-stack">
+                <div class="code-row"><span>fields: 18</span><b class="chip defer">redacted</b></div>
+                <div class="code-row"><span>depth: 04</span><b class="chip good">stable</b></div>
+                <div class="code-row"><span>shape: src_41c</span><b class="chip defer">structural</b></div>
+              </div>
+            </article>
+
+            <article class="trace-step" data-od-id="trace-step-retrieval">
+              <div class="step-index"><span>02 retrieval</span><span class="gate">◇</span></div>
+              <h3>Nearest governed family</h3>
+              <p>Candidate schemas are retrieved by structural similarity, source lineage, and approved umbrella proximity.</p>
+              <div class="code-stack">
+                <div class="code-row"><span>fam_2c90</span><b class="chip good">gold</b></div>
+                <div class="code-row"><span>sch_8a11</span><b class="chip defer">silver</b></div>
+                <div class="code-row"><span>sem_03</span><b class="chip warn">drift</b></div>
+              </div>
+            </article>
+
+            <article class="trace-step" data-od-id="trace-step-model-proposal">
+              <div class="step-index"><span>03 model proposal</span><span class="gate">◇</span></div>
+              <h3>Proposal, not authority</h3>
+              <p>The small model suggests a mapping and confidence note. It cannot promote a schema or override the gate.</p>
+              <div class="code-stack">
+                <div class="code-row"><span>candidate: cand_7b1a</span><b class="chip defer">proposed</b></div>
+                <div class="code-row"><span>delta fields: 03</span><b class="chip warn">inspect</b></div>
+                <div class="code-row"><span>authority: none</span><b class="chip risk">blocked</b></div>
+              </div>
+            </article>
+
+            <article class="trace-step" data-od-id="trace-step-trust-gate">
+              <div class="step-index"><span>04 trust gate</span><span class="gate">◇</span></div>
+              <h3>Deterministic corroboration</h3>
+              <p>Rules compare structure, lineage, approved umbrellas, and drift budget. The gate returns a static verdict.</p>
+              <div class="code-stack">
+                <div class="code-row"><span>lineage match</span><b class="chip good">pass</b></div>
+                <div class="code-row"><span>drift budget</span><b class="chip warn">near</b></div>
+                <div class="code-row"><span>raw payload</span><b class="chip risk">absent</b></div>
+              </div>
+            </article>
+
+            <article class="trace-step" data-od-id="trace-step-final-action">
+              <div class="step-index"><span>05 final action</span><span class="gate">◇</span></div>
+              <h3>Canonicalize or defer</h3>
+              <p>The service records a governed decision with addressable IDs and a human review path when certainty is insufficient.</p>
+              <div class="code-stack">
+                <div class="code-row"><span>action: attach</span><b class="chip good">approved</b></div>
+                <div class="code-row"><span>umbrella_gold.004</span><b class="chip good">canonical</b></div>
+                <div class="code-row"><span>audit: trace_52d</span><b class="chip defer">stored</b></div>
+              </div>
+            </article>
+          </div>
+        </div>
+        <div class="decision" data-od-id="decision-final-verdict">
+          <div>
+            <strong>Final gate output</strong>
+            <span>The deterministic trust gate attached the event shape to an approved umbrella. Model rationale was logged as supporting evidence only.</span>
+          </div>
+          <div class="verdict">canonical</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" data-od-id="rationale-section">
+      <div class="section-head">
+        <h2 data-od-id="rationale-section-title">Rationale</h2>
+        <p class="section-note" data-od-id="rationale-section-note">The identity makes Deblob feel like governance infrastructure: terse, inspectable, and materially different from indigo developer dashboards.</p>
+      </div>
+      <div class="rationale" data-od-id="identity-rationale">
+        <article class="rationale-card" data-od-id="rationale-card-metaphor">
+          <h3>Metaphor</h3>
+          <p>The mark starts with an irregular blob and resolves through a visible gate into a crystalline schema lattice. That makes the core promise legible without relying on generic database cylinders, AI sparkles, or cloud icons.</p>
+          <p>The sulfur accent is intentionally sharp: it behaves like a verdict stamp, not a friendly brand highlight. It signals that a decision happened and that the decision can be audited.</p>
+        </article>
+        <article class="rationale-card" data-od-id="rationale-card-porting">
+          <h3>Port to Console Tokens</h3>
+          <dl class="token-summary">
+            <div><dt>canvas</dt><dd>#0f0e0a dark / #f4f0e2 light</dd></div>
+            <div><dt>surface</dt><dd>#171510, #211e16, #2a261b</dd></div>
+            <div><dt>text</dt><dd>#f1ead6 primary / #afa68d muted</dd></div>
+            <div><dt>accent</dt><dd>#dfff3f verdict sulfur / #5c6800 light</dd></div>
+            <div><dt>states</dt><dd>good #98d35b · warn #ffb13d · risk #ff604a</dd></div>
+            <div><dt>shape</dt><dd>2-8px radius, 1px rule lines, mono-first labels</dd></div>
+          </dl>
+        </article>
+      </div>
+    </section>
+
+    <p class="footer-note" data-od-id="footer-note">AI-slop guardrails applied: no indigo, no teal, no purple gradients, no hero CTA duo, no raw payload values, no external assets.</p>
+  </main>
+
+  <script>
+    const root = document.documentElement;
+    const toggle = document.querySelector('[data-od-id="theme-toggle"]');
+    const savedTheme = localStorage.getItem('deblob-identity-theme');
+    if (savedTheme === 'light' || savedTheme === 'dark') {
+      root.dataset.theme = savedTheme;
+    }
+    toggle.addEventListener('click', () => {
+      const next = root.dataset.theme === 'dark' ? 'light' : 'dark';
+      root.dataset.theme = next;
+      localStorage.setItem('deblob-identity-theme', next);
+    });
+  </script>
+</body>
+</html>
