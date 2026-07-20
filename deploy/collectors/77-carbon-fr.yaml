@@ -1,0 +1,45 @@
+# greenwindow collector — carbon-fr (compute-optimization signal; joint-research). No auth.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-carbon-fr-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.carbon.fr"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    URL="https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/eco2mix-national-tr/records?select=date_heure,taux_co2,consommation,prevision_j1,prevision_j,eolien,solaire,hydraulique,nucleaire,bioenergies&order_by=date_heure%20desc&limit=100"
+    body=$(curl -sf -A "$UA" --max-time 25 "$URL") || { echo FETCH-FAIL; exit 0; }
+    echo "$body" | jq -c '{records:[(.results[]?)|{value:.}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED rte -> %{http_code}\n" || echo "PRODUCE-FAIL rte"
+    echo done
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-carbon-fr, namespace: deblob, labels: {app: greenwindow-collector, source: carbon-fr}}
+spec:
+  schedule: "*/15 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: carbon-fr}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 128Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-carbon-fr-sh}}

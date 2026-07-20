@@ -1,0 +1,48 @@
+# greenwindow collector — carbon-dk (compute-optimization signal; joint-research). No auth.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-carbon-dk-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.carbon.dk"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    fetch(){ curl -sf -A "$UA" --max-time 25 "$1" | jq -c '{records:[(.records[]?)|{value:.}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED dk[$2] -> %{http_code}\n" || echo "PRODUCE-FAIL dk[$2]"; }
+    fetch "https://api.energidataservice.dk/dataset/CO2Emis?start=now-PT15M&columns=Minutes5UTC,PriceArea,CO2Emission" co2 || echo FAIL
+    sleep 1
+    fetch "https://api.energidataservice.dk/dataset/CO2EmisProg?limit=100" co2prog || echo FAIL
+    sleep 1
+    fetch "https://api.energidataservice.dk/dataset/Elspotprices?columns=HourUTC,PriceArea,SpotPriceEUR&limit=100" price || echo FAIL
+    echo done
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-carbon-dk, namespace: deblob, labels: {app: greenwindow-collector, source: carbon-dk}}
+spec:
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: carbon-dk}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 128Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-carbon-dk-sh}}

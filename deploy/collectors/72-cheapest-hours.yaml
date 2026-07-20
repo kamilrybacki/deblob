@@ -1,0 +1,47 @@
+# greenwindow collector — cheapest-hours (compute-optimization signal; joint-research). No auth.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-cheapest-hours-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.energy.cheapest-hours"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    for Z in DE PL FR SE3 GB; do
+      body=$(curl -sf -A "$UA" --max-time 20 "https://elecz.com/signal/cheapest-hours?zone=$Z") || { echo "FETCH-FAIL [$Z]"; continue; }
+      echo "$body" | jq -c '{records:[{value:.}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED cheapest[$Z] -> %{http_code}\n" || echo "PRODUCE-FAIL cheapest[$Z]"
+      sleep 1
+    done
+    echo done
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-cheapest-hours, namespace: deblob, labels: {app: greenwindow-collector, source: cheapest-hours}}
+spec:
+  schedule: "9 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: cheapest-hours}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 128Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-cheapest-hours-sh}}
