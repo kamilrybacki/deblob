@@ -479,9 +479,18 @@ function schemaDetail(f){if(!f)return '<div class="card empty">Select a schema</
     <h2 class="sec" style="margin:16px 0 10px">Canonical shape · ${f.fields.length} fields</h2>${fields}
   </div>`;}
 
-V.discovery=()=>{const cs=state.data.candidates;
-  const body=cs.length?cs.map(candCard).join(''):'<div class="card empty">No pending candidates. The discovery queue is clear.</div>';
-  return `<div class="pagehead"><h1>Discovery queue</h1><p>Stable clusters the model has proposed a decision for. Retrieval evidence and the gate verdict are shown separately; promote/reject writes to the registry under confirmation.</p></div>${banner()}${body}`;
+// Structural signature of a candidate = its sorted field shape. Candidates that
+// share a signature are the same schema seen more than once; the discovery queue
+// groups them into one card (summing their observed events).
+function candSig(c){const fs=(c.fields||[]).map(f=>f.path+':'+f.type).sort().join('|');return fs||('id:'+c.candidate_id);}
+V.discovery=()=>{const cs=state.data.candidates||[];
+  const groups=new Map();
+  cs.forEach(c=>{const k=candSig(c);const g=groups.get(k);if(g)g.push(c);else groups.set(k,[c]);});
+  const cards=[...groups.values()].map(g=>candCard(g[0],g)).join('');
+  const grouped=[...groups.values()].some(g=>g.length>1);
+  const sub=grouped?` <span class="muted num" style="font-weight:400;font-size:12.5px">— ${groups.size} distinct shape${groups.size===1?'':'s'} across ${cs.length} candidates (repeats grouped)</span>`:'';
+  const body=cs.length?cards:'<div class="card empty">No pending candidates. The discovery queue is clear.</div>';
+  return `<div class="pagehead"><h1>Discovery queue${sub}</h1><p>Stable clusters the model proposed a decision for. Candidates with the same shape are grouped so a schema that pops up more than once shows once, with its events combined. Retrieval evidence and the gate verdict are shown separately; promote/reject writes to the registry under confirmation.</p></div>${banner()}${body}`;
 };
 // --- Candidate inspector: structural evidence + a SYNTHESIZED example -------
 // deblob never stores raw payloads (privacy §9): there are no real captured
@@ -552,7 +561,9 @@ async function loadRealSamples(id){
     }).join('');
   }catch(e){box.innerHTML='<div class="muted" style="font-size:12px">samples unavailable</div>';}
 }
-function candCard(c){
+function candCard(c,group){
+  group=group&&group.length?group:[c];
+  const n=group.length;
   const dc=c.slm_decision==='match_schema'?'match':c.slm_decision==='new_candidate'?'new':'abstain';
   const sub=c.slm_relation||c.slm_novelty||c.slm_cause||'';
   const vcls=c.gate==='apply_ready'?'apply':c.gate==='deferred_new'?'new':'human';
@@ -561,10 +572,17 @@ function candCard(c){
   // the SLM gate disabled nothing reaches apply_ready, so the operator decides.
   // The mgmt API still enforces min_samples/min_age + state-transition legality.
   const canPromote=canMutate()&&(c.gate==='apply_ready'||c.gate==='provisional');
-  return `<div class="cand"><div class="h"><div><div class="num muted" style="font-size:11px">${esc(c.candidate_id)}</div><div style="margin-top:4px"><span class="dec ${dc}">${esc(c.slm_decision)}</span> <span class="muted" style="font-size:12px">${esc(sub)}${c.match_label?' → '+esc(c.match_label):''}</span></div></div><span class="chip">${c.observation_count} obs</span></div>
+  // Grouped occurrences: same shape seen across N candidates — combine their events.
+  const totalObs=group.reduce((s,x)=>s+(x.observation_count||0),0);
+  const srcs=[...new Set(group.map(x=>x.source||'events.raw'))];
+  const obsChip=n>1?`<span class="chip" title="${n} candidates share this shape">×${n} · ${totalObs} obs</span>`:`<span class="chip">${c.observation_count} obs</span>`;
+  const groupBlock=n>1?`<div class="lineage" style="margin-top:2px">⛓ grouped · <b>${n} occurrences</b> of this shape · ${totalObs} combined events · ${srcs.length} source${srcs.length===1?'':'s'} (${srcs.map(s=>'<code>'+esc(s)+'</code>').join(', ')})</div>
+    <div class="fields" style="margin-top:2px">${group.map(m=>`<span class="chip" title="${esc(m.candidate_id)}">${esc(shortId(m.candidate_id))} <span class="muted">· ${m.source?esc(m.source):'events.raw'} · ${m.observation_count} obs</span></span>`).join('')}</div>`:
+    `<div class="lineage">⛓ lineage · first seen ${fmtTs(c.first_seen_ms)} · last ${fmtTs(c.last_seen_ms)} · ${c.observation_count} obs · source <code>${c.source?esc(c.source):'events.raw'}</code> → group <code>deblob</code> · canon <code>deblob-canon-v1</code></div>`;
+  return `<div class="cand"><div class="h"><div><div class="num muted" style="font-size:11px">${esc(c.candidate_id)}${n>1?' <span class="muted">+'+(n-1)+' more</span>':''}</div><div style="margin-top:4px"><span class="dec ${dc}">${esc(c.slm_decision)}</span> <span class="muted" style="font-size:12px">${esc(sub)}${c.match_label?' → '+esc(c.match_label):''}</span></div></div>${obsChip}</div>
     <div class="fields">${(c.fields||[]).map(f=>`<span class="chip">${esc(f.path)}<span class="muted">:${f.type}</span></span>`).join('')||'<span class="muted" style="font-size:12px">no fields</span>'}</div>
-    <div class="lineage">⛓ lineage · first seen ${fmtTs(c.first_seen_ms)} · last ${fmtTs(c.last_seen_ms)} · ${c.observation_count} obs · source <code>${c.source?esc(c.source):'events.raw'}</code> → group <code>deblob</code> · canon <code>deblob-canon-v1</code></div>
-    <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(String(c.gate||'—').replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason||'')}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance!=null?c.top1_distance:'—'} · margin ${c.margin!=null?c.margin:'—'}</span></div></div>
+    ${groupBlock}
+    <div class="verdict ${vcls}"><span class="icn">${vic}</span><div><b>gate: ${esc(String(c.gate||'—').replace(/_/g,' '))}</b><br><span style="opacity:.85">${esc(c.reason||'')}</span><br><span class="muted num" style="font-size:11px">retrieval dist ${c.top1_distance!=null?c.top1_distance:'—'} · margin ${c.margin!=null?c.margin:'—'}${n>1?' · actions apply to the primary occurrence':''}</span></div></div>
     <div class="actions"><button class="btn" data-inspect="${esc(c.candidate_id)}">🔍 Inspect examples</button><button class="btn good" data-act="promote" data-id="${esc(c.candidate_id)}" ${canPromote?'':'disabled'}>Promote</button><button class="btn risk" data-act="reject" data-id="${esc(c.candidate_id)}" ${canMutate()?'':'disabled'}>Reject</button></div></div>`;
 }
 function mutate(kind,id){
