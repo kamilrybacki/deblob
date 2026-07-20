@@ -24,7 +24,15 @@ spec:
         resources: {requests: {cpu: 100m, memory: 128Mi}, limits: {cpu: "1", memory: 512Mi}}
         readinessProbe: {exec: {command: [redis-cli, ping]}, initialDelaySeconds: 3, periodSeconds: 5}
         volumeMounts: [{name: conf, mountPath: /etc/redis}, {name: data, mountPath: /data}]
-      volumes: [{name: conf, configMap: {name: redis-vault-conf}}, {name: data, emptyDir: {sizeLimit: 2Gi}}]
+      volumes: [{name: conf, configMap: {name: redis-vault-conf}}, {name: data, persistentVolumeClaim: {claimName: redis-vault-data}}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: redis-vault-data, namespace: deblob}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: nfs
+  resources: {requests: {storage: 2Gi}}
 ---
 apiVersion: v1
 kind: Service

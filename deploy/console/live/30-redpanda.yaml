@@ -9,15 +9,27 @@ spec:
     metadata: {labels: {app: redpanda}}
     spec:
       affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+      # Pinned to lw-c2 so the node-local (local-path) data PVC is always reachable
+      # across restarts — a broker needs a real filesystem (not NFS), and local-path
+      # binds to one node. Move both together if ever rescheduling.
+      nodeSelector: {kubernetes.io/hostname: lw-c2}
       containers:
       - name: redpanda
         image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
-        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
+        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --set, redpanda.auto_create_topics_enabled=true, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
         ports: [{name: kafka, containerPort: 9092}, {name: admin, containerPort: 9644}]
         resources: {requests: {cpu: 300m, memory: 1500Mi}, limits: {cpu: "2", memory: 2Gi}}
         readinessProbe: {tcpSocket: {port: 9092}, initialDelaySeconds: 10, periodSeconds: 5}
         volumeMounts: [{name: data, mountPath: /var/lib/redpanda/data}]
-      volumes: [{name: data, emptyDir: {sizeLimit: 4Gi}}]
+      volumes: [{name: data, persistentVolumeClaim: {claimName: redpanda-data}}]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: redpanda-data, namespace: deblob}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources: {requests: {storage: 10Gi}}
 ---
 apiVersion: v1
 kind: Service

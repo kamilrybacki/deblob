@@ -1,0 +1,53 @@
+# Idempotent topic bootstrap — ensures every raw_topic (parsed from the live
+# deblob-config) plus the relay's output topics exist in Redpanda with the right
+# partition count. Belt-and-braces alongside redpanda.auto_create_topics_enabled
+# (which would otherwise create them with default partitions). Runs hourly and is
+# runnable on demand: `kubectl -n deblob create job topic-bootstrap-now --from=cronjob/topic-bootstrap`.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: topic-bootstrap-sh, namespace: deblob}
+data:
+  bootstrap.sh: |
+    #!/bin/sh
+    set -u
+    BROKER="redpanda.deblob.svc.cluster.local:9092"
+    # Pull the raw_topics array out of the mounted deblob.toml, one topic per line.
+    TOPICS=$(grep -E '^\s*raw_topics' /config/deblob.toml | grep -oE '"[^"]+"' | tr -d '"')
+    # Plus the relay's output topics (not in raw_topics).
+    TOPICS="$TOPICS events.tagged deblob.discovery deblob.quarantine"
+    for T in $TOPICS; do
+      rpk topic create "$T" -p 4 --brokers "$BROKER" >/dev/null 2>&1 \
+        && echo "created $T" || echo "exists  $T"
+    done
+    echo "bootstrap done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: topic-bootstrap, namespace: deblob, labels: {app: topic-bootstrap}}
+spec:
+  schedule: "0 * * * *"            # hourly self-heal
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: topic-bootstrap}}
+        spec:
+          restartPolicy: Never
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65535, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: bootstrap
+            image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+            command: ["/bin/sh", "/scripts/bootstrap.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 200m, memory: 128Mi}}
+            volumeMounts:
+            - {name: script, mountPath: /scripts, readOnly: true}
+            - {name: config, mountPath: /config, readOnly: true}
+          volumes:
+          - {name: script, configMap: {name: topic-bootstrap-sh}}
+          - {name: config, configMap: {name: deblob-config}}
