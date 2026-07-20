@@ -581,10 +581,11 @@ function mutate(kind,id){
     const reason=($('#mreason').value||'').trim();
     if(!reason){toast('A reason is required.');return;}
     if(typed&&($('#mconfirm').value||'').trim()!==id){toast('Typed id does not match.');return;}
-    $('#overlay').innerHTML='';
+    // Read inputs BEFORE clearing the overlay — clearing removes #mname from the DOM.
     // promote wants a FamilyChoice — default a NEW family (FamilyChoice::New
     // serialises as the string "new"); reject just carries the reason.
     const name=typed?(($('#mname').value||'').trim()||null):null;
+    $('#overlay').innerHTML='';
     const body=typed?{family:'new',name,reason}:{reason};
     try{await api(`/api/v1/candidates/${encodeURIComponent(id)}/${kind}`,{method:'POST',body:JSON.stringify(body)});
       toast(`Candidate ${kind}d.`);state.data.candidates=state.data.candidates.filter(c=>c.candidate_id!==id);render();
