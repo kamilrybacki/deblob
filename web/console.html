@@ -100,6 +100,7 @@
   .final.good{color:var(--good)} .final.risk{color:var(--risk)} .final.accent{color:var(--accent-ink)} .final.warn{color:var(--warn)}
   .split{display:grid;grid-template-columns:320px 1fr;gap:16px;align-items:start}
   @media(max-width:820px){.split{grid-template-columns:1fr}}
+  .schback{display:none}
   .listcard{background:var(--panel);border:1px solid var(--line);border-radius:13px;overflow:hidden;box-shadow:var(--sh)}
   .search{padding:10px;border-bottom:1px solid var(--line)}
   .search input{width:100%;border:1px solid var(--line);background:var(--sunk);border-radius:8px;padding:8px 11px;font-size:13px;color:var(--ink);font-family:var(--sans)}
@@ -155,6 +156,11 @@
   .modal label{display:block;font-size:12px;color:var(--faint);margin:12px 0 5px;font-family:var(--mono)}
   .modal input{width:100%;border:1px solid var(--line);background:var(--sunk);border-radius:8px;padding:9px 12px;font-size:13px;color:var(--ink);font-family:var(--mono)}
   .modal .row2{display:flex;gap:8px;justify-content:flex-end;margin-top:18px}
+  /* sticky modal header with always-reachable close (fixes "can't exit" on long modals) */
+  .modal .mhead{position:sticky;top:0;z-index:3;display:flex;align-items:center;justify-content:space-between;gap:12px;margin:-22px -22px 14px;padding:13px 22px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .modal .mhead h3{margin:0}
+  .modalx{flex:0 0 auto;width:38px;height:38px;padding:0;border:1px solid var(--line2);background:var(--panel-2);color:var(--ink);border-radius:8px;font-size:15px;line-height:1;cursor:pointer}
+  .modalx:hover{border-color:var(--accent);color:var(--accent-ink)}
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:11px 18px;border-radius:10px;font-size:13px;z-index:60;box-shadow:var(--sh2);opacity:0;transition:opacity .2s,transform .2s}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(-4px)}
   .banner{border-radius:10px;padding:9px 14px;font-size:12.5px;margin:0 0 16px;display:flex;gap:9px;align-items:center}
@@ -235,10 +241,25 @@
     .streamrow>.src::before{content:"source"}
     .nb,.retr{grid-template-columns:1fr 1fr 44px}
     .kv{grid-template-columns:1fr}
+    /* schema catalogue: one-pane list -> detail drill-down (not a squeezed split) */
+    .split .schback{display:inline-flex}
+    .split:not(.open) #schdetail{display:none}
+    .split.open .listcard{display:none}
     /* inspector + confirm dialogs become bottom sheets */
     .modal-bg{place-items:end stretch;padding:0}
     .modal{border-radius:16px 16px 0 0;padding:16px;max-height:88dvh}
     .modal .row2 .btn{min-height:44px}
+    .modal .mhead{margin:-16px -16px 12px;padding:12px 16px}
+    /* long inspector -> full-screen sheet so the close/header is always reachable */
+    .modal.full{height:100dvh;max-height:100dvh;max-width:none;border-radius:0;padding-bottom:calc(16px + env(safe-area-inset-bottom))}
+    /* evidence table -> stacked cards: field heading + 2-col labeled metrics (no h-scroll at 390px) */
+    .tw.evtable{overflow:visible;border:0;background:transparent;box-shadow:none}
+    .tw.evtable table,.tw.evtable thead,.tw.evtable tbody{display:block}
+    .tw.evtable thead{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0)}
+    .tw.evtable tr{display:grid;grid-template-columns:1fr 1fr;gap:8px 10px;border:1px solid var(--line);border-radius:10px;background:var(--panel);padding:11px 12px;margin-bottom:8px}
+    .tw.evtable td{display:block;border:0;padding:0;white-space:normal;overflow-wrap:anywhere;font-size:12px}
+    .tw.evtable td[data-l="field"]{grid-column:1/-1;font-family:var(--mono);font-weight:600;font-size:13px;padding-bottom:7px;margin-bottom:2px;border-bottom:1px solid var(--line)}
+    .tw.evtable td[data-l]:not([data-l="field"])::before{content:attr(data-l);display:block;color:var(--faint);font-family:var(--mono);font-size:9px;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
     .insp-h{margin-top:16px}
     pre.synth{font-size:11px;max-height:240px}
   }
@@ -452,7 +473,7 @@ V.schemas=()=>{const list=state.data.families;
 function schemaRows(list){return list.map(f=>`<div class="row ${f.schema_id===state.sel.schema?'on':''}" data-sch="${f.schema_id}"><div><div class="lab">${esc(f.label)}</div><div class="meta">${shortId(f.schema_id)}</div></div><span class="cnt">${f.observation_count} obs</span></div>`).join('')||'<div class="empty">No schemas</div>';}
 function schemaDetail(f){if(!f)return '<div class="card empty">Select a schema</div>';
   const fields=f.fields.map(x=>`<div class="field"><span class="fp">${x.path.split('.').map((p,i)=>i?'<span class="dot">.</span>'+esc(p):esc(p)).join('')}</span><span class="ty ${x.type}">${x.type}</span><span class="muted" style="font-size:11px">${x.nullable?'nullable':'required'}</span></div>`).join('');
-  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin-bottom:4px"><div><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2><div class="muted num" style="font-size:11px;margin-top:3px">${esc(f.schema_id)}</div></div><div style="display:flex;gap:8px;align-items:center"><button class="btn" data-act="export-oapi" data-id="${esc(f.schema_id)}" title="Download this schema as OpenAPI 3.1">⬇ OpenAPI</button><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div></div>
+  return `<div class="card"><button class="btn schback" data-schback>← Schemas</button><div class="schdhead" style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin:0 0 4px;flex-wrap:wrap"><div style="min-width:0"><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2><div class="muted num" style="font-size:11px;margin-top:3px;overflow-wrap:anywhere">${esc(f.schema_id)}</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" data-act="export-oapi" data-id="${esc(f.schema_id)}" title="Download this schema as OpenAPI 3.1">⬇ OpenAPI</button><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div></div>
     <dl class="kv"><dt>family</dt><dd>${esc(f.family_id)}</dd><dt>version</dt><dd>v${f.version}</dd><dt>observations</dt><dd>${f.observation_count}</dd><dt>semantic sem_</dt><dd>${f.semantic_fingerprint?esc(f.semantic_fingerprint):'<span class="muted">not annotated</span>'}</dd><dt>canonicalizer</dt><dd>${esc(f.canonicalizer)}</dd></dl>
     <h2 class="sec" style="margin:16px 0 10px">Canonical shape · ${f.fields.length} fields</h2>${fields}
   </div>`;}
@@ -495,9 +516,9 @@ function candidateInspect(id){
   const c=(state.data.candidates||[]).find(x=>x.candidate_id===id);
   if(!c){toast('Candidate not found.');return;}
   const rows=evidenceRows(c.profile);
-  const ev=rows.length?`<div class="tw"><table><thead><tr><th>field</th><th>type</th><th>seen</th><th>observed types</th><th>magnitude</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="num">${esc(r.path)}${r.arr?' []':''}</td><td>${esc(r.type)}${r.int?' <span class="muted">int</span>':''}${r.nullable?' <span class="muted">?</span>':''}</td><td class="num muted">${r.present}${r.total?'/'+r.total:''}</td><td class="muted" style="font-size:11px">${esc(r.mix)}</td><td>${r.buckets.length?r.buckets.map(b=>`<span class="bchip">${b}</span>`).join(' '):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="font-size:12px">no fields observed</div>';
-  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal" style="max-width:760px">
-    <h3>Classification inspector</h3>
+  const ev=rows.length?`<div class="tw evtable"><table><thead><tr><th>field</th><th>type</th><th>seen</th><th>observed types</th><th>magnitude</th></tr></thead><tbody>${rows.map(r=>`<tr><td class="num" data-l="field">${esc(r.path)}${r.arr?' []':''}</td><td data-l="type">${esc(r.type)}${r.int?' <span class="muted">int</span>':''}${r.nullable?' <span class="muted">?</span>':''}</td><td class="num muted" data-l="seen">${r.present}${r.total?'/'+r.total:''}</td><td class="muted" data-l="observed" style="font-size:11px">${esc(r.mix)}</td><td data-l="magnitude">${r.buckets.length?r.buckets.map(b=>`<span class="bchip">${b}</span>`).join(' '):'<span class="muted">—</span>'}</td></tr>`).join('')}</tbody></table></div>`:'<div class="muted" style="font-size:12px">no fields observed</div>';
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal full" style="max-width:760px">
+    <div class="mhead"><h3>Classification inspector</h3><button class="modalx" data-x aria-label="Close inspector">✕</button></div>
     <p class="muted num" style="font-size:11.5px">${esc(id)} · ${c.observation_count} observations · source <code>${c.source?esc(c.source):'events.raw'}</code></p>
     <div class="privacy-note">🔒 deblob never stores raw payloads (privacy invariant). No real captured message exists — below is the <b>coarse structural evidence</b> observed across ${c.observation_count} messages, and a <b>synthesized example</b> reconstructed from that shape. Every value is a typed placeholder, never an observed value.</div>
     <h4 class="insp-h">Observed structure (${rows.length} field${rows.length===1?'':'s'})</h4>
@@ -770,9 +791,10 @@ function afterRender(v){
 }
 // event delegation (no inline handlers -> CSP-safe)
 $('#main').addEventListener('click',e=>{
-  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate],[data-ufl],[data-inspect]');if(!t)return;
+  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate],[data-ufl],[data-inspect],[data-schback]');if(!t)return;
   if(t.dataset.tab!=null){state.tab=+t.dataset.tab;render();}
-  else if(t.dataset.sch){state.sel.schema=t.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===t.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x.dataset.sch===t.dataset.sch));}
+  else if(t.hasAttribute('data-schback')){const sp=$('.split');if(sp)sp.classList.remove('open');window.scrollTo(0,0);}
+  else if(t.dataset.sch){state.sel.schema=t.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===t.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x.dataset.sch===t.dataset.sch));const sp=$('.split');if(sp)sp.classList.add('open');window.scrollTo(0,0);}
   else if(t.dataset.umbstate){$$('#umbtabs .tab').forEach(x=>x.classList.toggle('on',x===t));loadUmbrellas(t.dataset.umbstate);}
   else if(t.dataset.uact&&!t.disabled){umbMutate(t.dataset.uact,t.dataset.id);}
   else if(t.dataset.ufl){toggleFieldLineage(t.dataset.ufl);}
@@ -785,6 +807,9 @@ $('#navtoggle').onclick=()=>_app.classList.toggle('navopen');
 $('#navbackdrop').onclick=()=>_app.classList.remove('navopen');
 window.addEventListener('hashchange',render);
 $('#connect').onclick=connectModal;
+// Universal modal dismiss: backdrop tap, any [data-x] close (✕), or Escape.
+$('#overlay').addEventListener('click',e=>{if(e.target.classList.contains('modal-bg')||e.target.closest('[data-x]'))$('#overlay').innerHTML='';});
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&$('#overlay').innerHTML)$('#overlay').innerHTML='';});
 $('#theme').onclick=()=>{const r=document.documentElement;const cur=r.getAttribute('data-theme')||(matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');const nx=cur==='dark'?'light':'dark';r.setAttribute('data-theme',nx);localStorage.setItem('deblob.theme',nx);};
 const th=localStorage.getItem('deblob.theme');if(th)document.documentElement.setAttribute('data-theme',th);
 async function boot(){await loadData();setMode();render();}

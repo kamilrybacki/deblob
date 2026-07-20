@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-foundry-style'; script-src 'nonce-foundry-script'; img-src 'none'; font-src 'none'; connect-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'">
+  <title>Deblob - Dense Mobile Patterns</title>
+  <style nonce="foundry-style">
+    :root {
+      --bg:#0f0e0a; --panel:#171510; --panel-2:#211e16; --sunk:#12100c;
+      --ink:#f1ead6; --ink2:#afa68d; --faint:#756e5e; --line:#2a261b; --line2:#3a3425;
+      --accent:#dfff3f; --accent-soft:#2a3214; --accent-ink:#ecff82;
+      --good:#98d35b; --good-soft:#1d2814; --warn:#ffb13d; --warn-soft:#302113;
+      --risk:#ff604a; --risk-soft:#321915; --track:#2c291d;
+      --sans:system-ui,-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;
+      --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+      --sh:0 1px 0 rgba(255,255,255,.03),0 12px 28px rgba(0,0,0,.34);
+      --sh2:0 24px 70px rgba(0,0,0,.62);
+      color-scheme: dark;
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:#f4f0df; --panel:#fffaf0; --panel-2:#eee6d1; --sunk:#e9e1cc;
+        --ink:#17140d; --ink2:#625b4c; --faint:#8a806b; --line:#d8cfb8; --line2:#c5b998;
+        --accent:#5c6c00; --accent-soft:#edf4be; --accent-ink:#394400;
+        --good:#47751e; --good-soft:#e2efd2; --warn:#9a6200; --warn-soft:#f5e2bb;
+        --risk:#b23625; --risk-soft:#f4d3cc; --track:#ded5bd;
+        --sh:0 1px 0 rgba(20,17,10,.04),0 10px 24px rgba(20,17,10,.08);
+        --sh2:0 18px 50px rgba(20,17,10,.20);
+        color-scheme: light;
+      }
+    }
+    :root[data-theme="light"] {
+      --bg:#f4f0df; --panel:#fffaf0; --panel-2:#eee6d1; --sunk:#e9e1cc;
+      --ink:#17140d; --ink2:#625b4c; --faint:#8a806b; --line:#d8cfb8; --line2:#c5b998;
+      --accent:#5c6c00; --accent-soft:#edf4be; --accent-ink:#394400;
+      --good:#47751e; --good-soft:#e2efd2; --warn:#9a6200; --warn-soft:#f5e2bb;
+      --risk:#b23625; --risk-soft:#f4d3cc; --track:#ded5bd;
+      --sh:0 1px 0 rgba(20,17,10,.04),0 10px 24px rgba(20,17,10,.08);
+      --sh2:0 18px 50px rgba(20,17,10,.20);
+      color-scheme: light;
+    }
+    :root[data-theme="dark"] {
+      --bg:#0f0e0a; --panel:#171510; --panel-2:#211e16; --sunk:#12100c;
+      --ink:#f1ead6; --ink2:#afa68d; --faint:#756e5e; --line:#2a261b; --line2:#3a3425;
+      --accent:#dfff3f; --accent-soft:#2a3214; --accent-ink:#ecff82;
+      --good:#98d35b; --good-soft:#1d2814; --warn:#ffb13d; --warn-soft:#302113;
+      --risk:#ff604a; --risk-soft:#321915; --track:#2c291d;
+      --sh:0 1px 0 rgba(255,255,255,.03),0 12px 28px rgba(0,0,0,.34);
+      --sh2:0 24px 70px rgba(0,0,0,.62);
+      color-scheme: dark;
+    }
+    * { box-sizing: border-box; }
+    html { overflow-x: hidden; background: var(--bg); }
+    body {
+      margin: 0;
+      overflow-x: hidden;
+      min-width: 0;
+      background:
+        linear-gradient(90deg, rgba(223,255,63,.045) 1px, transparent 1px) 0 0 / 24px 24px,
+        linear-gradient(0deg, rgba(223,255,63,.028) 1px, transparent 1px) 0 0 / 24px 24px,
+        var(--bg);
+      color: var(--ink);
+      font-family: var(--sans);
+      font-size: 16px;
+      line-height: 1.42;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+    button {
+      min-height: 44px;
+      border: 1px solid var(--line2);
+      border-radius: 6px;
+      background: var(--panel-2);
+      color: var(--ink);
+      font: 700 13px/1 var(--mono);
+      letter-spacing: .01em;
+      cursor: pointer;
+      transition: background .16s ease, border-color .16s ease, transform .16s ease;
+    }
+    button:hover { border-color: var(--accent); }
+    button:active { transform: translateY(1px); }
+    button:focus-visible, a:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+    }
+    code, pre, .mono, .label, .field-name, .metric-value {
+      font-family: var(--mono);
+      font-variant-numeric: tabular-nums;
+    }
+    .phone {
+      width: min(100%, 430px);
+      margin: 0 auto;
+      min-height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr;
+      border-inline: 1px solid var(--line);
+      background: color-mix(in srgb, var(--bg) 92%, transparent);
+    }
+    .top {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      display: grid;
+      grid-template-columns: 40px 1fr 44px;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--panel) 94%, transparent);
+      backdrop-filter: blur(14px);
+    }
+    .glyph {
+      width: 40px;
+      height: 40px;
+      border: 1px solid var(--accent);
+      border-radius: 5px;
+      display: grid;
+      place-items: center;
+      background: var(--accent-soft);
+    }
+    .glyph svg { width: 26px; height: 26px; stroke: var(--accent); }
+    .brand strong { display: block; font-size: 15px; line-height: 1.05; }
+    .brand span { display: block; color: var(--ink2); font: 700 11px/1.2 var(--mono); letter-spacing: .03em; }
+    main { min-width: 0; padding: 14px 12px 28px; }
+    .hero {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+      box-shadow: var(--sh);
+    }
+    .eyebrow {
+      color: var(--accent);
+      font: 800 11px/1 var(--mono);
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 {
+      margin-top: 9px;
+      font-size: clamp(25px, 8vw, 34px);
+      line-height: .98;
+      letter-spacing: -.035em;
+      text-wrap: pretty;
+    }
+    .hero p, .intro p { margin-top: 10px; color: var(--ink2); }
+    .hero-actions { margin-top: 14px; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .primary { background: var(--accent); border-color: var(--accent); color: #141600; }
+    .section { margin-top: 18px; scroll-margin-top: 72px; }
+    .section-head {
+      display: flex;
+      justify-content: space-between;
+      align-items: end;
+      gap: 12px;
+      margin-bottom: 10px;
+    }
+    .section-head h2 { font-size: 18px; letter-spacing: -.015em; }
+    .count {
+      flex: 0 0 auto;
+      min-height: 28px;
+      display: inline-flex;
+      align-items: center;
+      border: 1px solid var(--line2);
+      border-radius: 999px;
+      padding: 0 9px;
+      color: var(--ink2);
+      background: var(--sunk);
+      font: 750 11px/1 var(--mono);
+    }
+    .stack { display: grid; gap: 9px; }
+    .evidence-card {
+      min-width: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+    }
+    .field-row {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 10px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--line);
+    }
+    .field-name {
+      min-width: 0;
+      color: var(--accent-ink);
+      font-size: 14px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    .type-chip {
+      flex: 0 0 auto;
+      border: 1px solid var(--line2);
+      border-radius: 999px;
+      padding: 5px 8px;
+      background: var(--sunk);
+      color: var(--ink);
+      font: 750 11px/1 var(--mono);
+    }
+    .facts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .fact {
+      min-width: 0;
+      padding: 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--sunk);
+    }
+    .label {
+      display: block;
+      color: var(--faint);
+      font-size: 10px;
+      line-height: 1.1;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .metric-value {
+      display: block;
+      margin-top: 5px;
+      color: var(--ink);
+      font-size: 12px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+    .magnitude { color: var(--warn); }
+    .structure {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 7px;
+      background: var(--panel);
+    }
+    .structure + .structure { margin-top: 9px; }
+    .structure h3 { font-size: 15px; }
+    .structure p { margin-top: 6px; color: var(--ink2); font-size: 13px; }
+    .catalogue-shell {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .view { display: none; padding: 10px; }
+    .view.active { display: block; }
+    .family {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      margin: 0 0 8px;
+      padding: 11px;
+      text-align: left;
+      background: var(--sunk);
+    }
+    .family strong { display: block; font-size: 14px; }
+    .family span { display: block; margin-top: 4px; color: var(--ink2); font: 700 11px/1.2 var(--mono); }
+    .detail-head {
+      display: grid;
+      grid-template-columns: 44px 1fr;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+    .fields-list { display: grid; gap: 8px; }
+    .field-detail {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--sunk);
+    }
+    .field-detail .metric-value { font-size: 13px; }
+    .rules {
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--panel);
+    }
+    .rules ol { margin: 10px 0 0; padding-left: 22px; color: var(--ink2); }
+    .rules li + li { margin-top: 8px; }
+    .sheet-bg {
+      position: fixed;
+      inset: 0;
+      z-index: 30;
+      display: none;
+      align-items: stretch;
+      justify-content: center;
+      background: rgba(6,5,3,.78);
+    }
+    .sheet-bg.open { display: flex; }
+    .sheet {
+      width: min(100%, 430px);
+      height: 100%;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      background: var(--panel);
+      border-inline: 1px solid var(--line2);
+      box-shadow: var(--sh2);
+    }
+    .sheet-head {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      display: grid;
+      grid-template-columns: 1fr 44px;
+      gap: 10px;
+      align-items: center;
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--panel);
+    }
+    .sheet-head h2 { margin-top: 4px; font-size: 18px; letter-spacing: -.015em; }
+    .sheet-body {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+    }
+    .sheet-foot {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      border-top: 1px solid var(--line);
+      background: color-mix(in srgb, var(--panel) 96%, transparent);
+    }
+    pre {
+      max-width: 100%;
+      overflow: auto;
+      margin: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--sunk);
+      color: var(--ink2);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+    .sample {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: var(--sunk);
+      color: var(--ink2);
+      font-size: 13px;
+    }
+    .sample + .sample { margin-top: 8px; }
+    @media (max-width: 360px) {
+      .facts, .hero-actions, .sheet-foot { grid-template-columns: 1fr; }
+      .phone { border-inline: 0; }
+    }
+    @media (min-width: 720px) {
+      .phone { width: min(100%, 920px); }
+      main { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+      .hero, .rules { grid-column: 1 / -1; }
+      .sheet { height: min(86vh, 820px); margin: auto 0; border: 1px solid var(--line2); border-radius: 8px; }
+      .sheet-bg { align-items: center; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="phone" data-od-id="mobile-dense-shell">
+    <header class="top" data-od-id="topbar">
+      <div class="glyph" aria-hidden="true">
+        <svg viewBox="0 0 32 32" fill="none">
+          <path d="M7 9l9-5 9 5v10l-9 5-9-5V9z"></path>
+          <path d="M7 9l9 5 9-5M16 14v10M10 18l6 3 6-3"></path>
+        </svg>
+      </div>
+      <div class="brand">
+        <strong>Deblob foundry</strong>
+        <span>from opaque to proven</span>
+      </div>
+      <button id="theme" aria-label="Toggle theme">◐</button>
+    </header>
+
+    <main data-od-id="main-content">
+      <section class="hero" data-od-id="brief-panel">
+        <div class="eyebrow">390px dense data pattern</div>
+        <h1>Stop making operators pan through evidence.</h1>
+        <p>Field evidence becomes complete stacked cards. Inspector close and actions stay reachable while the sheet body scrolls independently.</p>
+        <div class="hero-actions">
+          <button class="primary" id="openInspector" data-od-id="open-inspector">Open inspector</button>
+          <button id="jumpCatalogue" data-od-id="jump-catalogue">Catalogue drill</button>
+        </div>
+      </section>
+
+      <section class="section" data-od-id="evidence-stack">
+        <div class="section-head">
+          <h2>Evidence stack</h2>
+          <span class="count">4 of 21 fields</span>
+        </div>
+        <div class="stack">
+          <article class="evidence-card" data-od-id="evidence-field-primary-meter-region">
+            <div class="field-row"><h3 class="field-name">isPrimaryMeterRegion</h3><span class="type-chip">boolean</span></div>
+            <div class="facts">
+              <div class="fact"><span class="label">Seen</span><span class="metric-value">10480/10480</span></div>
+              <div class="fact"><span class="label">Observed types</span><span class="metric-value">boolean</span></div>
+              <div class="fact"><span class="label">Magnitude</span><span class="metric-value magnitude">high presence</span></div>
+              <div class="fact"><span class="label">Evidence</span><span class="metric-value">stable flag path</span></div>
+            </div>
+          </article>
+          <article class="evidence-card" data-od-id="evidence-field-meter-reading">
+            <div class="field-row"><h3 class="field-name">meter.reading.deltaBucket</h3><span class="type-chip">number</span></div>
+            <div class="facts">
+              <div class="fact"><span class="label">Seen</span><span class="metric-value">10480/10480</span></div>
+              <div class="fact"><span class="label">Observed types</span><span class="metric-value">integer, decimal</span></div>
+              <div class="fact"><span class="label">Magnitude</span><span class="metric-value magnitude">range bucketed</span></div>
+              <div class="fact"><span class="label">Evidence</span><span class="metric-value">numeric structure only</span></div>
+            </div>
+          </article>
+          <article class="evidence-card" data-od-id="evidence-field-region-code">
+            <div class="field-row"><h3 class="field-name">region.code</h3><span class="type-chip">string</span></div>
+            <div class="facts">
+              <div class="fact"><span class="label">Seen</span><span class="metric-value">10480/10480</span></div>
+              <div class="fact"><span class="label">Observed types</span><span class="metric-value">string enum</span></div>
+              <div class="fact"><span class="label">Magnitude</span><span class="metric-value magnitude">low cardinality</span></div>
+              <div class="fact"><span class="label">Evidence</span><span class="metric-value">values redacted</span></div>
+            </div>
+          </article>
+          <article class="evidence-card" data-od-id="evidence-field-vendor-context">
+            <div class="field-row"><h3 class="field-name">vendorContext.normalizedSource</h3><span class="type-chip">object</span></div>
+            <div class="facts">
+              <div class="fact"><span class="label">Seen</span><span class="metric-value">10152/10480</span></div>
+              <div class="fact"><span class="label">Observed types</span><span class="metric-value">object, null</span></div>
+              <div class="fact"><span class="label">Magnitude</span><span class="metric-value magnitude">optional branch</span></div>
+              <div class="fact"><span class="label">Evidence</span><span class="metric-value">shape drift signal</span></div>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" data-od-id="observed-structure">
+        <div class="section-head">
+          <h2>Inspector order</h2>
+          <span class="count">sticky controls</span>
+        </div>
+        <div class="structure">
+          <h3>Privacy note first</h3>
+          <p>Make the invariant visible before evidence: operators are reviewing structure, not captured values.</p>
+        </div>
+        <div class="structure">
+          <h3>Cards before code</h3>
+          <p>Evidence cards answer field-level questions immediately; synthesized examples remain secondary.</p>
+        </div>
+        <div class="structure">
+          <h3>Actions outside the scroll</h3>
+          <p>Close and verdict actions are pinned to the sheet chrome. No action requires scrolling past evidence.</p>
+        </div>
+      </section>
+
+      <section id="catalogue" class="section" tabindex="-1" data-od-id="schema-catalogue-drilldown">
+        <div class="section-head">
+          <h2>Catalogue drill-down</h2>
+          <span class="count">1 column</span>
+        </div>
+        <div class="catalogue-shell">
+          <div class="view active" id="familyList" data-od-id="family-list-view">
+            <button class="family" data-family="meter" data-od-id="family-meter-events">
+              <span><strong>Meter readings</strong><span>fam_82c4 · 14 schemas · 2 candidates</span></span>
+              <span class="mono">→</span>
+            </button>
+            <button class="family" data-family="billing" data-od-id="family-billing-events">
+              <span><strong>Billing events</strong><span>fam_04f8 · 57 schemas · stable</span></span>
+              <span class="mono">→</span>
+            </button>
+            <button class="family" data-family="audit" data-od-id="family-audit-events">
+              <span><strong>Audit envelope</strong><span>fam_a113 · 8 schemas · review drift</span></span>
+              <span class="mono">→</span>
+            </button>
+          </div>
+          <div class="view" id="familyDetail" data-od-id="family-detail-view">
+            <div class="detail-head">
+              <button id="backFamilies" aria-label="Back to families">←</button>
+              <div><div class="eyebrow">Meter readings</div><h3>canonical fields</h3></div>
+            </div>
+            <div class="fields-list">
+              <div class="field-detail"><span class="label">Field</span><span class="metric-value">meter.reading.deltaBucket</span></div>
+              <div class="field-detail"><span class="label">Type</span><span class="metric-value">number · bucketed</span></div>
+              <div class="field-detail"><span class="label">Required</span><span class="metric-value">yes · 10480/10480</span></div>
+              <div class="field-detail"><span class="label">Governance</span><span class="metric-value">candidate diff opens inspector sheet</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="section rules" data-od-id="mobile-rule-set">
+        <div class="eyebrow">Porting rules</div>
+        <ol>
+          <li>Stack field evidence when column labels matter more than row comparison, especially at 390px.</li>
+          <li>Keep true tables only for matrix comparison, and scroll them inside a framed container with 44px cells.</li>
+          <li>Put sheet close in the sticky header and verdict actions in a sticky footer; body content is the only scroll region.</li>
+          <li>Use mono headings for IDs and paths, but keep explanatory text short and non-mono for scanning.</li>
+        </ol>
+      </section>
+    </main>
+  </div>
+
+  <div class="sheet-bg" id="sheetBg" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" data-od-id="persistent-inspector-sheet">
+    <section class="sheet">
+      <header class="sheet-head" data-od-id="inspector-sticky-header">
+        <div>
+          <div class="eyebrow">classification inspector</div>
+          <h2 id="sheetTitle">cand_meter_delta_040</h2>
+        </div>
+        <button id="closeSheet" aria-label="Close inspector">×</button>
+      </header>
+      <div class="sheet-body" data-od-id="inspector-scroll-body">
+        <article class="structure">
+          <h3>Privacy invariant</h3>
+          <p>Only structural evidence, synthesized examples, and redacted summaries are visible. Captured values stay out of the console.</p>
+        </article>
+        <article class="structure">
+          <h3>Observed structure</h3>
+          <p><code>21</code> paths observed. <code>4</code> high-signal paths separate this candidate from the nearest family.</p>
+        </article>
+        <div class="stack">
+          <article class="evidence-card">
+            <div class="field-row"><h3 class="field-name">meter.reading.deltaBucket</h3><span class="type-chip">number</span></div>
+            <div class="facts">
+              <div class="fact"><span class="label">Seen</span><span class="metric-value">10480/10480</span></div>
+              <div class="fact"><span class="label">Observed</span><span class="metric-value">integer, decimal</span></div>
+            </div>
+          </article>
+          <article class="evidence-card">
+            <div class="field-row"><h3 class="field-name">isPrimaryMeterRegion</h3><span class="type-chip">boolean</span></div>
+            <div class="facts">
+              <div class="fact"><span class="label">Seen</span><span class="metric-value">10480/10480</span></div>
+              <div class="fact"><span class="label">Observed</span><span class="metric-value">boolean</span></div>
+            </div>
+          </article>
+        </div>
+        <article>
+          <h3>Synthesized example</h3>
+          <pre>{
+  "region": { "code": "SYNTH_REGION" },
+  "meter": { "reading": { "deltaBucket": 4 } },
+  "isPrimaryMeterRegion": true
+}</pre>
+        </article>
+        <article>
+          <h3>Redacted real-sample summary</h3>
+          <div class="sample"><code>sample_001</code> · identifiers removed · numeric values bucketed · structure retained</div>
+          <div class="sample"><code>sample_002</code> · source token redacted · enum members hidden · path presence retained</div>
+          <div class="sample"><code>sample_003</code> · no captured value display · drift signal retained</div>
+        </article>
+      </div>
+      <footer class="sheet-foot" data-od-id="inspector-sticky-actions">
+        <button>Defer</button>
+        <button class="primary">Mark reviewed</button>
+      </footer>
+    </section>
+  </div>
+
+  <script nonce="foundry-script">
+    (function () {
+      const root = document.documentElement;
+      const sheet = document.getElementById('sheetBg');
+      const familyList = document.getElementById('familyList');
+      const familyDetail = document.getElementById('familyDetail');
+      function openSheet() { sheet.classList.add('open'); }
+      function closeSheet() { sheet.classList.remove('open'); }
+      document.getElementById('openInspector').addEventListener('click', openSheet);
+      document.getElementById('closeSheet').addEventListener('click', closeSheet);
+      sheet.addEventListener('click', event => { if (event.target === sheet) closeSheet(); });
+      document.getElementById('theme').addEventListener('click', () => {
+        root.setAttribute('data-theme', root.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+      });
+      document.getElementById('jumpCatalogue').addEventListener('click', () => {
+        document.getElementById('catalogue').focus({ preventScroll: true });
+        window.scrollTo({ top: document.getElementById('catalogue').offsetTop - 64, behavior: 'smooth' });
+      });
+      document.querySelectorAll('[data-family]').forEach(button => {
+        button.addEventListener('click', () => {
+          familyList.classList.remove('active');
+          familyDetail.classList.add('active');
+        });
+      });
+      document.getElementById('backFamilies').addEventListener('click', () => {
+        familyDetail.classList.remove('active');
+        familyList.classList.add('active');
+      });
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape') closeSheet();
+      });
+    }());
+  </script>
+</body>
+</html>
