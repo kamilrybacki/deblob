@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Deblob Imprintling Logotypes</title>
+  <style>
+    :root{
+      --canvas:#0B1118; --surface:#111A24; --surface-raised:#182430; --border:#2B3A49;
+      --text:#E7EDF3; --text-muted:#9AA8B6;
+      --identity:#35D0B2; --hot:#F5A524; --cold:#5AA7FF; --provisional:#FFC857; --danger:#F06A6A;
+      --mascot-body:#35D0B2; --mascot-body-light:#20B89A; --mascot-shadow:#148F7A; --mascot-highlight:#A6F3E2;
+      --mascot-outline:#0B1118; --mascot-core:#F7F9FB; --mascot-core-dark:#17202A; --mascot-accent:#B9A7FF;
+      --font-display:'Fredoka','Trebuchet MS',sans-serif;
+      --font-body:'Source Sans 3',system-ui,sans-serif;
+      --font-mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;
+      --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
+      --radius-sm:4px; --radius-md:8px; --radius-lg:12px; --radius-core:2px;
+      --focus-ring:0 0 0 2px var(--canvas),0 0 0 4px var(--identity);
+      color-scheme:dark;
+    }
+    @media (prefers-color-scheme: light){ :root:not([data-theme="dark"]){
+      --canvas:#F7F9FB; --surface:#FFFFFF; --surface-raised:#EEF2F6; --border:#D6DEE6;
+      --text:#17202A; --text-muted:#556575; --identity:#087F6D; --hot:#A85A00; --cold:#1769AA; --provisional:#8A5A00; --danger:#B4232A;
+      --mascot-body:#20B89A; --mascot-outline:#056B5C; color-scheme:light;
+    }}
+    :root[data-theme="light"]{
+      --canvas:#F7F9FB; --surface:#FFFFFF; --surface-raised:#EEF2F6; --border:#D6DEE6;
+      --text:#17202A; --text-muted:#556575; --identity:#087F6D; --hot:#A85A00; --cold:#1769AA; --provisional:#8A5A00; --danger:#B4232A;
+      --mascot-body:#20B89A; --mascot-outline:#056B5C; color-scheme:light;
+    }
+    :root[data-theme="dark"]{color-scheme:dark}
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;overflow-x:hidden}
+    body{font-family:var(--font-body);font-size:15px;line-height:1.55;color:var(--text);background:var(--canvas);text-wrap:pretty}
+    button{font:inherit}
+    button:focus-visible{outline:none;box-shadow:var(--focus-ring)}
+    .page{width:min(1180px,calc(100% - 32px));margin:0 auto;padding:32px 0 56px}
+    .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;padding-bottom:28px;border-bottom:1px solid var(--border)}
+    .brand-head{display:flex;align-items:center;gap:16px;min-width:0}
+    .wordmark{font-family:var(--font-display);font-size:clamp(34px,5vw,58px);font-weight:800;letter-spacing:.01em;line-height:1;color:var(--text)}
+    .descriptor{max-width:440px;color:var(--text-muted);font-size:14px}
+    .toggle{min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);color:var(--text);cursor:pointer}
+    .toggle:hover{border-color:var(--identity)}
+    .intro{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,440px);gap:24px;align-items:stretch;margin:32px 0}
+    .hero{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:32px;display:grid;place-items:center;min-height:310px}
+    .note{background:var(--surface-raised);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px}
+    h1,h2,h3{font-family:var(--font-display);line-height:1.08;margin:0;color:var(--text)}
+    h1{font-size:clamp(38px,5vw,70px);letter-spacing:.005em}
+    h2{font-size:28px;margin:44px 0 16px}
+    h3{font-size:19px;margin:0 0 8px}
+    p{margin:0;color:var(--text-muted)}
+    .eyebrow{font-family:var(--font-mono);font-size:12px;letter-spacing:.08em;text-transform:uppercase;color:var(--identity);margin-bottom:10px}
+    .grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .theme-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .spec-card{border:1px solid var(--border);border-radius:var(--radius-lg);background:var(--surface);padding:20px;min-width:0}
+    .theme-surface{border:1px solid var(--border);border-radius:var(--radius-lg);padding:20px;display:grid;gap:16px;align-content:start;min-height:230px}
+    .theme-dark{--panel-canvas:#0B1118;--panel-surface:#111A24;--panel-raised:#182430;--panel-border:#2B3A49;--panel-text:#E7EDF3;--panel-muted:#9AA8B6;--panel-identity:#35D0B2;--panel-outline:#0B1118;background:var(--panel-canvas);color:var(--panel-text)}
+    .theme-light{--panel-canvas:#F7F9FB;--panel-surface:#FFFFFF;--panel-raised:#EEF2F6;--panel-border:#D6DEE6;--panel-text:#17202A;--panel-muted:#556575;--panel-identity:#087F6D;--panel-outline:#056B5C;background:var(--panel-canvas);color:var(--panel-text)}
+    .theme-surface .label{font-family:var(--font-mono);font-size:12px;color:var(--panel-muted);text-transform:uppercase;letter-spacing:.08em}
+    .lockups{display:grid;grid-template-columns:1.35fr .85fr .85fr;gap:16px}
+    .lockup-box{min-height:180px;display:grid;place-items:center;border:1px solid var(--panel-border);background:var(--panel-surface);border-radius:var(--radius-md);padding:18px}
+    .caption{font-family:var(--font-mono);font-size:12px;color:var(--text-muted);margin-top:10px}
+    .ladder{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;align-items:end}
+    .rung{display:grid;place-items:center;gap:10px;min-height:112px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);padding:12px;text-align:center}
+    .rung .size{font-family:var(--font-mono);font-size:11px;color:var(--text-muted)}
+    .state-row{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}
+    .state-card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-md);padding:16px;text-align:center}
+    .construction{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:16px}
+    .construction div{border:1px solid var(--border);border-radius:var(--radius-md);padding:14px;background:var(--surface)}
+    code,.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+    .do-dont{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    ul{padding-left:18px;margin:8px 0 0;color:var(--text-muted)}
+    li+li{margin-top:6px}
+    svg{display:block;max-width:100%;overflow:visible}
+    .mark-fill{fill:var(--panel-identity,var(--mascot-body))}
+    .mark-shadow{fill:#148F7A}
+    .mark-highlight{fill:#A6F3E2}
+    .mark-ink{fill:var(--panel-outline,var(--mascot-outline))}
+    .core-fill{fill:#F7F9FB}
+    .core-line{stroke:var(--panel-identity,var(--identity));stroke-width:.8;stroke-linecap:square}
+    .core-outline{stroke:var(--panel-outline,var(--mascot-outline));stroke-width:1.5;fill:#F7F9FB}
+    .word-svg{font-family:var(--font-display);font-weight:800;fill:var(--panel-text,var(--text));letter-spacing:.01em}
+    .mono-word{font-family:var(--font-mono);font-size:22px;fill:var(--panel-text,var(--text))}
+    .mono-mark .body{fill:currentColor}
+    @media (max-width:800px){
+      .page{width:min(100% - 24px,1180px);padding-top:20px}
+      .topbar,.intro{grid-template-columns:1fr;display:grid}
+      .topbar{justify-items:start}
+      .theme-pair,.grid,.lockups,.state-row,.construction,.do-dont{grid-template-columns:1fr}
+      .ladder{grid-template-columns:repeat(2,minmax(0,1fr))}
+    }
+    @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}}
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+    <defs>
+      <symbol id="imprintling-primary" viewBox="0 0 32 32">
+        <path class="mark-shadow" d="M4 21.5C4.8 24.6 8.2 27 14.5 27h11.6c2.2 0 3.9-1.3 3.9-3.3v-2.2c-2.5 2-6.2 2.6-10.7 2.6H10.4c-2.7 0-4.8-.8-6.4-2.6Z"></path>
+        <path class="mark-fill" d="M2.5 25.6V15.8c0-3.1 1.8-5.7 4.9-6.9C8.9 5.6 12.2 4.5 16 7.1c3.1-2.3 7.8-2.4 10.3.8 2.7.7 3.9 3 3.2 6.2 1.2 1 1.8 2.8 1.4 4.8-.6 4.1-4.2 7.1-10.7 7.1H4.4c-1.1 0-1.9-.2-1.9-.4Z"></path>
+        <path class="mark-highlight" d="M7.3 11.2c1.1-2 3.4-3 6.5-2.1-1.9.2-3.3.9-4.3 2.1-.6.7-1.5.8-2.2 0Z"></path>
+        <path class="mark-ink" d="M9.5 14.1c.8 0 1.4.6 1.4 1.4v4.1c0 .8-.6 1.4-1.4 1.4s-1.4-.6-1.4-1.4v-4.1c0-.8.6-1.4 1.4-1.4Zm13.8.7h1.8c.8 0 1.4.6 1.4 1.4V18c0 .8-.6 1.4-1.4 1.4h-1.8c-.8 0-1.4-.6-1.4-1.4v-1.8c0-.8.6-1.4 1.4-1.4Zm-5.6 7.4 2.1 1.9-2.1 1.9-2.1-1.9 2.1-1.9Zm0 1.2-.8.7.8.7.8-.7-.8-.7Z"></path>
+        <rect class="core-outline" x="12.5" y="13.5" width="9" height="9" rx="2"></rect>
+        <path class="core-line" d="M14.2 16.3h5.6M14.2 19.6h5.6M17 15.1v6"></path>
+      </symbol>
+      <symbol id="imprintling-compact" viewBox="0 0 32 32">
+        <path class="mark-shadow" d="M4 21.7C5.1 24.8 8.6 27 15.2 27h10.3c2.3 0 4-1.3 4-3.2v-2.3c-2.6 2-6.3 2.7-10.8 2.7H10.3c-2.7 0-4.8-.8-6.3-2.5Z"></path>
+        <path class="mark-fill" d="M2.5 25.6V15.7c0-3.2 1.9-5.8 5-6.9 1.6-3.1 4.7-4.2 8.5-1.7 3.1-2.2 7.8-2.3 10.2.9 2.7.8 3.8 3 3.2 6.1 1.2 1 1.8 2.8 1.4 4.8-.6 4.1-4.2 7.1-10.7 7.1H4.4c-1.1 0-1.9-.2-1.9-.4Z"></path>
+        <path class="mark-highlight" d="M7.2 11.3c1.1-2 3.4-3.1 6.3-2.1-1.8.2-3.2.9-4.2 2.1-.6.7-1.4.8-2.1 0Z"></path>
+        <path class="mark-ink" d="M9.5 14.1c.8 0 1.4.6 1.4 1.4v4.1c0 .8-.6 1.4-1.4 1.4s-1.4-.6-1.4-1.4v-4.1c0-.8.6-1.4 1.4-1.4Zm14 .7h1.7c.8 0 1.4.6 1.4 1.4V18c0 .8-.6 1.4-1.4 1.4h-1.7c-.8 0-1.4-.6-1.4-1.4v-1.8c0-.8.6-1.4 1.4-1.4Z"></path>
+        <rect class="core-outline" x="12.5" y="13.5" width="9" height="9" rx="2"></rect>
+        <path class="core-line" d="M14.2 16.3h5.6M14.2 19.6h5.6M17 15.1v6"></path>
+      </symbol>
+      <symbol id="imprintling-body-only" viewBox="0 0 32 32">
+        <path class="mark-shadow" d="M4 21.7C5.1 24.8 8.6 27 15.2 27h10.3c2.3 0 4-1.3 4-3.2v-2.3c-2.6 2-6.3 2.7-10.8 2.7H10.3c-2.7 0-4.8-.8-6.3-2.5Z"></path>
+        <path class="mark-fill" d="M2.5 25.6V15.7c0-3.2 1.9-5.8 5-6.9 1.6-3.1 4.7-4.2 8.5-1.7 3.1-2.2 7.8-2.3 10.2.9 2.7.8 3.8 3 3.2 6.1 1.2 1 1.8 2.8 1.4 4.8-.6 4.1-4.2 7.1-10.7 7.1H4.4c-1.1 0-1.9-.2-1.9-.4Z"></path>
+        <path class="mark-highlight" d="M7.2 11.3c1.1-2 3.4-3.1 6.3-2.1-1.8.2-3.2.9-4.2 2.1-.6.7-1.4.8-2.1 0Z"></path>
+        <path class="mark-ink" d="M9.5 14.1c.8 0 1.4.6 1.4 1.4v4.1c0 .8-.6 1.4-1.4 1.4s-1.4-.6-1.4-1.4v-4.1c0-.8.6-1.4 1.4-1.4Zm14 .7h1.7c.8 0 1.4.6 1.4 1.4V18c0 .8-.6 1.4-1.4 1.4h-1.7c-.8 0-1.4-.6-1.4-1.4v-1.8c0-.8.6-1.4 1.4-1.4Z"></path>
+      </symbol>
+      <symbol id="imprintling-favicon" viewBox="0 0 16 16">
+        <path fill-rule="evenodd" fill="currentColor" d="M2 15 V8 H3 V6 H4 V5 H6 V6 H8 V7 H9 V6 H10 V5 H13 V6 H14 V8 H15 V15 Z M7 9 H11 V13 H7 Z"></path>
+      </symbol>
+      <symbol id="imprintling-mono" viewBox="0 0 32 32">
+        <path fill-rule="evenodd" fill="currentColor" d="M2.5 25.6V15.8c0-3.1 1.8-5.7 4.9-6.9C8.9 5.6 12.2 4.5 16 7.1c3.1-2.3 7.8-2.4 10.3.8 2.7.7 3.9 3 3.2 6.2 1.2 1 1.8 2.8 1.4 4.8-.6 4.1-4.2 7.1-10.7 7.1H4.4c-1.1 0-1.9-.2-1.9-.4Zm10-12.1h9v9h-9v-9Z"></path>
+      </symbol>
+      <symbol id="state-unknown" viewBox="0 0 32 32">
+        <use href="#imprintling-body-only"></use>
+        <rect class="core-outline" x="12.5" y="13.5" width="9" height="9" rx="2"></rect>
+      </symbol>
+      <symbol id="state-candidate" viewBox="0 0 32 32">
+        <use href="#imprintling-body-only"></use>
+        <rect x="12.5" y="13.5" width="9" height="9" rx="2" fill="#F7F9FB" stroke="var(--panel-outline,var(--mascot-outline))" stroke-width="1.5"></rect>
+        <path d="M14.2 14h1M17 14h1M19.8 14h1M14.2 22h1M17 22h1M19.8 22h1M13 15.6v1M13 18.4v1M21 15.6v1M21 18.4v1" stroke="#FFC857" stroke-width=".9" stroke-linecap="round"></path>
+        <text x="17" y="20.5" text-anchor="middle" font-family="IBM Plex Mono,ui-monospace,Menlo,Consolas,monospace" font-size="7" font-weight="800" fill="var(--panel-outline,var(--mascot-outline))">?</text>
+      </symbol>
+      <symbol id="state-promoted" viewBox="0 0 36 32">
+        <use href="#imprintling-compact"></use>
+        <rect x="25" y="15" width="4" height="4" rx=".8" fill="#F7F9FB"></rect>
+        <rect x="30.5" y="17" width="2.5" height="2.5" rx=".5" fill="#F7F9FB"></rect>
+      </symbol>
+      <symbol id="state-abstain" viewBox="0 0 32 32">
+        <g transform="translate(1 0) skewX(-7)">
+          <use href="#imprintling-body-only"></use>
+        </g>
+        <rect x="12.5" y="13.5" width="9" height="9" rx="2" fill="#F7F9FB" stroke="var(--panel-outline,var(--mascot-outline))" stroke-width="1.5"></rect>
+        <path d="M14.8 18h4.4" stroke="var(--panel-outline,var(--mascot-outline))" stroke-width="1.3" stroke-linecap="round"></path>
+      </symbol>
+    </defs>
+  </svg>
+  <main class="page" data-od-id="logotypes-main">
+    <header class="topbar" data-od-id="logotypes-header">
+      <div class="brand-head">
+        <svg width="64" height="64" viewBox="0 0 32 32" role="img" aria-label="Imprintling primary mark"><use href="#imprintling-primary"></use></svg>
+        <div>
+          <div class="wordmark" data-od-id="deblob-wordmark">deblob</div>
+          <p class="descriptor">Imprintling mascot-forward identity. Flat vector, rigid schema core, deterministic schema discovery.</p>
+        </div>
+      </div>
+      <button class="toggle" type="button" data-od-id="theme-toggle" aria-pressed="false">Light theme</button>
+    </header>
+    <section class="intro" data-od-id="overview">
+      <div>
+        <div class="eyebrow">Approved mascot-forward system</div>
+        <h1 data-od-id="title">Give every blob a permanent shape.</h1>
+      </div>
+      <div class="hero" data-od-id="hero-mark">
+        <svg width="260" height="260" viewBox="0 0 32 32" role="img" aria-label="Hero Imprintling primary logomark"><use href="#imprintling-primary"></use></svg>
+      </div>
+    </section>
+    <section data-od-id="primary-logomark">
+      <h2>Primary Logomark</h2>
+      <div class="theme-pair">
+        <div class="theme-surface theme-dark">
+          <div class="label">Dark canvas</div>
+          <div class="lockup-box"><svg width="190" height="190" viewBox="0 0 32 32" role="img" aria-label="Imprintling on dark"><use href="#imprintling-primary"></use></svg></div>
+        </div>
+        <div class="theme-surface theme-light">
+          <div class="label">Light canvas</div>
+          <div class="lockup-box"><svg width="190" height="190" viewBox="0 0 32 32" role="img" aria-label="Imprintling on light"><use href="#imprintling-primary"></use></svg></div>
+        </div>
+      </div>
+    </section>
+    <section data-od-id="lockups">
+      <h2>Lockups</h2>
+      <div class="theme-pair">
+        <div class="theme-surface theme-dark">
+          <div class="label">Dark</div>
+          <div class="lockups">
+            <div class="lockup-box">
+              <svg width="300" height="96" viewBox="0 0 220 64" role="img" aria-label="Primary horizontal lockup">
+                <use href="#imprintling-primary" x="6" y="8" width="48" height="48"></use>
+                <text class="word-svg" x="76" y="45" font-size="42">deblob</text>
+              </svg>
+            </div>
+            <div class="lockup-box">
+              <svg width="168" height="72" viewBox="0 0 150 58" role="img" aria-label="Compact lockup">
+                <use href="#imprintling-compact" x="10" y="11" width="36" height="36"></use>
+                <text class="word-svg" x="60" y="39" font-size="30">deblob</text>
+              </svg>
+            </div>
+            <div class="lockup-box">
+              <svg width="122" height="138" viewBox="0 0 92 104" role="img" aria-label="Vertical lockup">
+                <use href="#imprintling-primary" x="24" y="6" width="44" height="44"></use>
+                <text class="word-svg" x="46" y="85" text-anchor="middle" font-size="32">deblob</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+        <div class="theme-surface theme-light">
+          <div class="label">Light</div>
+          <div class="lockups">
+            <div class="lockup-box">
+              <svg width="300" height="96" viewBox="0 0 220 64" role="img" aria-label="Primary horizontal lockup light">
+                <use href="#imprintling-primary" x="6" y="8" width="48" height="48"></use>
+                <text class="word-svg" x="76" y="45" font-size="42">deblob</text>
+              </svg>
+            </div>
+            <div class="lockup-box">
+              <svg width="168" height="72" viewBox="0 0 150 58" role="img" aria-label="Compact lockup light">
+                <use href="#imprintling-compact" x="10" y="11" width="36" height="36"></use>
+                <text class="word-svg" x="60" y="39" font-size="30">deblob</text>
+              </svg>
+            </div>
+            <div class="lockup-box">
+              <svg width="122" height="138" viewBox="0 0 92 104" role="img" aria-label="Vertical lockup light">
+                <use href="#imprintling-primary" x="24" y="6" width="44" height="44"></use>
+                <text class="word-svg" x="46" y="85" text-anchor="middle" font-size="32">deblob</text>
+              </svg>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+    <section data-od-id="degradation-ladder">
+      <h2>Degradation Ladder</h2>
+      <div class="ladder">
+        <div class="rung"><svg width="88" height="88" viewBox="0 0 32 32" aria-label="Hero mark"><use href="#imprintling-primary"></use></svg><div class="size">hero</div></div>
+        <div class="rung"><svg width="32" height="32" viewBox="0 0 32 32" aria-label="32 pixel mark"><use href="#imprintling-compact"></use></svg><div class="size">32px</div></div>
+        <div class="rung"><svg width="24" height="24" viewBox="0 0 32 32" aria-label="24 pixel mark"><use href="#imprintling-compact"></use></svg><div class="size">24px</div></div>
+        <div class="rung" style="color:var(--identity)"><svg width="16" height="16" viewBox="0 0 16 16" aria-label="16 pixel favicon silhouette"><use href="#imprintling-favicon"></use></svg><div class="size">16px</div></div>
+        <div class="rung" style="color:var(--text)"><svg width="46" height="46" viewBox="0 0 32 32" aria-label="Monochrome negative-space core"><use href="#imprintling-mono"></use></svg><div class="size">mono</div></div>
+        <div class="rung"><div class="mono" style="font-size:28px">(~▦)</div><div class="size">unicode</div></div>
+        <div class="rung"><div class="mono" style="font-size:28px">(~#)</div><div class="size">ascii</div></div>
+      </div>
+    </section>
+    <section data-od-id="state-cores">
+      <h2>State Cores</h2>
+      <div class="state-row">
+        <div class="state-card"><svg width="64" height="64" viewBox="0 0 32 32" aria-label="Unknown state"><use href="#state-unknown"></use></svg><div class="caption">Unknown · blank core</div></div>
+        <div class="state-card"><svg width="64" height="64" viewBox="0 0 32 32" aria-label="Candidate state"><use href="#state-candidate"></use></svg><div class="caption">Candidate · amber dotted ?</div></div>
+        <div class="state-card"><svg width="64" height="64" viewBox="0 0 32 32" aria-label="Matched state"><use href="#imprintling-compact"></use></svg><div class="caption">Matched · teal grid</div></div>
+        <div class="state-card"><svg width="72" height="64" viewBox="0 0 36 32" aria-label="Promoted state"><use href="#state-promoted"></use></svg><div class="caption">Promoted · square stamp</div></div>
+        <div class="state-card"><svg width="64" height="64" viewBox="0 0 32 32" aria-label="Abstain state"><use href="#state-abstain"></use></svg><div class="caption">Abstain · em-dash</div></div>
+      </div>
+    </section>
+    <section data-od-id="construction-notes">
+      <h2>Construction Note</h2>
+      <div class="note">
+        <p>The master mark is built on a 32x32 grid: body bounds x=2-30 and y=5-27, with a flat base near y=26, two unequal lobes, and no pointed apex. The schema core is a rigid 9x9 axis-aligned square at optical center (17,18); clear space is one core width <code>C</code>. Minimum sizes: horizontal 120px, compact 80px, mascot alone 32px, favicon 16px.</p>
+        <div class="construction">
+          <div><h3>Body</h3><p>Wide, low, asymmetric. Teal body never changes for state.</p></div>
+          <div><h3>Core</h3><p>White square, vault-ink outline, minimal teal grid.</p></div>
+          <div><h3>Face</h3><p>Capsule left eye, rounded-square right eye, open diamond mouth.</p></div>
+          <div><h3>Flat Vector</h3><p>One shadow, one highlight. No gloss, gradients, chrome, or 3D.</p></div>
+        </div>
+      </div>
+    </section>
+    <section data-od-id="flat-vector-rules">
+      <h2>Flat-Vector Do / Don't</h2>
+      <div class="do-dont">
+        <div class="spec-card"><h3>Do</h3><ul><li>Keep the schema core visible in every mascot mark.</li><li>Use teal only for approved schema identity.</li><li>Pair every state with text or a glyph.</li></ul></div>
+        <div class="spec-card"><h3>Don't</h3><ul><li>No glossy slime, glow, gradient, or chrome treatment.</li><li>No two-dot face with a straight mouth.</li><li>No mascot on malformed, quarantine, audit, or CLI error states.</li></ul></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const button = document.querySelector(".toggle");
+    const root = document.documentElement;
+    button.addEventListener("click", () => {
+      const next = root.dataset.theme === "dark" ? "light" : "dark";
+      root.dataset.theme = next;
+      button.textContent = next === "dark" ? "Light theme" : "Dark theme";
+      button.setAttribute("aria-pressed", String(next === "light"));
+    });
+  </script>
+</body>
+</html>

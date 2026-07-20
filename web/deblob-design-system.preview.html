@@ -1,0 +1,329 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src 'self' data:; font-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Deblob Design System</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ctext y='48' font-size='48'%3E%F0%9F%AB%A7%3C/text%3E%3C/svg%3E">
+  <style>
+    :root{
+      --canvas:#0B1118; --surface:#111A24; --surface-raised:#182430; --border:#2B3A49;
+      --text:#E7EDF3; --text-muted:#9AA8B6;
+      --identity:#35D0B2; --hot:#F5A524; --cold:#5AA7FF; --provisional:#FFC857; --danger:#F06A6A;
+      --mascot-body:#35D0B2; --mascot-body-light:#20B89A; --mascot-shadow:#148F7A; --mascot-highlight:#A6F3E2;
+      --mascot-outline:#0B1118; --mascot-core:#F7F9FB; --mascot-core-dark:#17202A; --mascot-accent:#B9A7FF;
+      --text-on-identity:#06251E; --text-on-hot:#241500; --text-on-danger:#2A0505;
+      --identity-tint:rgba(53,208,178,.14); --hot-tint:rgba(245,165,36,.14); --cold-tint:rgba(90,167,255,.14);
+      --provisional-tint:rgba(255,200,87,.14); --danger-tint:rgba(240,106,106,.14); --neutral-tint:rgba(154,168,182,.14);
+      --focus-ring:0 0 0 2px var(--canvas),0 0 0 4px var(--identity);
+      --font-display:'Fredoka','Trebuchet MS',sans-serif;
+      --font-body:'Source Sans 3',system-ui,sans-serif;
+      --font-mono:'IBM Plex Mono',ui-monospace,Menlo,Consolas,monospace;
+      --text-xs:12px; --text-sm:13px; --text-base:15px; --text-md:17px; --text-lg:20px; --text-xl:25px; --text-2xl:32px; --text-3xl:44px;
+      --leading-tight:1.2; --leading-normal:1.55; --measure:72ch;
+      --space-1:4px; --space-2:8px; --space-3:12px; --space-4:16px; --space-5:24px; --space-6:32px; --space-7:48px; --space-8:64px;
+      --radius-sm:4px; --radius-md:8px; --radius-lg:12px; --radius-pill:999px; --radius-core:2px;
+      --border-w:1px; --border-std:1px solid var(--border);
+      --shadow-raised:0 1px 2px rgba(0,0,0,.25),0 4px 12px rgba(0,0,0,.18);
+      --ease-std:cubic-bezier(.4,0,.2,1); --dur-fast:120ms; --dur-med:200ms;
+      color-scheme:dark;
+    }
+    @media (prefers-color-scheme: light){ :root:not([data-theme="dark"]){
+      --canvas:#F7F9FB; --surface:#FFFFFF; --surface-raised:#EEF2F6; --border:#D6DEE6;
+      --text:#17202A; --text-muted:#556575;
+      --identity:#087F6D; --hot:#A85A00; --cold:#1769AA; --provisional:#8A5A00; --danger:#B4232A;
+      --mascot-body:#20B89A; --mascot-outline:#056B5C;
+      --text-on-identity:#F7F9FB; --text-on-hot:#F7F9FB; --text-on-danger:#F7F9FB;
+      --identity-tint:rgba(8,127,109,.10); --hot-tint:rgba(168,90,0,.10); --cold-tint:rgba(23,105,170,.10);
+      --provisional-tint:rgba(138,90,0,.10); --danger-tint:rgba(180,35,42,.10); --neutral-tint:rgba(85,101,117,.10);
+      color-scheme:light;
+    }}
+    :root[data-theme="light"]{
+      --canvas:#F7F9FB; --surface:#FFFFFF; --surface-raised:#EEF2F6; --border:#D6DEE6;
+      --text:#17202A; --text-muted:#556575;
+      --identity:#087F6D; --hot:#A85A00; --cold:#1769AA; --provisional:#8A5A00; --danger:#B4232A;
+      --mascot-body:#20B89A; --mascot-outline:#056B5C;
+      --text-on-identity:#F7F9FB; --text-on-hot:#F7F9FB; --text-on-danger:#F7F9FB;
+      --identity-tint:rgba(8,127,109,.10); --hot-tint:rgba(168,90,0,.10); --cold-tint:rgba(23,105,170,.10);
+      --provisional-tint:rgba(138,90,0,.10); --danger-tint:rgba(180,35,42,.10); --neutral-tint:rgba(85,101,117,.10);
+      color-scheme:light;
+    }
+    :root[data-theme="dark"]{color-scheme:dark}
+    *{box-sizing:border-box}
+    html,body{margin:0;min-height:100%;overflow-x:hidden}
+    body{font-family:var(--font-body);font-size:var(--text-base);line-height:var(--leading-normal);background:var(--canvas);color:var(--text);text-wrap:pretty}
+    button,input,select{font:inherit}
+    :where(button,a,[tabindex]):focus-visible{outline:none;box-shadow:var(--focus-ring)}
+    .page{width:min(1240px,calc(100% - 32px));margin:0 auto;padding:28px 0 56px}
+    .header{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:24px;align-items:start;padding:0 0 28px;border-bottom:1px solid var(--border)}
+    .brand{display:flex;align-items:center;gap:16px;min-width:0}
+    .wordmark{font-family:var(--font-display);font-weight:800;font-size:44px;line-height:.95;letter-spacing:.01em;color:var(--text)}
+    .descriptor{color:var(--text-muted);max-width:680px;margin-top:6px}
+    .theme-toggle{min-height:44px;padding:0 16px;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface);color:var(--text);cursor:pointer;transition:border-color var(--dur-fast) var(--ease-std),background var(--dur-fast) var(--ease-std)}
+    .theme-toggle:hover{border-color:var(--identity);background:var(--surface-raised)}
+    main{display:grid;gap:28px;margin-top:28px}
+    section{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-lg);padding:24px}
+    h1,h2,h3,h4{font-family:var(--font-display);line-height:var(--leading-tight);margin:0;color:var(--text)}
+    h1{font-size:var(--text-3xl)}
+    h2{font-size:var(--text-2xl);margin-bottom:16px}
+    h3{font-size:var(--text-lg)}
+    h4{font-size:var(--text-base);margin-bottom:8px}
+    p{margin:0;color:var(--text-muted)}
+    code,pre,.mono{font-family:var(--font-mono);font-variant-numeric:tabular-nums}
+    .section-head{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:16px}
+    .small-note{font-size:var(--text-sm);color:var(--text-muted)}
+    .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .grid-3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}
+    .swatches{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px}
+    .theme-block{border:1px solid var(--border);border-radius:var(--radius-md);padding:16px;background:var(--surface-raised)}
+    .theme-block.light{background:#F7F9FB;color:#17202A;border-color:#D6DEE6}
+    .theme-block.dark{background:#0B1118;color:#E7EDF3;border-color:#2B3A49}
+    .swatch{border:1px solid currentColor;border-color:color-mix(in srgb,currentColor 20%,transparent);border-radius:var(--radius-md);padding:10px;min-height:112px;display:grid;align-content:space-between;background:color-mix(in srgb,var(--chip) 12%,transparent)}
+    .chip{width:100%;height:38px;border-radius:var(--radius-sm);background:var(--chip);border:1px solid color-mix(in srgb,var(--chip) 70%,var(--canvas))}
+    .swatch b{display:block;font-size:13px;color:inherit}
+    .swatch span{display:block;font-family:var(--font-mono);font-size:11px;color:currentColor;opacity:.74}
+    .lilac{border:1px dashed #B9A7FF;border-radius:var(--radius-md);padding:12px;background:color-mix(in srgb,#B9A7FF 12%,transparent)}
+    .type-row{display:grid;grid-template-columns:180px minmax(0,1fr);gap:16px;border-top:1px solid var(--border);padding-top:14px;margin-top:14px}
+    .type-display{font-family:var(--font-display);font-size:32px;font-weight:800}
+    .type-body{font-family:var(--font-body);font-size:18px}
+    .type-mono{font-family:var(--font-mono);font-size:17px}
+    .scale{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;margin-top:16px}
+    .scale span{border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px 10px;background:var(--surface-raised);line-height:1}
+    .token-list{display:grid;gap:10px}
+    .identity-token{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border);border-radius:var(--radius-md);padding:12px 14px;background:var(--surface-raised)}
+    .identity-token code{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;direction:ltr;max-width:220px}
+    .tag{display:inline-flex;align-items:center;gap:7px;border-radius:var(--radius-pill);border:1px solid var(--border);padding:5px 9px;font-family:var(--font-mono);font-size:12px}
+    .tag.identity{color:var(--identity);background:var(--identity-tint);border-color:color-mix(in srgb,var(--identity) 36%,var(--border))}
+    .tag.hot{color:var(--hot);background:var(--hot-tint);border-color:color-mix(in srgb,var(--hot) 36%,var(--border))}
+    .tag.cold{color:var(--cold);background:var(--cold-tint);border-color:color-mix(in srgb,var(--cold) 36%,var(--border))}
+    .tag.provisional{color:var(--provisional);background:var(--provisional-tint);border-color:color-mix(in srgb,var(--provisional) 36%,var(--border))}
+    .tag.danger{color:var(--danger);background:var(--danger-tint);border-color:color-mix(in srgb,var(--danger) 36%,var(--border))}
+    .tag.neutral{color:var(--text-muted);background:var(--neutral-tint)}
+    .component-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+    .panel{border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-raised);padding:16px;min-width:0}
+    .buttons{display:flex;flex-wrap:wrap;gap:10px}
+    .btn{min-height:44px;border:1px solid var(--border);border-radius:var(--radius-md);padding:0 14px;color:var(--text);background:var(--surface);cursor:pointer;transition:background var(--dur-fast) var(--ease-std),border-color var(--dur-fast) var(--ease-std),transform var(--dur-fast) var(--ease-std)}
+    .btn:hover{transform:translateY(-1px);background:var(--surface)}
+    .btn:active{transform:translateY(0)}
+    .btn.primary{background:var(--identity);border-color:var(--identity);color:var(--text-on-identity);font-weight:700}
+    .btn.neutral{background:var(--surface);border-color:var(--border)}
+    .btn.danger{background:var(--danger);border-color:var(--danger);color:var(--text-on-danger);font-weight:700}
+    .btn:disabled{opacity:.46;cursor:not-allowed;transform:none}
+    .pill-grid{display:flex;flex-wrap:wrap;gap:8px}
+    .record{display:grid;gap:12px}
+    .record-head{display:flex;justify-content:space-between;gap:12px;align-items:start}
+    .meta{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+    .meta div{border:1px solid var(--border);border-radius:var(--radius-sm);padding:8px;background:var(--surface)}
+    table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:13px;font-variant-numeric:tabular-nums}
+    th,td{text-align:left;padding:10px;border-bottom:1px solid var(--border);white-space:nowrap}
+    th{background:var(--surface-raised);color:var(--text-muted);font-weight:700}
+    .table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius-md)}
+    .cli{background:#17202A;color:#E7EDF3;border:1px solid #2B3A49;border-radius:var(--radius-md);padding:16px;overflow:auto;font-size:13px}
+    .cli .sch{color:#35D0B2}.cli .cand{color:#F5A524}.cli .muted{color:#9AA8B6}
+    .error{border:1px solid var(--danger);border-radius:var(--radius-md);background:var(--danger-tint);padding:14px;color:var(--text)}
+    .empty{display:grid;place-items:center;text-align:center;gap:10px;min-height:190px;border:1px dashed var(--border);border-radius:var(--radius-md);background:var(--surface)}
+    .diagram{display:grid;gap:16px}
+    .diagram svg{width:100%;height:auto;border:1px solid var(--border);border-radius:var(--radius-md);background:var(--surface-raised)}
+    .matrix{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+    ul{margin:8px 0 0;padding-left:18px;color:var(--text-muted)}
+    li+li{margin-top:6px}
+    svg{display:block;max-width:100%;overflow:visible}
+    .mark-fill{fill:var(--mascot-body)}
+    .mark-shadow{fill:#148F7A}.mark-highlight{fill:#A6F3E2}.mark-ink{fill:var(--mascot-outline)}
+    .core-outline{stroke:var(--mascot-outline);stroke-width:1.5;fill:#F7F9FB}
+    .core-line{stroke:var(--identity);stroke-width:.8;stroke-linecap:square}
+    .icon{width:13px;height:13px;display:inline-block;flex:0 0 auto}
+    .rule{stroke:currentColor;stroke-width:2;fill:none;stroke-linecap:square}
+    @media (max-width:880px){
+      .page{width:min(100% - 24px,1240px);padding-top:20px}
+      .header,.grid-2,.grid-3,.component-grid,.matrix{grid-template-columns:1fr}
+      .section-head{display:block}
+      .swatches{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .type-row{grid-template-columns:1fr}
+      .meta{grid-template-columns:1fr}
+    }
+    @media (prefers-reduced-motion: reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}
+  </style>
+</head>
+<body>
+  <svg aria-hidden="true" width="0" height="0" style="position:absolute">
+    <defs>
+      <symbol id="imprintling-unknown" viewBox="0 0 32 32">
+        <path class="mark-shadow" d="M4 21.7C5.1 24.8 8.6 27 15.2 27h10.3c2.3 0 4-1.3 4-3.2v-2.3c-2.6 2-6.3 2.7-10.8 2.7H10.3c-2.7 0-4.8-.8-6.3-2.5Z"></path>
+        <path class="mark-fill" d="M2.5 25.6V15.7c0-3.2 1.9-5.8 5-6.9 1.6-3.1 4.7-4.2 8.5-1.7 3.1-2.2 7.8-2.3 10.2.9 2.7.8 3.8 3 3.2 6.1 1.2 1 1.8 2.8 1.4 4.8-.6 4.1-4.2 7.1-10.7 7.1H4.4c-1.1 0-1.9-.2-1.9-.4Z"></path>
+        <path class="mark-highlight" d="M7.2 11.3c1.1-2 3.4-3.1 6.3-2.1-1.8.2-3.2.9-4.2 2.1-.6.7-1.4.8-2.1 0Z"></path>
+        <path class="mark-ink" d="M9.5 14.1c.8 0 1.4.6 1.4 1.4v4.1c0 .8-.6 1.4-1.4 1.4s-1.4-.6-1.4-1.4v-4.1c0-.8.6-1.4 1.4-1.4Zm14 .7h1.7c.8 0 1.4.6 1.4 1.4V18c0 .8-.6 1.4-1.4 1.4h-1.7c-.8 0-1.4-.6-1.4-1.4v-1.8c0-.8.6-1.4 1.4-1.4Z"></path>
+        <rect class="core-outline" x="12.5" y="13.5" width="9" height="9" rx="2"></rect>
+      </symbol>
+    </defs>
+  </svg>
+  <div class="page">
+    <header class="header" data-od-id="system-header">
+      <div class="brand">
+        <svg width="52" height="52" viewBox="0 0 32 32" role="img" aria-label="Unknown-state Imprintling"><use href="#imprintling-unknown"></use></svg>
+        <div>
+          <div class="wordmark" data-od-id="wordmark">deblob</div>
+          <p class="descriptor">Continuous schema discovery and identity tagging for uncontrolled data.</p>
+        </div>
+      </div>
+      <button class="theme-toggle" type="button" aria-pressed="false" data-od-id="theme-toggle">Light theme</button>
+    </header>
+    <main data-od-id="design-system-main">
+      <section data-od-id="color-section">
+        <div class="section-head"><h2>Color</h2><p class="small-note">Semantic law: teal approved, amber hot/provisional, blue async, red quarantine only. Neutral slate remains the dominant surface.</p></div>
+        <div class="grid-2">
+          <div class="theme-block dark">
+            <h3>Dark Theme</h3>
+            <div class="swatches">
+              <div class="swatch" style="--chip:#0B1118"><div class="chip"></div><b>canvas</b><span>#0B1118<br>app ground</span></div>
+              <div class="swatch" style="--chip:#111A24"><div class="chip"></div><b>surface</b><span>#111A24<br>panels</span></div>
+              <div class="swatch" style="--chip:#2B3A49"><div class="chip"></div><b>border</b><span>#2B3A49<br>rules</span></div>
+              <div class="swatch" style="--chip:#E7EDF3"><div class="chip"></div><b>text</b><span>#E7EDF3<br>foreground</span></div>
+              <div class="swatch" style="--chip:#35D0B2"><div class="chip"></div><b>identity</b><span>#35D0B2<br>approved</span></div>
+              <div class="swatch" style="--chip:#F5A524"><div class="chip"></div><b>hot</b><span>#F5A524<br>active path</span></div>
+              <div class="swatch" style="--chip:#5AA7FF"><div class="chip"></div><b>cold</b><span>#5AA7FF<br>async</span></div>
+              <div class="swatch" style="--chip:#FFC857"><div class="chip"></div><b>provisional</b><span>#FFC857<br>candidate</span></div>
+              <div class="swatch" style="--chip:#F06A6A"><div class="chip"></div><b>danger</b><span>#F06A6A<br>quarantine</span></div>
+              <div class="swatch" style="--chip:#B9A7FF"><div class="chip"></div><b>Mimic Lilac</b><span>#B9A7FF<br>illustration only</span></div>
+            </div>
+          </div>
+          <div class="theme-block light">
+            <h3>Light Theme</h3>
+            <div class="swatches">
+              <div class="swatch" style="--chip:#F7F9FB"><div class="chip"></div><b>canvas</b><span>#F7F9FB<br>app ground</span></div>
+              <div class="swatch" style="--chip:#FFFFFF"><div class="chip"></div><b>surface</b><span>#FFFFFF<br>panels</span></div>
+              <div class="swatch" style="--chip:#D6DEE6"><div class="chip"></div><b>border</b><span>#D6DEE6<br>rules</span></div>
+              <div class="swatch" style="--chip:#17202A"><div class="chip"></div><b>text</b><span>#17202A<br>foreground</span></div>
+              <div class="swatch" style="--chip:#087F6D"><div class="chip"></div><b>identity</b><span>#087F6D<br>approved</span></div>
+              <div class="swatch" style="--chip:#A85A00"><div class="chip"></div><b>hot</b><span>#A85A00<br>active path</span></div>
+              <div class="swatch" style="--chip:#1769AA"><div class="chip"></div><b>cold</b><span>#1769AA<br>async</span></div>
+              <div class="swatch" style="--chip:#8A5A00"><div class="chip"></div><b>provisional</b><span>#8A5A00<br>candidate</span></div>
+              <div class="swatch" style="--chip:#B4232A"><div class="chip"></div><b>danger</b><span>#B4232A<br>quarantine</span></div>
+              <div class="swatch" style="--chip:#B9A7FF"><div class="chip"></div><b>Mimic Lilac</b><span>#B9A7FF<br>illustration only</span></div>
+            </div>
+          </div>
+        </div>
+        <p class="lilac mono" style="margin-top:16px">Mimic Lilac #B9A7FF is fenced: illustration only, never a status color, chart color, CLI token, or alert.</p>
+      </section>
+      <section data-od-id="typography-section">
+        <h2>Typography</h2>
+        <div class="type-row"><div class="mono">display</div><div><div class="type-display">Fredoka -> Trebuchet MS</div><p>Wordmark and short mascot-forward display labels only.</p></div></div>
+        <div class="type-row"><div class="mono">body</div><div><div class="type-body">Source Sans 3 -> system-ui</div><p>UI, docs, dense reference copy, and component labels.</p></div></div>
+        <div class="type-row"><div class="mono">mono</div><div><div class="type-mono">IBM Plex Mono -> ui-monospace</div><p>Identifiers, CLI, config, metrics, and tabular numerics.</p></div></div>
+        <div class="scale" aria-label="Type scale">
+          <span style="font-size:12px">12</span><span style="font-size:13px">13</span><span style="font-size:15px">15</span><span style="font-size:17px">17</span><span style="font-size:20px">20</span><span style="font-size:25px">25</span><span style="font-size:32px">32</span><span style="font-size:44px">44</span>
+        </div>
+        <p class="mono" style="margin-top:16px">Mid truncation: sch_7M4K2W…F9Q, cand_9WQ1A7…0TR. Never remove the prefix.</p>
+      </section>
+      <section data-od-id="identity-tokens">
+        <h2>Schema Identity Tokens</h2>
+        <div class="token-list">
+          <div class="identity-token"><code style="color:var(--identity)">sch_7M4K2W…F9Q</code><span class="tag identity">▦ approved schema</span></div>
+          <div class="identity-token"><code style="color:var(--hot)">cand_9WQ1A7…0TR</code><span class="tag hot">? candidate</span></div>
+          <div class="identity-token"><code>fam_invoice@v3</code><span class="tag neutral"># neutral family</span></div>
+        </div>
+      </section>
+      <section data-od-id="components-section">
+        <h2>Components</h2>
+        <div class="component-grid">
+          <div class="panel" data-od-id="button-states">
+            <h3>Buttons</h3>
+            <div class="buttons" style="margin-top:12px">
+              <button class="btn primary" type="button">Promote schema</button>
+              <button class="btn neutral" type="button">View evidence</button>
+              <button class="btn danger" type="button">Quarantine</button>
+              <button class="btn neutral" type="button" disabled>Promote disabled</button>
+            </div>
+            <p class="small-note" style="margin-top:10px">Default, hover, active, disabled, and 2px focus ring are included.</p>
+          </div>
+          <div class="panel" data-od-id="status-pills">
+            <h3>Status Pills</h3>
+            <div class="pill-grid" style="margin-top:12px">
+              <span class="tag identity">✓ Known</span><span class="tag provisional">? Provisional</span><span class="tag cold">↗ Discovery</span><span class="tag neutral">! Unresolved</span><span class="tag danger">× Quarantine</span><span class="tag neutral">− Tombstone</span>
+            </div>
+          </div>
+          <div class="panel record" data-od-id="schema-card">
+            <div class="record-head"><div><h3>Schema Record</h3><p class="mono">sch_7M4K2W…F9Q</p></div><span class="tag identity">▦ Known</span></div>
+            <p>Invoice payload shape resolved by deterministic policy. Evidence retained as redacted field classes.</p>
+            <div class="meta"><div><span class="mono">fields</span><br><b>24</b></div><div><span class="mono">match</span><br><b>0.94</b></div><div><span class="mono">policy</span><br><b>locked</b></div></div>
+          </div>
+          <div class="panel record" data-od-id="candidate-card">
+            <div class="record-head"><div><h3>Candidate</h3><p class="mono">cand_9WQ1A7…0TR</p></div><span class="tag hot">? Provisional</span></div>
+            <p>Waiting on sampling quorum before promotion is available.</p>
+            <button class="btn neutral" type="button" disabled>Promote schema</button>
+          </div>
+        </div>
+        <div class="table-wrap" style="margin-top:16px" data-od-id="schema-table">
+          <table>
+            <thead><tr><th>id</th><th>family</th><th>state</th><th>samples</th><th>updated</th></tr></thead>
+            <tbody>
+              <tr><td style="color:var(--identity)">sch_7M4K2W…F9Q</td><td>invoice@v3</td><td>Known</td><td>12,408</td><td>2026-07-20</td></tr>
+              <tr><td style="color:var(--hot)">cand_9WQ1A7…0TR</td><td>invoice@v4</td><td>Provisional</td><td>188</td><td>2026-07-20</td></tr>
+              <tr><td>fam_receipt@v2</td><td>receipt</td><td>Tombstone</td><td>0</td><td>2026-07-18</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid-2" style="margin-top:16px">
+          <pre class="cli" data-od-id="cli-transcript"><span class="muted">$ NO_COLOR=1 deblob inspect ./sample.blob</span>
+resolved <span class="sch">sch_7M4K2W...F9Q</span> invoice@v3
+candidate <span class="cand">cand_9WQ1A7...0TR</span> requires quorum
+note: color is optional; prefixes and labels carry meaning.</pre>
+          <div>
+            <div class="error mono" data-od-id="error-callout">DBL-2204 AOF persistence is unhealthy; promotions are frozen.</div>
+            <div class="empty" data-od-id="empty-state" style="margin-top:16px">
+              <svg width="82" height="82" viewBox="0 0 32 32" role="img" aria-label="Unknown-state Imprintling"><use href="#imprintling-unknown"></use></svg>
+              <p>No candidates waiting. The Imprintling has nothing new to shape.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+      <section data-od-id="diagram-language">
+        <h2>Diagram Language</h2>
+        <div class="diagram">
+          <svg viewBox="0 0 840 260" role="img" aria-label="Deblob diagram language showing sync, async, identity, and quarantine paths">
+            <rect x="36" y="78" width="126" height="70" rx="6" fill="var(--surface)" stroke="var(--border)"></rect>
+            <text x="99" y="118" text-anchor="middle" fill="var(--text)" font-family="IBM Plex Mono,ui-monospace" font-size="16">blob</text>
+            <rect x="298" y="76" width="126" height="74" rx="6" fill="var(--identity-tint)" stroke="var(--identity)"></rect>
+            <text x="361" y="118" text-anchor="middle" fill="var(--text)" font-family="IBM Plex Mono,ui-monospace" font-size="16">sch_ tile</text>
+            <rect x="578" y="76" width="126" height="74" rx="6" fill="var(--surface)" stroke="var(--border)"></rect>
+            <text x="641" y="118" text-anchor="middle" fill="var(--text)" font-family="IBM Plex Mono,ui-monospace" font-size="16">registry</text>
+            <path d="M166 112H294" stroke="var(--hot)" stroke-width="4" fill="none"></path>
+            <text x="230" y="94" text-anchor="middle" fill="var(--hot)" font-family="IBM Plex Mono,ui-monospace" font-size="13">solid sync</text>
+            <path d="M424 112H574" stroke="var(--cold)" stroke-width="4" stroke-dasharray="10 8" fill="none"></path>
+            <text x="499" y="94" text-anchor="middle" fill="var(--cold)" font-family="IBM Plex Mono,ui-monospace" font-size="13">dashed async</text>
+            <path d="M424 150C492 206 566 212 684 188" stroke="var(--danger)" stroke-width="4" fill="none"></path>
+            <text x="566" y="222" fill="var(--danger)" font-family="IBM Plex Mono,ui-monospace" font-size="13">red branch = quarantine</text>
+          </svg>
+          <p class="small-note">All arrows keep distinct shape semantics so the diagram remains legible in monochrome.</p>
+        </div>
+      </section>
+      <section data-od-id="motion-a11y">
+        <h2>Motion & Accessibility</h2>
+        <div class="grid-3">
+          <div class="panel"><h3>Focus</h3><p>Keyboard focus uses a 2px identity ring separated from the surface by canvas color.</p></div>
+          <div class="panel"><h3>Motion</h3><p>Transitions are quiet, 120-200ms. `prefers-reduced-motion` reduces duration to near-zero.</p></div>
+          <div class="panel"><h3>Output</h3><p>WCAG AA contrast, no color-only state, and NO_COLOR-ready CLI output.</p></div>
+        </div>
+      </section>
+      <section data-od-id="mascot-placement">
+        <h2>Mascot Placement Matrix</h2>
+        <div class="matrix">
+          <div class="panel"><h3>Allowed</h3><ul><li>Product identity, empty states, onboarding, docs headers.</li><li>Unknown, candidate, matched, promoted, and abstain state illustrations.</li><li>Small construction diagrams where the schema core is visible.</li></ul></div>
+          <div class="panel"><h3>Prohibited</h3><ul><li>Malformed, quarantine, security, audit, and machine output.</li><li>Promotion controls or decisions that imply the mascot approves.</li><li>Any state that recolors the mascot body red, amber, blue, or lilac.</li></ul></div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script>
+    const root = document.documentElement;
+    const toggle = document.querySelector(".theme-toggle");
+    toggle.addEventListener("click", () => {
+      const next = root.dataset.theme === "dark" ? "light" : "dark";
+      root.dataset.theme = next;
+      toggle.textContent = next === "dark" ? "Light theme" : "Dark theme";
+      toggle.setAttribute("aria-pressed", String(next === "light"));
+    });
+  </script>
+</body>
+</html>

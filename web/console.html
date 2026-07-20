@@ -4,28 +4,29 @@
 <title>Deblob — Console</title>
 <style>
   :root{
-    /* Deblob "schema foundry" identity — specimen paper + olive verdict (light) */
-    --bg:#efe9d7; --panel:#f7f2e3; --panel-2:#ece5d1; --sunk:#f2ecda;
-    --ink:#1b1810; --ink2:#5c5645; --faint:#8b836c; --line:#dcd3bb; --line2:#c7bda0;
-    --accent:#5c6800; --accent-soft:#e7ecc2; --accent-ink:#404800;
-    --good:#3f7d1f; --good-soft:#dfeccb; --warn:#9a6b12; --warn-soft:#f2e6c8;
-    --risk:#c0361f; --risk-soft:#f4dcd4; --track:#e2dabf;
-    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
-    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    --sh:0 1px 2px rgba(40,34,10,.06),0 6px 18px rgba(40,34,10,.06);
-    --sh2:0 8px 40px rgba(40,34,10,.16);
+    /* Deblob "Imprintling" identity — Registry Teal on specimen paper (light) */
+    --bg:#f7f9fb; --panel:#ffffff; --panel-2:#eef2f6; --sunk:#f0f3f7;
+    --ink:#17202a; --ink2:#556575; --faint:#7d8b99; --line:#d6dee6; --line2:#c2ccd6;
+    --accent:#087f6d; --accent-soft:#dceee9; --accent-ink:#066050;
+    --good:#087f6d; --good-soft:#dceee9; --warn:#a85a00; --warn-soft:#f6e8d2;
+    --risk:#b4232a; --risk-soft:#f6dcdc; --track:#e2e8ee;
+    --mono:'IBM Plex Mono',ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+    --sans:'Source Sans 3',system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --font-display:'Fredoka','Trebuchet MS',var(--sans);
+    --sh:0 1px 2px rgba(20,32,42,.06),0 6px 18px rgba(20,32,42,.07);
+    --sh2:0 8px 40px rgba(20,32,42,.16);
   }
   @media(prefers-color-scheme:dark){:root{
-    /* Deblob "schema foundry" identity — graphite void + verdict sulfur (dark, primary) */
-    --bg:#0f0e0a; --panel:#171510; --panel-2:#211e16; --sunk:#12100a;
-    --ink:#f1ead6; --ink2:#afa68d; --faint:#6f6a58; --line:#2a261b; --line2:#3b3526;
-    --accent:#dfff3f; --accent-soft:#24280e; --accent-ink:#dbf25a;
-    --good:#98d35b; --good-soft:#18220f; --warn:#ffb13d; --warn-soft:#2a1e0c;
-    --risk:#ff604a; --risk-soft:#2a1412; --track:#2a261b;
-    --sh:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.4); --sh2:0 12px 50px rgba(0,0,0,.6);
+    /* Deblob "Imprintling" identity — Imprint Teal on Vault ink (dark, primary) */
+    --bg:#0b1118; --panel:#111a24; --panel-2:#182430; --sunk:#0d151d;
+    --ink:#e7edf3; --ink2:#9aa8b6; --faint:#6b7a89; --line:#2b3a49; --line2:#3a4c5e;
+    --accent:#35d0b2; --accent-soft:#12251f; --accent-ink:#6fe0c8;
+    --good:#35d0b2; --good-soft:#12251f; --warn:#f5a524; --warn-soft:#2a1e0a;
+    --risk:#f06a6a; --risk-soft:#2a1414; --track:#22303c;
+    --sh:0 1px 2px rgba(0,0,0,.35),0 8px 22px rgba(0,0,0,.35); --sh2:0 12px 50px rgba(0,0,0,.55);
   }}
-  :root[data-theme="light"]{--bg:#efe9d7;--panel:#f7f2e3;--panel-2:#ece5d1;--sunk:#f2ecda;--ink:#1b1810;--ink2:#5c5645;--faint:#8b836c;--line:#dcd3bb;--line2:#c7bda0;--accent:#5c6800;--accent-soft:#e7ecc2;--accent-ink:#404800;--good:#3f7d1f;--good-soft:#dfeccb;--warn:#9a6b12;--warn-soft:#f2e6c8;--risk:#c0361f;--risk-soft:#f4dcd4;--track:#e2dabf;--sh:0 1px 2px rgba(40,34,10,.06),0 6px 18px rgba(40,34,10,.06);--sh2:0 8px 40px rgba(40,34,10,.16);}
-  :root[data-theme="dark"]{--bg:#0f0e0a;--panel:#171510;--panel-2:#211e16;--sunk:#12100a;--ink:#f1ead6;--ink2:#afa68d;--faint:#6f6a58;--line:#2a261b;--line2:#3b3526;--accent:#dfff3f;--accent-soft:#24280e;--accent-ink:#dbf25a;--good:#98d35b;--good-soft:#18220f;--warn:#ffb13d;--warn-soft:#2a1e0c;--risk:#ff604a;--risk-soft:#2a1412;--track:#2a261b;--sh:0 1px 2px rgba(0,0,0,.4),0 8px 22px rgba(0,0,0,.4);--sh2:0 12px 50px rgba(0,0,0,.6);}
+  :root[data-theme="light"]{--bg:#f7f9fb;--panel:#ffffff;--panel-2:#eef2f6;--sunk:#f0f3f7;--ink:#17202a;--ink2:#556575;--faint:#7d8b99;--line:#d6dee6;--line2:#c2ccd6;--accent:#087f6d;--accent-soft:#dceee9;--accent-ink:#066050;--good:#087f6d;--good-soft:#dceee9;--warn:#a85a00;--warn-soft:#f6e8d2;--risk:#b4232a;--risk-soft:#f6dcdc;--track:#e2e8ee;--sh:0 1px 2px rgba(20,32,42,.06),0 6px 18px rgba(20,32,42,.07);--sh2:0 8px 40px rgba(20,32,42,.16);}
+  :root[data-theme="dark"]{--bg:#0b1118;--panel:#111a24;--panel-2:#182430;--sunk:#0d151d;--ink:#e7edf3;--ink2:#9aa8b6;--faint:#6b7a89;--line:#2b3a49;--line2:#3a4c5e;--accent:#35d0b2;--accent-soft:#12251f;--accent-ink:#6fe0c8;--good:#35d0b2;--good-soft:#12251f;--warn:#f5a524;--warn-soft:#2a1e0a;--risk:#f06a6a;--risk-soft:#2a1414;--track:#22303c;--sh:0 1px 2px rgba(0,0,0,.35),0 8px 22px rgba(0,0,0,.35);--sh2:0 12px 50px rgba(0,0,0,.55);}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased}
   .num{font-variant-numeric:tabular-nums;font-family:var(--mono)}
@@ -34,7 +35,7 @@
   .top{grid-column:1/3;display:flex;align-items:center;gap:14px;padding:11px 20px;background:var(--panel);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:20}
   .brand{display:flex;align-items:center;gap:9px;font-size:16px}
   .brand .mk{width:29px;height:29px;flex:0 0 auto;display:block}
-  .brand .wm{font-family:var(--mono);font-weight:680;font-size:16px;letter-spacing:.01em;color:var(--ink)}
+  .brand .wm{font-family:var(--font-display);font-weight:600;font-size:19px;letter-spacing:-.01em;color:var(--ink)}
   .pill{font-family:var(--mono);font-size:11px;font-weight:600;padding:3px 10px;border-radius:999px;display:inline-flex;align-items:center;gap:6px}
   .pill .led{width:7px;height:7px;border-radius:50%}
   .pill.demo{background:var(--warn-soft);color:var(--warn)} .pill.demo .led{background:var(--warn)}
@@ -53,7 +54,7 @@
   #nav .foot a{display:inline;padding:0;color:var(--accent);font-weight:500}
   main{padding:22px clamp(16px,3vw,30px);min-width:0;overflow-x:hidden}
   .pagehead{margin:0 0 18px}
-  .pagehead h1{font-family:var(--mono);font-size:20px;margin:0 0 5px;letter-spacing:-.01em;font-weight:640}
+  .pagehead h1{font-size:21px;margin:0 0 5px;letter-spacing:-.01em;font-weight:660}
   .pagehead p{margin:0;color:var(--ink2);font-size:13px;max-width:70ch}
   .grid{display:grid;gap:14px}
   .cols4{grid-template-columns:repeat(4,1fr)} .cols3{grid-template-columns:repeat(3,1fr)} .cols2{grid-template-columns:1fr 1fr}
@@ -269,7 +270,7 @@
 <div class="app">
   <div class="top">
     <button class="iconbtn navtoggle" id="navtoggle" aria-label="Toggle navigation">☰</button>
-    <div class="brand" title="Deblob — from opaque to proven"><svg class="mk" viewBox="0 0 120 120" aria-label="Deblob" fill="none"><path d="M12 64 C3 47 14 28 34 27 C50 26 57 37 68 29 C82 18 101 26 104 45 C108 62 94 72 101 86 C108 101 92 113 77 105 C63 98 55 108 41 101 C27 94 28 78 12 64 Z" fill="var(--panel-2)" stroke="var(--faint)" stroke-width="5"/><path d="M57 24 L108 24 L108 96 L57 96 Z M74 24 L74 96 M91 24 L91 96 M57 48 L108 48 M57 72 L108 72" fill="none" stroke="var(--accent)" stroke-width="4"/><path d="M40 60 L62 60 M54 50 L66 60 L54 70" fill="none" stroke="var(--accent)" stroke-width="6" stroke-linecap="square"/></svg><span class="wm">deblob</span> <span class="brandsub" style="color:var(--faint);font-weight:400;font-size:12.5px;font-family:var(--mono)">console</span></div>
+    <div class="brand" title="Deblob — give every blob a permanent shape"><svg class="mk" viewBox="0 0 16 16" aria-label="Deblob" fill="none"><path fill-rule="evenodd" fill="var(--accent)" d="M2 15 V8 H3 V6 H4 V5 H6 V6 H8 V7 H9 V6 H10 V5 H13 V6 H14 V8 H15 V15 Z M7 9 H11 V13 H7 Z"/></svg><span class="wm">deblob</span> <span class="brandsub" style="color:var(--faint);font-weight:400;font-size:12.5px;font-family:var(--mono)">console</span></div>
     <span id="mode" class="pill demo"><span class="led"></span>DEMO DATA</span>
     <div class="sp"></div>
     <button class="iconbtn" id="theme">◐ <span class="btxt">Theme</span></button>
@@ -290,7 +291,7 @@
     <a data-v="model"><span class="ic">◇</span>Model &amp; learning</a>
     <a data-v="operations"><span class="ic">♥</span>Operations</a>
     <a data-v="quarantine"><span class="ic">⚠</span>Quarantine</a>
-    <div class="foot"><div style="font-family:var(--mono);color:var(--accent-ink);font-size:10px;letter-spacing:.09em;text-transform:uppercase;margin-bottom:8px">From opaque to proven</div>Reads Deblob's <code>/api/v1</code>. Demo mode uses bundled data; mutations disabled.<br><a href="https://github.com/kamilrybacki/deblob" target="_blank" rel="noopener">source ↗</a></div>
+    <div class="foot"><div style="font-family:var(--font-display);color:var(--accent-ink);font-size:12px;margin-bottom:8px">Give every blob a permanent shape.</div>Reads Deblob's <code>/api/v1</code>. Demo mode uses bundled data; mutations disabled.<br><a href="https://github.com/kamilrybacki/deblob" target="_blank" rel="noopener">source ↗</a></div>
   </nav>
   <main id="main"></main>
   <div id="navbackdrop"></div>
