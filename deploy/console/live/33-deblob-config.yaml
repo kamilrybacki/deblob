@@ -56,3 +56,19 @@ data:
     max_per_candidate = 20
     retention_secs = 604800
     max_sample_bytes = 8192
+    [auto_promote]
+    # Automatic candidate promotion (reviewed hardening: security + rust + Codex).
+    # DEFAULT-DENY by source: enabled ONLY for this homelab's OWN trusted grid/
+    # market producers (the same PUBLIC, non-PII streams as [samples]), never the
+    # generic events.raw ingest — so only the operator's own topics can ever be
+    # auto-published. Thresholds are strict (>= the [promotion] guards): a
+    # candidate needs 50 samples over 10 min AND a settled required-leaf shape
+    # before it is published with no human in the loop.
+    enabled = true
+    allowed_sources = ["events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure"]
+    min_samples = 50
+    min_age_ms = 600000
+    min_required_fields = 2
+    min_required_ratio = 0.5
+    sweep_interval_ms = 60000
+    max_promotions_per_tick = 20
