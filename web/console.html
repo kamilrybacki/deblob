@@ -420,9 +420,30 @@ function buildOpenAPI(families){
 function downloadJSON(filename,obj){const blob=new Blob([JSON.stringify(obj,null,2)],{type:'application/json'});
   const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=filename;
   document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);}
+// Preview dialog: shows the generated OpenAPI 3.1 document before download, so
+// you can eyeball the components.schemas / x-deblob-* identity before saving.
+// Download + Copy live inside the modal. Dismissed by ✕ / backdrop / Escape
+// (universal handler). Still fully client-side — no network, CSP-safe (no inline
+// handlers; JS-property onclick only). `esc()` guards the previewed JSON.
+function openApiModal(filename,obj,sub){
+  const json=JSON.stringify(obj,null,2);
+  const kb=(new Blob([json]).size/1024).toFixed(1);
+  const nSchemas=Object.keys((obj.components&&obj.components.schemas)||{}).length;
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal full" style="max-width:760px">
+    <div class="mhead"><h3>OpenAPI export${sub}</h3><button class="modalx" data-x aria-label="Close preview">✕</button></div>
+    <p class="muted" style="font-size:12px">OpenAPI 3.1 · ${nSchemas} component schema${nSchemas===1?'':'s'} · <code>${esc(filename)}</code> · ${kb} KB · generated client-side, contains no payloads.</p>
+    <pre class="synth" style="max-height:52vh;overflow:auto" aria-label="OpenAPI document preview">${esc(json)}</pre>
+    <div class="row2"><button class="btn" data-oapicopy>Copy JSON</button><button class="btn good" data-oapidl>⭳ Download</button></div>
+  </div></div>`;
+  $('#overlay').querySelector('[data-oapidl]').onclick=()=>{downloadJSON(filename,obj);toast('Downloaded '+filename);};
+  $('#overlay').querySelector('[data-oapicopy]').onclick=async()=>{
+    try{await navigator.clipboard.writeText(json);toast('Copied to clipboard');}
+    catch(_){toast('Copy unavailable — use Download');}};
+}
 function exportOpenAPI(id){const fams=state.data.families||[];
-  if(id==='all'){if(!fams.length){toast('No schemas to export');return;}downloadJSON('deblob-schemas.openapi.json',buildOpenAPI(fams));toast(`Exported ${fams.length} schema${fams.length===1?'':'s'} as OpenAPI`);}
-  else{const f=fams.find(x=>x.schema_id===id);if(f){downloadJSON(`deblob-${(f.label||'schema').replace(/[^A-Za-z0-9_.-]/g,'_')}.openapi.json`,buildOpenAPI([f]));toast('Exported schema as OpenAPI');}}
+  if(id==='all'){if(!fams.length){toast('No schemas to export');return;}openApiModal('deblob-schemas.openapi.json',buildOpenAPI(fams),` · ${fams.length} schema${fams.length===1?'':'s'}`);}
+  else{const f=fams.find(x=>x.schema_id===id);if(!f){toast('Schema not found');return;}
+    openApiModal(`deblob-${(f.label||'schema').replace(/[^A-Za-z0-9_.-]/g,'_')}.openapi.json`,buildOpenAPI([f]),f.label?' · '+esc(f.label):'');}
 }
 function setMode(){const el=$('#mode');
   if(!state.live){el.className='pill demo';el.innerHTML='<span class="led"></span>DEMO DATA';}

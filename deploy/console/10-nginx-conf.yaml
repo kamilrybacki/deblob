@@ -43,6 +43,18 @@ data:
         proxy_buffering off;
         proxy_cache off;
         proxy_read_timeout 3600s;
+        # nginx here is unbuffered, but the response still traverses Caddy AND
+        # Cloudflare. CF compresses text/* responses (it zstd's the console HTML),
+        # and compressing an event-stream makes the compressor hold bytes until a
+        # block fills — so the browser sees "waiting for events…" forever while
+        # events are really flowing. `no-transform` tells Cloudflare to leave the
+        # stream uncompressed/untransformed; `X-Accel-Buffering: no` is the belt-
+        # and-braces hint for any nginx-aware hop. Override the upstream's
+        # `no-cache` so we don't emit a duplicate Cache-Control.
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "no-cache, no-transform" always;
+        add_header X-Accel-Buffering "no" always;
+        gzip off;
       }
       # Same-origin proxy to the live Deblob management API. No URI on proxy_pass
       # so the full /api/v1/... path is forwarded unchanged. The bearer token is
