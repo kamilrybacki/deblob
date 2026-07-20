@@ -47,7 +47,7 @@
   #nav{background:var(--panel);border-right:1px solid var(--line);padding:14px 12px;display:flex;flex-direction:column;gap:2px}
   #nav a{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:9px;color:var(--ink2);text-decoration:none;font-size:13.5px;font-weight:500;cursor:pointer}
   #nav a:hover{background:var(--panel-2);color:var(--ink)}
-  #nav a.on{background:var(--accent-soft);color:var(--accent-ink);font-weight:620}
+  #nav a.on{background:var(--panel-2);color:var(--ink);font-weight:660;box-shadow:inset 3px 0 0 var(--accent)}
   #nav a .ic{width:17px;text-align:center;opacity:.85}
   #nav .grp{font-size:10.5px;font-family:var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--faint);padding:14px 12px 5px}
   #nav .foot{margin-top:auto;font-size:11px;color:var(--faint);padding:10px 12px;line-height:1.5}
@@ -64,7 +64,7 @@
   .btmtabs{position:fixed;left:0;right:0;bottom:0;z-index:30;box-sizing:border-box;height:calc(60px + env(safe-area-inset-bottom));display:none;grid-template-columns:repeat(4,1fr);align-items:stretch;gap:4px;padding:6px 8px calc(6px + env(safe-area-inset-bottom));background:var(--panel);border-top:1px solid var(--line);box-shadow:0 -3px 18px rgba(0,0,0,.28)}
   .btmtabs a{display:grid;place-content:center;justify-items:center;gap:3px;border-radius:11px;color:var(--ink2);font-size:10px;font-weight:620;letter-spacing:.01em;cursor:pointer;font-family:var(--sans)}
   .btmtabs a .ic{font-size:18px;line-height:1;opacity:.9}
-  .btmtabs a.on{background:var(--accent-soft);color:var(--accent-ink)}
+  .btmtabs a.on{background:var(--panel-2);color:var(--ink);box-shadow:inset 0 3px 0 var(--accent)}
   .btmtabs a:active{transform:translateY(1px)}
   @media(max-width:900px){.cols4{grid-template-columns:1fr 1fr}.cols3,.cols2{grid-template-columns:1fr}}
   /* Mobile overrides live at the END of this stylesheet (after all base rules) so
@@ -138,9 +138,10 @@
   .dec.match{background:var(--accent-soft);color:var(--accent-ink)} .dec.new{background:var(--good-soft);color:var(--good)} .dec.abstain{background:var(--warn-soft);color:var(--warn)}
   .actions{display:flex;gap:8px;margin-top:12px}
   .btn{border:1px solid var(--line2);background:var(--panel);color:var(--ink);border-radius:8px;padding:7px 14px;font-size:12.5px;font-weight:560;cursor:pointer;font-family:var(--sans)}
-  .btn:hover{background:var(--panel-2)} .btn:disabled{opacity:.45;cursor:not-allowed}
+  .btn:hover{background:var(--panel-2)} .btn:active{transform:translateY(1px)} .btn:disabled{opacity:.45;cursor:not-allowed}
   .btn.good{border-color:var(--good);color:var(--good)} .btn.good:hover{background:var(--good-soft)}
   .btn.risk{border-color:var(--risk);color:var(--risk)} .btn.risk:hover{background:var(--risk-soft)}
+  .btn:focus-visible,.iconbtn:focus-visible,#nav a:focus-visible,.btmtabs a:focus-visible{outline:none;box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--accent)}
   table{width:100%;border-collapse:collapse;font-size:13px}
   .tw{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:var(--sh)}
   th,td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap}
