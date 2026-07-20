@@ -14,7 +14,8 @@
 //!
 //! `serve` returns once `shutdown` is cancelled AND every spawned task has
 //! drained (relay first, per spec §3.2, then the discovery consumer, then
-//! the shadow sweep if `[slm].enabled`, then the management API, then the
+//! the shadow sweep if `[slm].enabled`, then the auto-promote sweep if
+//! `[auto_promote].enabled`, then the management API, then the
 //! HTTP push reverse proxy if `[http_proxy].enabled` — P2-C Task 4, no
 //! ordering dependency on the others, so it drains last) — the exact
 //! sequencing Task 18's `main.rs` run() used to inline before this split.
@@ -39,6 +40,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::api::{self, ApiState, SecretToken};
+use crate::auto_promote::run_auto_promote_sweep;
 use crate::coldlane::ColdLane;
 use crate::config::{Config, HttpProxyConfig, Secrets, SlmConfig};
 use crate::discovery_consumer::{self, DiscoveryConsumerCfg};
@@ -90,6 +92,12 @@ pub enum AppError {
     /// with that invariant violated (e.g. a test).
     #[error("[slm].enabled is true but no DEBLOB_SLM_API_TOKEN was supplied")]
     MissingSlmToken,
+    /// `[auto_promote]` is enabled but its values are nonsensical or looser
+    /// than the manual `[promotion]` guards — fail startup rather than run an
+    /// unattended-write sweep with a broken policy (see
+    /// [`crate::config::AutoPromoteConfig::validate`]).
+    #[error("invalid [auto_promote] config: {0}")]
+    InvalidAutoPromoteConfig(String),
     /// `[http_proxy].listen_addr` (P2-C Task 4) failed to parse as a socket
     /// address. Caught before any listener is bound — a malformed listen
     /// address is a config bug, not a runtime condition to degrade
@@ -375,7 +383,9 @@ pub async fn serve(
         max_sample_bytes: app_config.samples.max_sample_bytes,
         dlp: deblob_dlp::DlpConfig::default(),
     };
-    let sample_store: Option<Arc<dyn deblob_core::ports::SampleStore>> = if app_config.samples.enabled
+    let sample_store: Option<Arc<dyn deblob_core::ports::SampleStore>> = if app_config
+        .samples
+        .enabled
     {
         match &secrets.samples_redis_url {
             Some(url) => Some(Arc::new(
@@ -448,6 +458,49 @@ pub async fn serve(
     // subscribes. ---
     let (stream_tx, _stream_rx) = broadcast::channel::<StreamEvent>(STREAM_CHANNEL_CAPACITY);
 
+    // --- Auto-promote sweep (P-auto): OFF unless `[auto_promote].enabled`.
+    // Promotes any provisional candidate that clears the deterministic
+    // `AutoPromotePolicy` bar to a NEW family with no human in the loop. When
+    // disabled (the default) no task is spawned and `auto_promote_handle`
+    // stays `None`, mirroring the shadow lane's own pattern. Clones `promoter`
+    // (moved into `ApiState` just below) so both surfaces share one Promoter. ---
+    app_config
+        .auto_promote
+        .validate(&app_config.promotion)
+        .map_err(AppError::InvalidAutoPromoteConfig)?;
+    let auto_promote_handle = if app_config.auto_promote.enabled {
+        let ap_promoter = promoter.clone();
+        let ap_evidence = evidence.clone();
+        let ap_policy = app_config.auto_promote.to_policy();
+        let ap_allowed: Arc<[String]> = app_config.auto_promote.allowed_sources.clone().into();
+        let ap_max = app_config.auto_promote.max_promotions_per_tick;
+        let ap_interval =
+            std::time::Duration::from_millis(app_config.auto_promote.sweep_interval_ms);
+        let ap_shutdown = shutdown.clone();
+        tracing::info!(
+            min_samples = ap_policy.min_samples,
+            min_age_ms = ap_policy.min_age_ms,
+            interval_ms = app_config.auto_promote.sweep_interval_ms,
+            max_per_tick = ap_max,
+            allowed_sources = ap_allowed.len(),
+            "auto-promote sweep enabled"
+        );
+        Some(tokio::spawn(async move {
+            run_auto_promote_sweep(
+                ap_promoter,
+                ap_evidence,
+                ap_policy,
+                ap_allowed,
+                ap_max,
+                ap_interval,
+                ap_shutdown,
+            )
+            .await;
+        }))
+    } else {
+        None
+    };
+
     // --- Management API: its OWN listen port, separate from Kafka ingest
     // (spec §8). ---
     let api_state = ApiState {
@@ -471,7 +524,10 @@ pub async fn serve(
         sources,
         value_profiles,
         samples: sample_store.clone(),
-        samples_read_token: secrets.samples_read_token.clone().map(|t| SecretToken::new(&t)),
+        samples_read_token: secrets
+            .samples_read_token
+            .clone()
+            .map(|t| SecretToken::new(&t)),
         enforce_value_guard: app_config.umbrella.enforce_value_guard,
         umbrella_min_support: app_config.umbrella.min_value_support,
     };
@@ -596,7 +652,7 @@ pub async fn serve(
 
     shutdown.cancelled().await;
     tracing::info!(
-        "shutdown signal received; draining relay, discovery consumer, shadow sweep (if enabled), http proxy (if enabled), and management API"
+        "shutdown signal received; draining relay, discovery consumer, shadow sweep (if enabled), auto-promote sweep (if enabled), http proxy (if enabled), and management API"
     );
 
     // Relay first: spec §3.2 wants any open Kafka transaction aborted/
@@ -617,6 +673,12 @@ pub async fn serve(
         match shadow_handle.await {
             Ok(()) => tracing::info!("shadow sweep drained cleanly"),
             Err(e) => tracing::error!(error = %e, "shadow sweep task panicked"),
+        }
+    }
+    if let Some(auto_promote_handle) = auto_promote_handle {
+        match auto_promote_handle.await {
+            Ok(()) => tracing::info!("auto-promote sweep drained cleanly"),
+            Err(e) => tracing::error!(error = %e, "auto-promote sweep task panicked"),
         }
     }
     match api_handle.await {

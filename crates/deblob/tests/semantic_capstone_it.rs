@@ -538,6 +538,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
         },
         umbrella: Default::default(),
         samples: Default::default(),
+        auto_promote: Default::default(),
     };
     let secrets = Secrets {
         api_token: TOKEN.to_string(),

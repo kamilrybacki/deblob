@@ -94,3 +94,21 @@ min_window_ms = 60000
 [semantic]
 canonical_field_ids = []
 event_types = []
+
+# [auto_promote] — automatic candidate promotion. OFF by default: promotion
+# stays human-driven exactly as before unless `enabled = true`. When enabled, a
+# periodic sweep publishes any PROVISIONAL candidate that clears a deterministic
+# bar WITHOUT a human in the loop. DEFAULT-DENY by source: `allowed_sources`
+# must name the trusted relay topics, or nothing is promoted — so a lower-trust
+# or attacker-reachable producer cannot grind a crafted shape into a governed
+# schema. Thresholds must be >= the `[promotion]` guards above (validated at
+# startup). Not safe to enable until observed on real traffic.
+# [auto_promote]
+# enabled = false
+# allowed_sources = ["events.grid.carbonintensity"]  # required when enabled
+# min_samples = 50                # >= [promotion].min_samples
+# min_age_ms = 600000             # >= [promotion].min_age_ms (10 min)
+# min_required_fields = 2         # required leaf fields (>=1); 2 rejects wrappers
+# min_required_ratio = 0.5        # fraction of leaf fields that must be required
+# sweep_interval_ms = 30000       # must be > 0
+# max_promotions_per_tick = 20    # caps blast radius on a large backlog

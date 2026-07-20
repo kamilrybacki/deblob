@@ -17,16 +17,17 @@
 //! unchanged.
 
 pub mod api;
+pub mod auto_promote;
 pub mod coldlane;
 pub mod config;
 pub mod discovery_consumer;
 pub mod feedback;
 pub mod model_registry;
 pub mod policy;
-pub mod sample_capture;
 pub mod promote;
 pub mod retrain;
 pub mod retrieval;
+pub mod sample_capture;
 pub mod semantic_drift;
 pub mod semantic_neighbors;
 pub mod semantic_store;

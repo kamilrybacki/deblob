@@ -455,8 +455,9 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
         // test — both lists empty means `serve()` seeds an empty
         // `Registries`, unchanged from every pre-A1 test.
         semantic: SemanticConfig::default(),
-    umbrella: Default::default(),
+        umbrella: Default::default(),
         samples: Default::default(),
+        auto_promote: Default::default(),
     };
     let secrets = Secrets {
         api_token: API_TOKEN.to_string(),

@@ -47,10 +47,12 @@ pub async fn get_candidate_samples(
         tracing::warn!(target: "samples_access", "samples:read denied (missing/invalid capability)");
         return Err(ApiError::not_found("sample store not enabled"));
     }
-    let id = CandidateId::parse(&cand_id)
-        .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    let id = CandidateId::parse(&cand_id).map_err(|e| ApiError::unprocessable(e.to_string()))?;
 
-    let mut samples = store.list_samples(&id, 20).await.map_err(ApiError::from_core)?;
+    let mut samples = store
+        .list_samples(&id, 20)
+        .await
+        .map_err(ApiError::from_core)?;
     // Re-run the CURRENT DLP over each stored (already-redacted) document.
     let dlp = deblob_dlp::DlpConfig::default();
     let mut source = String::new();
@@ -69,14 +71,23 @@ pub async fn get_candidate_samples(
         "samples:read served"
     );
 
-    let body = serde_json::to_string(&ListResponse { data: samples, next_cursor: None })
-        .map_err(|e| ApiError::unavailable(e.to_string()))?;
+    let body = serde_json::to_string(&ListResponse {
+        data: samples,
+        next_cursor: None,
+    })
+    .map_err(|e| ApiError::unavailable(e.to_string()))?;
     let mut resp = (StatusCode::OK, body).into_response();
     let h = resp.headers_mut();
     h.insert("content-type", HeaderValue::from_static("application/json"));
-    h.insert("cache-control", HeaderValue::from_static("private, no-store"));
+    h.insert(
+        "cache-control",
+        HeaderValue::from_static("private, no-store"),
+    );
     h.insert("pragma", HeaderValue::from_static("no-cache"));
-    h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
+    h.insert(
+        "x-content-type-options",
+        HeaderValue::from_static("nosniff"),
+    );
     Ok(resp)
 }
 
@@ -93,12 +104,31 @@ const DEFAULT_ACTOR: &str = "api";
 /// (Task 6), which needs the exact same actor-from-header behavior
 /// `promote` uses — mirrored, not reinvented, per the brief.
 pub(crate) fn actor_from_headers(headers: &axum::http::HeaderMap) -> String {
-    headers
+    match headers
         .get(ACTOR_HEADER)
         .and_then(|v| v.to_str().ok())
         .filter(|v| !v.is_empty())
-        .unwrap_or(DEFAULT_ACTOR)
-        .to_string()
+    {
+        // Reserved system-actor identities mark UNATTENDED, policy-driven
+        // writes in the immutable audit trail — auto-promotion
+        // (`deblob-auto-promote`) and SLM trusted-apply (the `policy:`
+        // namespace). A caller must never be able to launder a human decision
+        // as one of those by supplying the header; a client value that claims a
+        // reserved identity is downgraded to the default actor rather than
+        // misattributed. (This closes a pre-existing systemic gap shared with
+        // the semantic-annotation handler and `trusted.rs`, not one this change
+        // introduces.)
+        Some(v) if is_reserved_actor(v) => DEFAULT_ACTOR.to_string(),
+        Some(v) => v.to_string(),
+        None => DEFAULT_ACTOR.to_string(),
+    }
+}
+
+/// System-generated actor identities that a client-supplied `X-Deblob-Actor`
+/// header may not claim: the auto-promote sweep's actor and the whole `policy:`
+/// namespace used for deterministic/trusted-apply writes.
+fn is_reserved_actor(actor: &str) -> bool {
+    actor == crate::auto_promote::AUTO_PROMOTE_ACTOR || actor.starts_with("policy:")
 }
 
 #[derive(Debug, Deserialize)]
@@ -250,4 +280,34 @@ pub async fn quarantine() -> Json<ListResponse<QuarantineEntry>> {
         data: Vec::new(),
         next_cursor: None,
     })
+}
+
+#[cfg(test)]
+mod actor_tests {
+    use super::*;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn actor_with(header: &str) -> String {
+        let mut h = HeaderMap::new();
+        h.insert(ACTOR_HEADER, HeaderValue::from_str(header).unwrap());
+        actor_from_headers(&h)
+    }
+
+    #[test]
+    fn reserved_system_actors_cannot_be_spoofed_by_a_client_header() {
+        // A caller claiming a system identity is downgraded to the default
+        // actor, never misattributed in the audit trail.
+        assert_eq!(
+            actor_with(crate::auto_promote::AUTO_PROMOTE_ACTOR),
+            DEFAULT_ACTOR
+        );
+        assert_eq!(actor_with("policy:slm-v1"), DEFAULT_ACTOR);
+        assert_eq!(actor_with("policy:anything"), DEFAULT_ACTOR);
+    }
+
+    #[test]
+    fn ordinary_actor_and_missing_header_pass_through() {
+        assert_eq!(actor_with("alice"), "alice");
+        assert_eq!(actor_from_headers(&HeaderMap::new()), DEFAULT_ACTOR);
+    }
 }

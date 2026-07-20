@@ -65,6 +65,146 @@ pub struct Config {
     /// explicitly opts in per trusted source.
     #[serde(default)]
     pub samples: SamplesConfig,
+    /// `[auto_promote]` — automatic candidate promotion (opt-in). Absent, or
+    /// `enabled` unset, defaults OFF: promotion stays human-driven exactly as
+    /// before. When enabled, a periodic sweep publishes any provisional
+    /// candidate that clears the deterministic
+    /// [`crate::policy::AutoPromotePolicy`] bar (samples, age, and a settled
+    /// required-field backbone) to a NEW family with no human in the loop.
+    #[serde(default)]
+    pub auto_promote: AutoPromoteConfig,
+}
+
+/// `[auto_promote]` automatic-promotion policy. Every field defaults so an
+/// absent section is fully OFF (promotion stays manual).
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutoPromoteConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_auto_min_samples")]
+    pub min_samples: u64,
+    #[serde(default = "default_auto_min_age_ms")]
+    pub min_age_ms: i64,
+    #[serde(default = "default_auto_min_required_fields")]
+    pub min_required_fields: usize,
+    #[serde(default = "default_auto_min_required_ratio")]
+    pub min_required_ratio: f64,
+    /// How often (ms) the auto-promote sweep re-scans provisional candidates.
+    #[serde(default = "default_auto_sweep_interval_ms")]
+    pub sweep_interval_ms: u64,
+    /// Relay-bound source identities (topic names) whose candidates MAY be
+    /// auto-promoted. DEFAULT-DENY: an empty list promotes nothing even when
+    /// `enabled` — an operator must explicitly name the sources trusted enough
+    /// for unattended publication, so a lower-trust or attacker-reachable
+    /// producer cannot grind a crafted shape into a governed schema. Matched
+    /// against `CandidateRecord.source` (the relay-bound topic, never a
+    /// producer-supplied header).
+    #[serde(default)]
+    pub allowed_sources: Vec<String>,
+    /// Hard cap on how many candidates a single sweep tick may publish. Bounds
+    /// the blast radius of first-enable against a large provisional backlog (a
+    /// misconfiguration or post-outage pileup) — the remainder is promoted on
+    /// later ticks, not all at once.
+    #[serde(default = "default_auto_max_per_tick")]
+    pub max_promotions_per_tick: usize,
+}
+
+fn default_auto_min_samples() -> u64 {
+    crate::policy::DEFAULT_AUTO_MIN_SAMPLES
+}
+fn default_auto_min_age_ms() -> i64 {
+    crate::policy::DEFAULT_AUTO_MIN_AGE_MS
+}
+fn default_auto_min_required_fields() -> usize {
+    crate::policy::DEFAULT_AUTO_MIN_REQUIRED_FIELDS
+}
+fn default_auto_min_required_ratio() -> f64 {
+    crate::policy::DEFAULT_AUTO_MIN_REQUIRED_RATIO
+}
+fn default_auto_sweep_interval_ms() -> u64 {
+    30_000
+}
+fn default_auto_max_per_tick() -> usize {
+    20
+}
+
+impl Default for AutoPromoteConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            min_samples: default_auto_min_samples(),
+            min_age_ms: default_auto_min_age_ms(),
+            min_required_fields: default_auto_min_required_fields(),
+            min_required_ratio: default_auto_min_required_ratio(),
+            sweep_interval_ms: default_auto_sweep_interval_ms(),
+            allowed_sources: Vec::new(),
+            max_promotions_per_tick: default_auto_max_per_tick(),
+        }
+    }
+}
+
+impl AutoPromoteConfig {
+    /// Expands the thresholds into the [`crate::policy::AutoPromotePolicy`] the
+    /// sweep enforces (the source allowlist / per-tick cap are applied by the
+    /// sweep itself, not the policy).
+    pub fn to_policy(&self) -> crate::policy::AutoPromotePolicy {
+        crate::policy::AutoPromotePolicy {
+            min_samples: self.min_samples,
+            min_age_ms: self.min_age_ms,
+            min_required_fields: self.min_required_fields,
+            min_required_ratio: self.min_required_ratio,
+        }
+    }
+
+    /// Fail-closed startup validation, run only when `enabled`. Rejects
+    /// nonsensical values (a `0` interval would panic `tokio::time::interval`;
+    /// an out-of-range ratio would silently disable the shape guard) and
+    /// refuses thresholds LOOSER than the manual [`PromotionConfig`] guards the
+    /// shared promoter re-applies (else auto-eligible candidates would fail the
+    /// manual check inside `promote` and warn-loop forever). `Err` is a
+    /// human-readable message the caller maps to a startup error.
+    pub fn validate(&self, promotion: &PromotionConfig) -> Result<(), String> {
+        if !self.enabled {
+            return Ok(());
+        }
+        if self.sweep_interval_ms == 0 {
+            return Err("[auto_promote].sweep_interval_ms must be > 0".to_string());
+        }
+        if !self.min_required_ratio.is_finite() || !(0.0..=1.0).contains(&self.min_required_ratio) {
+            return Err(format!(
+                "[auto_promote].min_required_ratio must be in 0.0..=1.0, got {}",
+                self.min_required_ratio
+            ));
+        }
+        if self.min_required_fields == 0 {
+            return Err("[auto_promote].min_required_fields must be >= 1".to_string());
+        }
+        if self.max_promotions_per_tick == 0 {
+            return Err("[auto_promote].max_promotions_per_tick must be >= 1".to_string());
+        }
+        if self.min_samples < promotion.min_samples {
+            return Err(format!(
+                "[auto_promote].min_samples ({}) must be >= [promotion].min_samples ({}) — \
+                 auto thresholds cannot be looser than the manual guards the promoter re-applies",
+                self.min_samples, promotion.min_samples
+            ));
+        }
+        if self.min_age_ms < promotion.min_age_ms {
+            return Err(format!(
+                "[auto_promote].min_age_ms ({}) must be >= [promotion].min_age_ms ({})",
+                self.min_age_ms, promotion.min_age_ms
+            ));
+        }
+        if self.allowed_sources.is_empty() {
+            return Err(
+                "[auto_promote].enabled is true but [auto_promote].allowed_sources is empty — \
+                 name at least one trusted source, or disable auto-promotion (default-deny)"
+                    .to_string(),
+            );
+        }
+        Ok(())
+    }
 }
 
 /// `[samples]` capture policy. Every field defaults so an absent section is
@@ -1025,6 +1165,109 @@ mod tests {
             api_token = "should-never-be-in-toml"
         "#;
         let err = Config::parse_toml(toml).expect_err("a typo'd/secret field must be rejected");
+        assert!(matches!(err, ConfigError::Parse(_)));
+    }
+
+    #[test]
+    fn auto_promote_defaults_off_and_validates() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+        "#;
+        let config = Config::parse_toml(toml).unwrap();
+        assert!(
+            !config.auto_promote.enabled,
+            "absent [auto_promote] must be OFF"
+        );
+        // A disabled section validates trivially.
+        assert!(config.auto_promote.validate(&config.promotion).is_ok());
+    }
+
+    #[test]
+    fn auto_promote_validate_rejects_thresholds_looser_than_manual() {
+        let promotion = PromotionConfig {
+            min_samples: 10,
+            min_age_ms: 300_000,
+        };
+        let cfg = AutoPromoteConfig {
+            enabled: true,
+            min_samples: 5, // looser than manual 10
+            allowed_sources: vec!["events.grid".to_string()],
+            ..AutoPromoteConfig::default()
+        };
+        let err = cfg.validate(&promotion).unwrap_err();
+        assert!(err.contains("min_samples"), "was: {err}");
+    }
+
+    #[test]
+    fn auto_promote_validate_requires_allowed_sources_when_enabled() {
+        // Default thresholds are >= manual defaults, so the allowlist is what
+        // fails: enabling with no trusted source is refused (default-deny).
+        let cfg = AutoPromoteConfig {
+            enabled: true,
+            ..AutoPromoteConfig::default()
+        };
+        let err = cfg.validate(&PromotionConfig::default()).unwrap_err();
+        assert!(err.contains("allowed_sources"), "was: {err}");
+    }
+
+    #[test]
+    fn auto_promote_validate_rejects_zero_interval_and_bad_ratio() {
+        let base = AutoPromoteConfig {
+            enabled: true,
+            allowed_sources: vec!["events.grid".to_string()],
+            ..AutoPromoteConfig::default()
+        };
+        let zero_interval = AutoPromoteConfig {
+            sweep_interval_ms: 0,
+            ..base.clone()
+        };
+        assert!(zero_interval
+            .validate(&PromotionConfig::default())
+            .unwrap_err()
+            .contains("sweep_interval_ms"));
+        let bad_ratio = AutoPromoteConfig {
+            min_required_ratio: 1.5,
+            ..base
+        };
+        assert!(bad_ratio
+            .validate(&PromotionConfig::default())
+            .unwrap_err()
+            .contains("min_required_ratio"));
+    }
+
+    #[test]
+    fn auto_promote_validates_when_fully_configured() {
+        let cfg = AutoPromoteConfig {
+            enabled: true,
+            allowed_sources: vec!["events.grid.carbonintensity".to_string()],
+            ..AutoPromoteConfig::default()
+        };
+        assert!(cfg.validate(&PromotionConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn auto_promote_section_rejects_unknown_field() {
+        let toml = r#"
+            [kafka]
+            raw_topic = "r"
+            tagged_topic = "t"
+            discovery_topic = "d"
+            quarantine_topic = "q"
+            group_id = "g"
+            transactional_id = "x"
+
+            [auto_promote]
+            enabled = true
+            bogus_knob = 1
+        "#;
+        let err =
+            Config::parse_toml(toml).expect_err("unknown [auto_promote] key must be rejected");
         assert!(matches!(err, ConfigError::Parse(_)));
     }
 

@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
-use deblob_core::ports::{CandidateRecord, EvidenceStore, Registry, SchemaRecord};
+use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore, Registry, SchemaRecord};
 use deblob_fingerprint::{bucket_key, ShapeSummary};
 use deblob_monoid::{FieldNode, Profile, GENERALIZER};
 
@@ -58,6 +58,126 @@ impl PromotionPolicy {
             return Err(format!(
                 "candidate has been observed for {age_ms}ms, below the minimum age of {}ms",
                 self.min_age_ms
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Default AUTOMATIC-promotion thresholds — deliberately STRICTER than the
+/// manual [`PromotionPolicy`] because no human reviews the result: more
+/// samples, longer observation, plus a shape-stability guard.
+pub const DEFAULT_AUTO_MIN_SAMPLES: u64 = 50;
+pub const DEFAULT_AUTO_MIN_AGE_MS: i64 = 10 * 60 * 1000; // 10 minutes
+/// Minimum number of REQUIRED LEAF fields (a scalar present in every sample,
+/// at any nesting depth). Two, not one, so a single-key envelope like
+/// `{"data": <churning>}` — which has exactly one always-present top key but no
+/// stable backbone underneath — can never clear the bar.
+pub const DEFAULT_AUTO_MIN_REQUIRED_FIELDS: usize = 2;
+pub const DEFAULT_AUTO_MIN_REQUIRED_RATIO: f64 = 0.5;
+
+/// Walks a generalized [`FieldNode`] subtree, counting `(required_leaves,
+/// total_leaves)`. A LEAF is a field with no children and no array element (a
+/// scalar). `denom` is the number of observations in which THIS node's parent
+/// held the container type that could contain it (`types.object` for object
+/// children, `types.array` for the array element) — matching
+/// `deblob_monoid::profile::write_generalized_field`'s own optionality
+/// denominator. A leaf is REQUIRED iff it was present in every such observation
+/// (`present == denom`, `denom > 0`); `present > denom` is corrupt data and is
+/// NOT counted as required (fail closed).
+fn count_leaves(node: &FieldNode, denom: u64, required: &mut usize, total: &mut usize) {
+    if node.children.is_empty() && node.array_elem.is_none() {
+        *total += 1;
+        if denom > 0 && node.present == denom {
+            *required += 1;
+        }
+        return;
+    }
+    for child in node.children.values() {
+        count_leaves(child, node.types.object, required, total);
+    }
+    if let Some(elem) = &node.array_elem {
+        count_leaves(elem, node.types.array, required, total);
+    }
+}
+
+/// The deterministic bar a NEWLY-DISCOVERED candidate must clear before the
+/// auto-promote sweep ([`crate::auto_promote`]) publishes it to a NEW family
+/// WITHOUT a human in the loop. It is purposely a superset of
+/// [`PromotionPolicy`]: the same sample/age guards PLUS a shape-stability
+/// check. A novel candidate has no existing family to corroborate against, so
+/// "the statistics are good" is expressed structurally — the generalized shape
+/// must have settled into a real REQUIRED backbone (fields present in every
+/// observed sample) rather than a still-churning bag of optionals. The model
+/// still never decides: it only proposes the candidate; this deterministic
+/// policy, on deterministic evidence, is what promotes.
+#[derive(Debug, Clone, Copy)]
+pub struct AutoPromotePolicy {
+    pub min_samples: u64,
+    pub min_age_ms: i64,
+    /// Minimum number of REQUIRED LEAF fields (a scalar present in every
+    /// sample, at any depth). A shape with no required backbone — including a
+    /// single-key wrapper whose contents churn — is never confident enough.
+    pub min_required_fields: usize,
+    /// Minimum fraction (0.0–1.0) of LEAF fields that must be REQUIRED. A shape
+    /// dominated by flapping optionals has not settled yet.
+    pub min_required_ratio: f64,
+}
+
+impl Default for AutoPromotePolicy {
+    fn default() -> Self {
+        Self {
+            min_samples: DEFAULT_AUTO_MIN_SAMPLES,
+            min_age_ms: DEFAULT_AUTO_MIN_AGE_MS,
+            min_required_fields: DEFAULT_AUTO_MIN_REQUIRED_FIELDS,
+            min_required_ratio: DEFAULT_AUTO_MIN_REQUIRED_RATIO,
+        }
+    }
+}
+
+impl AutoPromotePolicy {
+    /// `Ok(())` iff `cand` is statistically solid enough to promote with no
+    /// human review; otherwise `Err` with a human-readable reason (logged by
+    /// the sweep at debug level — this path has no API caller to surface it to).
+    pub fn eligible(&self, cand: &CandidateRecord) -> Result<(), String> {
+        // 1. The manual sample/age guards apply verbatim.
+        PromotionPolicy {
+            min_samples: self.min_samples,
+            min_age_ms: self.min_age_ms,
+        }
+        .check(cand)?;
+        // 2. Shape stability from the candidate's GENERALIZED profile: walk to
+        //    the LEAF fields (any depth) and require a real backbone of leaves
+        //    present in EVERY sample. This looks past a single-key envelope
+        //    (`{"data": <churn>}`) whose one always-present top key hides a
+        //    still-churning interior.
+        let profile: Profile = serde_json::from_value(cand.profile.clone())
+            .map_err(|e| format!("corrupt candidate profile: {e}"))?;
+        if profile.count == 0 {
+            return Err("candidate profile has zero observations".to_string());
+        }
+        let (mut required, mut total) = (0usize, 0usize);
+        // The root is the whole document; its own denominator is the total
+        // observation count (`profile.count`).
+        count_leaves(&profile.root, profile.count, &mut required, &mut total);
+        if total == 0 {
+            return Err("shape has no leaf fields — not settled".to_string());
+        }
+        if required < self.min_required_fields {
+            return Err(format!(
+                "shape has {required} required leaf field(s), below the minimum of {}",
+                self.min_required_fields
+            ));
+        }
+        // `- 1e-9` so an exact boundary (e.g. 2/4 == 0.5 against min 0.5)
+        // isn't rejected by float representation noise; anything genuinely
+        // below the threshold still fails.
+        let ratio = required as f64 / total as f64;
+        if ratio < self.min_required_ratio - 1e-9 {
+            return Err(format!(
+                "shape is {:.0}% required leaf fields, below the minimum {:.0}% — not settled",
+                ratio * 100.0,
+                self.min_required_ratio * 100.0
             ));
         }
         Ok(())
@@ -132,6 +252,23 @@ impl PromoterTrait for Promoter {
             .await?
             .ok_or(CoreError::NotFound)?;
 
+        // Promotion is a one-way transition that only a Provisional candidate
+        // may take. Guarding here (not only in the API layer) closes the window
+        // where the auto-promote sweep — or any concurrent caller — acts on a
+        // candidate a human already rejected, and (together with the
+        // `set_state(Staged)` below) stops an already-published candidate from
+        // being re-promoted on every sweep tick. Residual: this state read and
+        // the `set_state` write below are not one atomic transaction, so a
+        // reject landing in between still races; the window is narrowed to a
+        // single promote call, not eliminated (a fully atomic flip belongs in
+        // the publish Lua script — tracked as a follow-up).
+        if record.state != CandidateState::Provisional {
+            return Err(CoreError::PolicyRejected(format!(
+                "candidate is {:?}; only Provisional candidates can be promoted",
+                record.state
+            )));
+        }
+
         self.policy
             .check(&record)
             .map_err(CoreError::PolicyRejected)?;
@@ -165,17 +302,20 @@ impl PromoterTrait for Promoter {
         // schema is published with `value_profile_ref: None`, exactly as
         // before. Excluded from the `sch_` identity digest — `schema_id`
         // above is already fixed from the generalized fingerprint.
-        let (value_profile_ref, value_profile_summary) =
-            if let Some(store) = &self.value_profiles {
-                let snapshot = crate::value_profile::build_snapshot(
-                    &schema_id, &canonical, cand, &profile, now_ms(),
-                );
-                let summary = snapshot.summary();
-                store.put_value_profile(&snapshot).await?;
-                (Some(snapshot.profile_id), Some(summary))
-            } else {
-                (None, None)
-            };
+        let (value_profile_ref, value_profile_summary) = if let Some(store) = &self.value_profiles {
+            let snapshot = crate::value_profile::build_snapshot(
+                &schema_id,
+                &canonical,
+                cand,
+                &profile,
+                now_ms(),
+            );
+            let summary = snapshot.summary();
+            store.put_value_profile(&snapshot).await?;
+            (Some(snapshot.profile_id), Some(summary))
+        } else {
+            (None, None)
+        };
 
         // `version` here is only ever a caller-side guess (spec §6,
         // `Registry::publish` docs) — the registry is the sole authority
@@ -212,6 +352,22 @@ impl PromoterTrait for Promoter {
             .registry
             .publish(draft.clone(), cand, &bucket, &variants, actor, &req.reason)
             .await?;
+
+        // Move the candidate out of the Provisional scan set now that its
+        // schema is published. There is no dedicated `Promoted` state; `Staged`
+        // is the terminal "acted-upon, no longer a raw provisional candidate"
+        // state (never set anywhere else in the codebase). Best-effort: the
+        // publish is already committed, so a transient state-write failure must
+        // not turn a successful promotion into an error the caller retries. If
+        // it does fail, the state guard above plus the registry's write-once
+        // alias semantics still prevent a duplicate schema on the next attempt.
+        if let Err(err) = self.evidence.set_state(cand, CandidateState::Staged).await {
+            tracing::warn!(
+                candidate_id = %cand.as_str(),
+                error = %err,
+                "promote: schema published but candidate state transition to Staged failed"
+            );
+        }
 
         Ok(SchemaRecord { version, ..draft })
     }
@@ -296,8 +452,11 @@ mod tests {
         ) -> Result<(), CoreError> {
             unimplemented!("not exercised by promoter tests")
         }
-        async fn set_state(&self, _id: &CandId, _state: CandidateState) -> Result<(), CoreError> {
-            unimplemented!("not exercised by promoter tests")
+        async fn set_state(&self, id: &CandId, state: CandidateState) -> Result<(), CoreError> {
+            if let Some(rec) = self.candidates.lock().unwrap().get_mut(id) {
+                rec.state = state;
+            }
+            Ok(())
         }
         async fn get_cluster(&self, gen_fp: &str) -> Result<Option<CandId>, CoreError> {
             Ok(self.clusters.lock().unwrap().get(gen_fp).cloned())
@@ -531,6 +690,146 @@ mod tests {
         assert!(matches!(err, CoreError::PolicyRejected(_)));
     }
 
+    // ---- AutoPromotePolicy (automatic promotion bar) ----
+
+    #[test]
+    fn auto_promote_below_min_samples_rejected() {
+        // 10 samples < default auto min (50); old enough + settled shape.
+        let cand = candidate_record(some_cand_id(), 10, 0, 700_000);
+        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        assert!(err.contains("sample"), "reason was: {err}");
+    }
+
+    #[test]
+    fn auto_promote_below_min_age_rejected() {
+        // Enough samples, but observed for 0ms (first_seen == last_seen).
+        let cand = candidate_record(some_cand_id(), 60, 1_000, 1_000);
+        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        assert!(err.contains("age"), "reason was: {err}");
+    }
+
+    #[test]
+    fn auto_promote_settled_shape_is_eligible() {
+        // candidate_record's `{"a":1,"b":"x"}` profile => 2 required top-level
+        // fields (present == count). 60 samples over 700s => eligible.
+        let cand = candidate_record(some_cand_id(), 60, 0, 700_000);
+        assert!(AutoPromotePolicy::default().eligible(&cand).is_ok());
+    }
+
+    #[test]
+    fn auto_promote_requires_a_required_backbone() {
+        // Same well-formed candidate, but the policy demands 5 required fields
+        // and the shape only has 2 — not confident enough.
+        let cand = candidate_record(some_cand_id(), 60, 0, 700_000);
+        let policy = AutoPromotePolicy {
+            min_required_fields: 5,
+            ..AutoPromotePolicy::default()
+        };
+        let err = policy.eligible(&cand).unwrap_err();
+        assert!(err.contains("required leaf"), "reason was: {err}");
+    }
+
+    #[test]
+    fn auto_promote_rejects_a_shapeless_scalar() {
+        // A candidate whose observations are bare scalars has a single leaf and
+        // no field backbone — below the default 2-required-leaf minimum.
+        let mut cand = candidate_record(some_cand_id(), 60, 0, 700_000);
+        cand.profile = serde_json::to_value(profile_of("5")).unwrap();
+        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        assert!(err.contains("required leaf"), "reason was: {err}");
+    }
+
+    #[test]
+    fn auto_promote_rejects_single_key_envelope() {
+        // {"data": {"x": <varies>}} — one always-present top key, but the
+        // interior churns, so the recursion finds no stable leaf backbone.
+        // `profile_of` merges two differently-shaped observations of the same
+        // wrapper so the inner field is optional (present in 1 of 2).
+        let a = profile_of(r#"{"data":{"x":1}}"#);
+        let b = profile_of(r#"{"data":{"y":2}}"#);
+        let merged = MonoidProfile::merge(&a, &b);
+        let mut cand = candidate_record(some_cand_id(), 60, 0, 700_000);
+        cand.profile = serde_json::to_value(&merged).unwrap();
+        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        assert!(err.contains("required leaf"), "reason was: {err}");
+    }
+
+    #[test]
+    fn auto_promote_ratio_guard_rejects_optional_heavy_shape() {
+        // One required leaf + three optionals => ratio 1/4 = 0.25 < 0.5.
+        // Merge a full record with a minimal one so three fields go optional.
+        let full = profile_of(r#"{"id":"a","p":1,"q":2,"r":3}"#);
+        let min = profile_of(r#"{"id":"b"}"#);
+        let merged = MonoidProfile::merge(&full, &min);
+        let mut cand = candidate_record(some_cand_id(), 60, 0, 700_000);
+        cand.profile = serde_json::to_value(&merged).unwrap();
+        // Lower the field-count floor so the RATIO guard is what fires.
+        let policy = AutoPromotePolicy {
+            min_required_fields: 1,
+            ..AutoPromotePolicy::default()
+        };
+        let err = policy.eligible(&cand).unwrap_err();
+        assert!(err.contains("%"), "reason was: {err}");
+    }
+
+    #[tokio::test]
+    async fn promote_transitions_candidate_out_of_provisional() {
+        // Root fix: a published candidate must leave the Provisional scan set,
+        // else the auto-promote sweep re-promotes it forever.
+        let evidence = Arc::new(FakeEvidence::default());
+        let registry = Arc::new(FakeRegistry::new(1));
+        let cand_id = some_cand_id();
+        evidence
+            .upsert_candidate(candidate_record(
+                cand_id.clone(),
+                DEFAULT_MIN_SAMPLES,
+                0,
+                DEFAULT_MIN_AGE_MS + 1,
+            ))
+            .await
+            .unwrap();
+        let promoter = Promoter::new(registry, evidence.clone());
+
+        promoter
+            .promote(&cand_id, request(), "alice")
+            .await
+            .unwrap();
+
+        let after = evidence.get_candidate(&cand_id).await.unwrap().unwrap();
+        assert_eq!(after.state, CandidateState::Staged);
+    }
+
+    #[tokio::test]
+    async fn promote_rejects_non_provisional_candidate() {
+        // Root fix: a candidate a human already Rejected can never be published
+        // (closes the sweep-vs-reject race at the promote call).
+        let evidence = Arc::new(FakeEvidence::default());
+        let registry = Arc::new(FakeRegistry::new(1));
+        let cand_id = some_cand_id();
+        evidence
+            .upsert_candidate(candidate_record(
+                cand_id.clone(),
+                DEFAULT_MIN_SAMPLES,
+                0,
+                DEFAULT_MIN_AGE_MS + 1,
+            ))
+            .await
+            .unwrap();
+        evidence
+            .set_state(&cand_id, CandidateState::Rejected)
+            .await
+            .unwrap();
+        let promoter = Promoter::new(registry.clone(), evidence);
+
+        let err = promoter
+            .promote(&cand_id, request(), "alice")
+            .await
+            .unwrap_err();
+
+        assert!(matches!(err, CoreError::PolicyRejected(_)));
+        assert!(registry.published.lock().unwrap().is_empty());
+    }
+
     #[tokio::test]
     async fn promote_after_threshold_publishes() {
         let evidence = Arc::new(FakeEvidence::default());
@@ -613,10 +912,13 @@ mod tests {
             .unwrap();
 
         let vp_store = Arc::new(InMemoryValueProfileStore::default());
-        let promoter = Promoter::new(registry.clone(), evidence)
-            .with_value_profiles(vp_store.clone());
+        let promoter =
+            Promoter::new(registry.clone(), evidence).with_value_profiles(vp_store.clone());
 
-        let schema = promoter.promote(&cand_id, request(), "alice").await.unwrap();
+        let schema = promoter
+            .promote(&cand_id, request(), "alice")
+            .await
+            .unwrap();
 
         // The published schema references a durable value profile...
         let vp_ref = schema
@@ -666,7 +968,10 @@ mod tests {
             .await
             .unwrap();
         let promoter = Promoter::new(registry, evidence);
-        let schema = promoter.promote(&cand_id, request(), "alice").await.unwrap();
+        let schema = promoter
+            .promote(&cand_id, request(), "alice")
+            .await
+            .unwrap();
         assert!(schema.value_profile_ref.is_none());
         assert!(schema.value_profile_summary.is_none());
     }
