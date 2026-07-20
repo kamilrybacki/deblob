@@ -16,7 +16,9 @@ spec:
       containers:
       - name: redpanda
         image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
-        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --set, redpanda.auto_create_topics_enabled=true, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
+        # log_retention_ms=2592000000 = 30 days default topic retention (~5-7.5 GB
+        # across the 40 sources, under the 10Gi PVC).
+        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --set, redpanda.auto_create_topics_enabled=true, --set, redpanda.log_retention_ms=2592000000, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
         ports: [{name: kafka, containerPort: 9092}, {name: admin, containerPort: 9644}]
         resources: {requests: {cpu: 300m, memory: 1500Mi}, limits: {cpu: "2", memory: 2Gi}}
         readinessProbe: {tcpSocket: {port: 9092}, initialDelaySeconds: 10, periodSeconds: 5}
