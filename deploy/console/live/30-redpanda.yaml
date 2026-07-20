@@ -16,9 +16,14 @@ spec:
       containers:
       - name: redpanda
         image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
-        # log_retention_ms=2592000000 = 30 days default topic retention (~5-7.5 GB
-        # across the 40 sources, under the 10Gi PVC).
-        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --set, redpanda.auto_create_topics_enabled=true, --set, redpanda.log_retention_ms=2592000000, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
+        # log_retention_ms=2592000000 = 30 days default topic retention.
+        # log_segment_size=33554432 (32 MiB, down from 128) — with ~43 mostly
+        # low-volume topics the 128 MiB default created a ~5.5 GB fixed segment
+        # floor; 32 MiB drops that toward ~1.4 GB (per Hermes consult 2026-07-20).
+        # NOTE: local-path PVC size (10Gi) is NOT a hard quota — the pod sees
+        # lw-c2's full root fs; monitor node disk. High-volume topics get scoped
+        # retention.bytes backstops (set via rpk on gdansk/wikidata).
+        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --set, redpanda.auto_create_topics_enabled=true, --set, redpanda.log_retention_ms=2592000000, --set, redpanda.log_segment_size=33554432, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
         ports: [{name: kafka, containerPort: 9092}, {name: admin, containerPort: 9644}]
         resources: {requests: {cpu: 300m, memory: 1500Mi}, limits: {cpu: "2", memory: 2Gi}}
         readinessProbe: {tcpSocket: {port: 9092}, initialDelaySeconds: 10, periodSeconds: 5}
