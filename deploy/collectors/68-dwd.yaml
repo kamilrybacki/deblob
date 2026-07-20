@@ -1,0 +1,46 @@
+# greenwindow collector — dwd (joint-research reports). No auth.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-dwd-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.env.dwd"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    # NB: DWD returns 403 for the custom collector UA but 200 for curl's default,
+    # so this one fetch deliberately omits -A.
+    body=$(curl -sf --max-time 25 "https://www.dwd.de/DWD/warnungen/warnapp/json/warnings.json") || { echo FETCH-FAIL; exit 0; }
+    echo "$body" | sed -e 's/^warnWetter.loadWarnings(//' -e 's/);[[:space:]]*$//' | jq -c '{records:[(.warnings|to_entries[]?)|{value:{region:.key, warnings:.value}}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED dwd -> %{http_code}\n" || echo PRODUCE-FAIL
+    echo done
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-dwd, namespace: deblob, labels: {app: greenwindow-collector, source: dwd}}
+spec:
+  schedule: "6,36 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: dwd}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 128Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-dwd-sh}}

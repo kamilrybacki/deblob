@@ -1,0 +1,47 @@
+# greenwindow collector — pypi (joint-research reports). No auth.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-pypi-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.registry.pypi"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    for X in jq requests numpy torch fastapi; do
+      body=$(curl -sf -A "$UA" -H "Accept: application/vnd.pypi.simple.v1+json" --max-time 25 "https://pypi.org/simple/$X/") || { echo "FETCH-FAIL [$X]"; continue; }
+      echo "$body" | jq -c '{records:[{value:{name:.name,versions:.versions,files:[(.files[]?)|{filename,size,yanked}]}}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED pypi[$X] -> %{http_code}\n" || echo "PRODUCE-FAIL [$X]"
+      sleep 1
+    done
+    echo done
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-pypi, namespace: deblob, labels: {app: greenwindow-collector, source: pypi}}
+spec:
+  schedule: "36 3 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: pypi}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 128Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-pypi-sh}}
