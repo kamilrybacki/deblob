@@ -1,0 +1,56 @@
+# greenwindow collector — EvalPlus code-eval leaderboard.
+# No auth (raw GitHub Pages results.json). Object keyed by model → to_entries;
+# one record per model with nested HumanEval/MBPP pass@1 scores. No PII.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-evalplus-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.ai.evalplus"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    URL="https://raw.githubusercontent.com/evalplus/evalplus.github.io/main/results.json"
+    UNWRAP='{records: [ (to_entries[]?) | {value: {
+      model: .key, link: .value.link, open_data: .value["open-data"],
+      pass1: .value["pass@1"], prompted: .value.prompted, size: .value.size } } ]}'
+    body=$(curl -sf -A "$UA" --max-time 25 "$URL") || { echo "FETCH-FAIL"; exit 0; }
+    echo "$body" | jq -c "$UNWRAP" | \
+      curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+           -o /dev/null -w "PRODUCED evalplus -> %{http_code}\n" || echo "PRODUCE-FAIL"
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-evalplus, namespace: deblob, labels: {app: greenwindow-collector, source: evalplus}}
+spec:
+  schedule: "33 4 * * *"            # daily
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: evalplus}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-evalplus-sh}}

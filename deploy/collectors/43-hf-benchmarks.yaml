@@ -1,0 +1,59 @@
+# greenwindow collector — HuggingFace official benchmark leaderboards.
+# No auth. Loops a curated allowlist of official benchmark datasets and pulls
+# /leaderboard for each; one record per leaderboard entry, tagged with the
+# benchmark. jq-allowlist drops author/notes (PII/free-text). Extend BENCHES.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-hf-benchmarks-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.ai.benchmarks"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    BENCHES="cais/hle"
+    for B in $BENCHES; do
+      body=$(curl -sf -A "$UA" --max-time 25 "https://huggingface.co/api/datasets/$B/leaderboard") \
+        || { echo "FETCH-FAIL [$B]"; continue; }
+      echo "$body" | jq -c --arg bench "$B" \
+        '{records: [ (.[]?) | {value: ({benchmark:$bench} + {rank, modelId, value, verified, source, lower_is_better, num_parameters})} ]}' | \
+        curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+             -o /dev/null -w "PRODUCED benchmarks[$B] -> %{http_code}\n" || echo "PRODUCE-FAIL [$B]"
+      sleep 1
+    done
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-hf-benchmarks, namespace: deblob, labels: {app: greenwindow-collector, source: hf-benchmarks}}
+spec:
+  schedule: "13 6 * * *"            # daily (leaderboards move slowly)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: hf-benchmarks}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-hf-benchmarks-sh}}

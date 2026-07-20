@@ -1,0 +1,60 @@
+# greenwindow collector — gpucloudprices.com (normalized cross-provider GPU +
+# VPS availability/pricing). No key: static JSON with a generated_at stamp.
+# Emits two contrasting shapes (per-GPU rows + per-provider rollups) so Deblob
+# gets a normalized aggregate view alongside the raw Vast/RunPod marketplaces.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-gpucloudprices-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.compute.gpu-prices"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    pull() {
+      # $1 = path ; $2 = jq array selector
+      body=$(curl -sf -A "$UA" --max-time 25 "https://gpucloudprices.com/api/v1/$1") \
+        || { echo "FETCH-FAIL [$1]"; return 0; }
+      echo "$body" | jq -c "{records: [ ($2) | {value: .} ]}" | \
+        curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+             -o /dev/null -w "PRODUCED gpuprices[$1] -> %{http_code}\n" || echo "PRODUCE-FAIL [$1]"
+    }
+    pull "gpus.json"      ".gpus[]?"
+    sleep 1
+    pull "providers.json" ".providers[]?"
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-gpucloudprices, namespace: deblob, labels: {app: greenwindow-collector, source: gpucloudprices}}
+spec:
+  schedule: "23 */2 * * *"          # refreshed a few times/day upstream
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: gpucloudprices}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-gpucloudprices-sh}}

@@ -1,0 +1,62 @@
+# greenwindow collector — accelerator hardware specs (TechPowerUp + D-Central).
+# No auth. Two contrasting device schemas on one topic: TechPowerUp full GPU
+# specs (allowlisted query) and D-Central AI-GPU inference DB (CC-BY 4.0; drop
+# ai_notes). Both are hardware records — no PII.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-gpu-specs-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.hw.gpu-specs"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    produce() { curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+                  -o /dev/null -w "PRODUCED gpu-specs[$1] -> %{http_code}\n" || echo "PRODUCE-FAIL [$1]"; }
+    # TechPowerUp — query an allowlisted accelerator set (training-relevant SKUs).
+    for Q in "RTX%205090" "H100" "H200" "B200" "A100" "L40S"; do
+      body=$(curl -sf -A "$UA" --max-time 25 "https://www.techpowerup.com/gpu-specs/api/v1/cards?q=$Q") \
+        || { echo "FETCH-FAIL [tpu:$Q]"; continue; }
+      echo "$body" | jq -c '{records: [ (.results[]?) | {value: .} ]}' | produce "tpu:$Q"
+      sleep 1
+    done
+    # D-Central AI-GPU inference database (rows[]; drop free-text ai_notes).
+    body=$(curl -sf -A "$UA" --max-time 25 "https://d-central.tech/wp-json/dc/v1/ai-gpus") \
+      && echo "$body" | jq -c '{records: [ (.rows[]?) | {value: (del(.ai_notes))} ]}' | produce "dcentral" \
+      || echo "FETCH-FAIL [dcentral]"
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-gpu-specs, namespace: deblob, labels: {app: greenwindow-collector, source: gpu-specs}}
+spec:
+  schedule: "51 5 * * 1"            # weekly (Mon) — hardware specs are static
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: gpu-specs}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-gpu-specs-sh}}

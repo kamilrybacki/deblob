@@ -1,0 +1,57 @@
+# greenwindow collector — RunPod GPU types (available GPU inventory + secure/
+# community pricing). No auth: the public GraphQL endpoint answers gpuTypes
+# without a key. One record per GPU type; a fundamentally different shape from
+# Vast's per-machine offers, so Deblob sees two contrasting "availability" schemas.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-runpod-gputypes-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.compute.runpod"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    GQL="https://api.runpod.io/graphql"
+    Q='{"query":"query{gpuTypes{id displayName manufacturer memoryInGb cudaCores secureCloud communityCloud securePrice communityPrice maxGpuCount}}"}'
+    UNWRAP='{records: [ (.data.gpuTypes[]?) | {value: .} ]}'
+    body=$(curl -sf -A "$UA" --max-time 25 -X POST "$GQL" -H "Content-Type: application/json" --data "$Q") \
+      || { echo "FETCH-FAIL"; exit 0; }
+    echo "$body" | jq -c "$UNWRAP" | \
+      curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+           -o /dev/null -w "PRODUCED runpod -> %{http_code}\n" || echo "PRODUCE-FAIL"
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-runpod-gputypes, namespace: deblob, labels: {app: greenwindow-collector, source: runpod-gputypes}}
+spec:
+  schedule: "9,29,49 * * * *"       # 3x/hour, offset from the others
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: runpod-gputypes}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-runpod-gputypes-sh}}

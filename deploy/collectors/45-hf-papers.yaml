@@ -1,0 +1,57 @@
+# greenwindow collector — HuggingFace Daily Papers (trending AI research).
+# No auth. One record per paper; jq-allowlist keeps id/title/timestamps/upvotes/
+# repo/stars and DROPS authors, summary, thumbnail, submitter, discussionId (PII).
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-hf-papers-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.ai.papers"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    URL="https://huggingface.co/api/daily_papers?p=0&limit=50&sort=publishedAt"
+    UNWRAP='{records: [ (.[]?) | {value: {
+      id: .paper.id, title: .title, publishedAt: .publishedAt,
+      upvotes: .paper.upvotes, numComments: .numComments,
+      githubRepo: .paper.githubRepo, githubStars: .paper.githubStars } } ]}'
+    body=$(curl -sf -A "$UA" --max-time 25 "$URL") || { echo "FETCH-FAIL"; exit 0; }
+    echo "$body" | jq -c "$UNWRAP" | \
+      curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+           -o /dev/null -w "PRODUCED papers -> %{http_code}\n" || echo "PRODUCE-FAIL"
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-hf-papers, namespace: deblob, labels: {app: greenwindow-collector, source: hf-papers}}
+spec:
+  schedule: "41 */6 * * *"          # every 6h (daily-papers refreshes through the day)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: hf-papers}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-hf-papers-sh}}

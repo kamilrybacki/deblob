@@ -7,7 +7,7 @@ data:
     raw_topic = "events.raw"
     # Per-source topics — the relay multi-subscribes; Envelope.source = the actual
     # consumed topic, giving per-collector lineage. events.raw kept for back-compat.
-    raw_topics = ["events.raw", "events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure"]
+    raw_topics = ["events.raw", "events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure", "events.compute.vast", "events.compute.runpod", "events.compute.gpu-prices", "events.ai.benchmarks", "events.ai.arena", "events.ai.papers", "events.hw.gpu-specs", "events.ai.evalplus"]
     tagged_topic = "events.tagged"
     discovery_topic = "deblob.discovery"
     quarantine_topic = "deblob.quarantine"
@@ -52,7 +52,7 @@ data:
     # before storage into a DEDICATED VOLATILE Redis (DEBLOB_SAMPLES_REDIS_URL);
     # viewing needs the separate samples:read capability.
     enabled = true
-    capture_sources = ["events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure"]
+    capture_sources = ["events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure", "events.compute.vast", "events.compute.runpod", "events.compute.gpu-prices", "events.ai.benchmarks", "events.ai.arena", "events.ai.papers", "events.hw.gpu-specs", "events.ai.evalplus"]
     max_per_candidate = 20
     retention_secs = 604800
     max_sample_bytes = 8192
@@ -65,7 +65,7 @@ data:
     # candidate needs 50 samples over 10 min AND a settled required-leaf shape
     # before it is published with no human in the loop.
     enabled = true
-    allowed_sources = ["events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure"]
+    allowed_sources = ["events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure", "events.compute.vast", "events.compute.runpod", "events.compute.gpu-prices", "events.ai.benchmarks", "events.ai.arena", "events.ai.papers", "events.hw.gpu-specs", "events.ai.evalplus"]
     min_samples = 50
     min_age_ms = 600000
     min_required_fields = 2

@@ -1,0 +1,62 @@
+# greenwindow collector — Vast.ai marketplace offers (LIVE available GPU compute).
+# No auth: the public GET /api/v0/bundles/ returns {offers:[...]} without a token
+# (only the documented search-offers op needs a bearer). Each offer is one rentable
+# machine; we jq-allowlist machine-spec fields only (no PII — these are hardware
+# listings, not people) so Deblob discovers the availability record shape.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-vast-offers-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    PROXY="http://redpanda.deblob.svc.cluster.local:8082/topics/events.compute.vast"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    URL="https://console.vast.ai/api/v0/bundles/"
+    # Allowlist (not denylist) the fields we emit — guarantees no free-text/PII leaks
+    # and gives Deblob a rich, varied hardware/availability shape.
+    UNWRAP='{records: [ (.offers[]?) | {value: {
+      id, machine_id, gpu_name, num_gpus, gpu_ram, gpu_total_ram, gpu_frac,
+      cuda_max_good, compute_cap, cpu_arch, cpu_cores, cpu_ram, disk_space,
+      disk_name, dlperf, dph_base, dph_total, reliability2, rentable, rented,
+      verification, hosting_type, geolocation, inet_up, inet_down } } ]}'
+    body=$(curl -sf -A "$UA" --max-time 25 "$URL") || { echo "FETCH-FAIL"; exit 0; }
+    echo "$body" | jq -c "$UNWRAP" | \
+      curl -sf -X POST "$PROXY" -H "$CT" --data-binary @- \
+           -o /dev/null -w "PRODUCED vast -> %{http_code}\n" || echo "PRODUCE-FAIL"
+    echo "collector done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-vast-offers, namespace: deblob, labels: {app: greenwindow-collector, source: vast-offers}}
+spec:
+  schedule: "*/15 * * * *"          # GPU marketplace availability moves fast
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: vast-offers}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity:
+            nodeAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                nodeSelectorTerms:
+                - matchExpressions:
+                  - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-vast-offers-sh}}
