@@ -305,6 +305,11 @@ impl PromoterTrait for Promoter {
             "last_seen_ms": record.last_seen_ms,
             "name": req.name,
             "promoted_by": actor,
+            // The ingest source (topic) this family was discovered from (L1
+            // lineage; None pre-lineage). Durable on the schema so the schema
+            // namer (jr-schema-naming-211140) can factor the source into the
+            // display name — the candidate itself is gone after promotion.
+            "source": record.source,
         });
 
         let canonical = profile.generalized_canonical_json();

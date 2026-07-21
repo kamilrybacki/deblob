@@ -24,7 +24,7 @@ data:
     BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
     OLLAMA_URL = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
     MODEL = "qwen2.5:0.5b"
-    PROMPT_VERSION = "v1"
+    PROMPT_VERSION = "v2"          # v2 = source-aware naming (re-names v1 schemas)
     NORMALIZER_VERSION = "v1"
     SEED = 211140
     H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
@@ -98,14 +98,67 @@ data:
                   "downloads","measurements","reports"}
     def titlecase(tokens):
         return " ".join(t.capitalize() for t in tokens)
-    def heuristic_name(toks):
+
+    # --- SOURCE concept (the ingest topic this family was discovered from) ------
+    # The source is strong signal — a schema from events.registry.crates is about
+    # crates.io, one from events.geo.flights is about flights. Curated concepts for
+    # the known feeds; generic fallback = the topic's last dotted segment cleaned.
+    SOURCE_CONCEPTS = {
+        "events.firehose.jetstream": "Bluesky", "events.kg.wikidata": "Wikidata",
+        "events.civic.wikidata": "Wikidata", "events.ai.openalex": "OpenAlex",
+        "events.registry.crates": "Crates", "events.registry.pypi": "PyPI",
+        "events.registry.npm": "NPM", "events.registry.hf-models": "HuggingFace Model",
+        "events.registry.hf-datasets": "HuggingFace Dataset", "events.registry.ollama": "Ollama",
+        "events.registry.dockerhub": "DockerHub", "events.geo.flights": "Flight",
+        "events.geo.quakes": "Earthquake", "events.space.weather": "Space Weather",
+        "events.grid.carbonintensity": "Carbon Intensity", "events.grid.energy-charts": "Energy",
+        "events.carbon.dk": "Carbon", "events.carbon.fr": "Carbon",
+        "events.compute.azure": "Azure", "events.compute.vast": "Vast",
+        "events.compute.runpod": "RunPod", "events.compute.ovh": "OVH",
+        "events.compute.scaleway": "Scaleway", "events.compute.gpu-prices": "GPU Price",
+        "events.compute.spot-advisor": "Spot", "events.hw.gpu-specs": "GPU",
+        "events.ai.benchmarks": "Benchmark", "events.ai.arena": "Arena",
+        "events.ai.papers": "Paper", "events.ai.evalplus": "EvalPlus",
+        "events.weather.openmeteo": "Weather", "events.weather.metno": "Weather",
+        "events.transit.gdansk": "Transit", "events.env.imgw": "Environmental",
+        "events.env.pegel": "Water Level", "events.env.gios": "Air Quality",
+        "events.env.dwd": "Weather", "events.energy.awattar": "Energy Price",
+        "events.energy.prices-eu": "Energy Price", "events.energy.cheapest-hours": "Energy Price",
+        "events.energy.pse-pl": "Grid",
+    }
+    def source_concept(src):
+        if not src:
+            return None
+        c = SOURCE_CONCEPTS.get(src)
+        if c:
+            return c
+        seg = src.split('.')[-1]                       # generic: last dotted segment
+        words = [w for w in re.split(r'[-_]', seg) if w and w != "events"]
+        return " ".join(w.capitalize() for w in words[:2]) or None
+    def qualify(src_concept, name):
+        # Lead the name with the source concept when it adds specificity, capped
+        # at 4 words. "Crates" + "Package Downloads" -> "Crates Package Downloads".
+        if not src_concept:
+            return name
+        if not name:
+            sw = src_concept.split()
+            return src_concept + " Records" if len(sw) <= 3 else " ".join(sw[:3])
+        sl = src_concept.lower().split(); nl = name.lower().split()
+        if nl[:len(sl)] == sl:                          # already leads with the source
+            return name
+        words = src_concept.split() + name.split()
+        if len(words) <= 4:
+            return " ".join(words)
+        return " ".join(src_concept.split()[:2] + name.split()[-2:])   # trim to <=4
+
+    def heuristic_name(toks, src_concept):
         tset = set(toks)
         for sig, name in SIGNATURES:
             if sig <= tset:
-                return name, "signature"
+                return qualify(src_concept, name), "signature"
         # conservative composition: 1-2 most frequent salient (non-plumbing) tokens
         # + a neutral head noun. Prefer under-claiming ("Status Records") over a
-        # confident-but-wrong guess.
+        # confident-but-wrong guess. The source qualifies it either way.
         freq = {}
         for t in toks:
             if t in PLUMBING or t in HEAD_NOUNS or len(t) < 3:
@@ -113,21 +166,25 @@ data:
             freq[t] = freq.get(t, 0) + 1
         salient = sorted(freq, key=lambda t: (-freq[t], t))[:2]
         if not salient:
-            return None, "none"
-        return titlecase(salient) + " Records", "composed"
+            # no salient fields — lean entirely on the source ("Crates Records").
+            return (qualify(src_concept, None), "source") if src_concept else (None, "none")
+        return qualify(src_concept, titlecase(salient) + " Records"), "composed"
 
     # --- SLM refine (Ollama /api/chat, structured) -----------------------------
-    SYS = ("You name data schemas. Given a schema's field names and a safe baseline "
-           "name, output a 2 to 4 word Title Case name describing the KIND of record. "
-           "Use only concepts supported by the field names. Never output the words Data, "
-           "JSON, Schema, Family, Payload, Information, Misc, or Unknown. No explanations. "
-           "The baseline is safe; change it only when the fields clearly support a better "
-           "name. Respond as JSON: {\"name\": \"...\"}.")
+    SYS = ("You name data schemas. Given the SOURCE the records come from, the "
+           "schema's field names, and a safe baseline name, output a 2 to 4 word "
+           "Title Case name describing the KIND of record. Use only concepts "
+           "supported by the source or the field names — the source names the "
+           "system the data is from and usually belongs in the name. Never output "
+           "the words Data, JSON, Schema, Family, Payload, Information, Misc, or "
+           "Unknown. No explanations. The baseline is safe; change it only when the "
+           "source or fields clearly support a better name. Respond as JSON: "
+           "{\"name\": \"...\"}.")
     FEWSHOT = [
-        ("Fields: doi, author, title, journal, year. Baseline: Scholarly Works", "Scholarly Works"),
-        ("Fields: latitude, longitude, observed_at, station. Baseline: Location Observations", "Weather Station Observations"),
-        ("Fields: repository, actor, ref, payload. Baseline: Repository Events", "Repository Events"),
-        ("Fields: sku, warehouse, on_hand. Baseline: Sku Warehouse Records", "Inventory Levels"),
+        ("Source: OpenAlex. Fields: doi, author, title, journal, year. Baseline: Scholarly Works", "Scholarly Works"),
+        ("Source: Weather. Fields: latitude, longitude, observed_at, station. Baseline: Weather Location Observations", "Weather Station Observations"),
+        ("Source: Crates. Fields: name, downloads, version. Baseline: Crates Package Downloads", "Crates Package Downloads"),
+        ("Source: Flight. Fields: callsign, altitude, velocity. Baseline: Flight Positions", "Flight Positions"),
     ]
     # A timed-out / failing Ollama is a NORMAL fallback to the deterministic
     # heuristic — NEVER a job failure (unlike the deblob-API calls, which DO
@@ -135,7 +192,7 @@ data:
     # Ollama failures we open a circuit breaker and go heuristic-only for the rest
     # of the run, so slow inference can't burn the whole time budget or fail the job.
     OLLAMA = {"consec_fail": 0, "dead": False, "url": OLLAMA_URL}
-    def slm_name(leaves, baseline):
+    def slm_name(leaves, baseline, src_concept):
         if OLLAMA["dead"]:
             return None
         msgs = [{"role": "system", "content": SYS}]
@@ -143,7 +200,8 @@ data:
             msgs.append({"role": "user", "content": u})
             msgs.append({"role": "assistant", "content": json.dumps({"name": a})})
         flds = ", ".join(sorted(set(leaves))[:40])
-        msgs.append({"role": "user", "content": "Fields: %s. Baseline: %s" % (flds, baseline)})
+        msgs.append({"role": "user", "content": "Source: %s. Fields: %s. Baseline: %s"
+                     % (src_concept or "unknown", flds, baseline)})
         body = {"model": MODEL, "messages": msgs, "stream": False,
                 "format": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
                 "options": {"temperature": 0, "seed": SEED, "num_predict": 32}}
@@ -161,16 +219,18 @@ data:
             return None
 
     BANNED = {"data","json","schema","family","payload","information","misc","unknown"}
-    def licensed(name, toks, baseline):
+    def licensed(name, toks, baseline, src_concept):
         # every content token of the name must be licensed by a field token, an
-        # abbrev expansion, a head noun, or a token from the (already-grounded)
-        # baseline. Rejects hallucinated concepts the fields don't support.
+        # abbrev expansion, a head noun, the SOURCE concept, or a token from the
+        # (already-grounded) baseline. Rejects hallucinated concepts unsupported
+        # by the source or the fields.
         if not name or not NAME_RE.match(name) or len(name) > 40:
             return False
         low = [w.lower() for w in name.split()]
         if any(w in BANNED for w in low):
             return False
-        lic = set(toks) | HEAD_NOUNS | {w.lower() for w in (baseline or "").split()}
+        lic = (set(toks) | HEAD_NOUNS | {w.lower() for w in (baseline or "").split()}
+               | {w.lower() for w in (src_concept or "").split()})
         # allow simple plural/singular of field tokens
         for w in low:
             if w in lic or (w.endswith("s") and w[:-1] in lic) or (w + "s") in lic:
@@ -178,8 +238,30 @@ data:
             return False
         return True
 
-    def field_set_hash(leaves):
-        return hashlib.sha256(("\x1f".join(sorted(set(leaves)))).encode()).hexdigest()[:16]
+    def field_set_hash(leaves, src):
+        # Include the source so a family that gains a source (or whose source
+        # changes) is re-named rather than skipped by idempotency.
+        key = "\x1f".join(sorted(set(leaves))) + "\x1e" + (src or "")
+        return hashlib.sha256(key.encode()).hexdigest()[:16]
+
+    # Best-effort candidate_id -> source map, for schemas promoted BEFORE source
+    # was stamped onto provenance (their candidate may still linger in a live
+    # state). New schemas carry provenance.source directly and don't need this.
+    cand_src = {}
+    for stt in ("provisional", "staged"):
+        cur = None
+        for _ in range(20):
+            q = "/api/v1/candidates?state=%s&limit=500%s" % (stt, ("&cursor=" + urllib.parse.quote(cur, safe='')) if cur else "")
+            st, d = req("GET", q)
+            if st != 200 or not d:
+                break
+            for c in d.get('data', []):
+                if c.get('source'):
+                    cand_src[c.get('candidate_id')] = c['source']
+            cur = d.get('next_cursor')
+            if not cur:
+                break
+    print("candidate source map: %d entries" % len(cand_src))
 
     # --- main loop -------------------------------------------------------------
     named = skipped = human = fallback = 0
@@ -204,21 +286,26 @@ data:
             toks, leaves = field_tokens(canon)
             if not leaves:
                 continue
-            fsh = field_set_hash(leaves)
+            # resolve the ingest source (durable on new schemas; best-effort map
+            # for older ones) -> a Title Case source concept for the name.
+            src = prov.get('source') or cand_src.get(prov.get('candidate_id'))
+            sc = source_concept(src)
+            fsh = field_set_hash(leaves, src)
             nm = prov.get('name_meta') or {}
-            # idempotency: already named by us for this exact field set + prompt -> skip
+            # idempotency: already named by us for this exact field set + source +
+            # prompt -> skip
             if (prov.get('name_source') in ('slm', 'heuristic')
                     and nm.get('field_set_hash') == fsh
                     and nm.get('prompt_version') == PROMPT_VERSION
                     and nm.get('normalizer_version') == NORMALIZER_VERSION):
                 skipped += 1; continue
-            base, conf = heuristic_name(toks)
+            base, conf = heuristic_name(toks, sc)
             if base is None:
                 continue
-            proposal = slm_name(leaves, base)
+            proposal = slm_name(leaves, base, sc)
             accepted = False
             name, source = base, "heuristic"
-            if proposal and proposal != base and licensed(proposal, toks, base):
+            if proposal and proposal != base and licensed(proposal, toks, base, sc):
                 # protect strong signatures: a signature baseline requires the SLM
                 # to keep at least one of its non-head-noun tokens, else keep it.
                 if conf == "signature":
@@ -232,7 +319,8 @@ data:
                     name, source, accepted = proposal, "slm", True
             meta = {"prompt_version": PROMPT_VERSION, "normalizer_version": NORMALIZER_VERSION,
                     "model": MODEL, "field_set_hash": fsh, "heuristic": base,
-                    "slm_raw": proposal, "confidence": conf, "accepted": accepted}
+                    "slm_raw": proposal, "confidence": conf, "accepted": accepted,
+                    "source": src, "source_concept": sc}
             st2, d2 = req("PUT", "/api/v1/schemas/" + urllib.parse.quote(r['schema_id'], safe='') + "/name",
                           {"name": name, "source": source, "meta": meta})
             if st2 == 200:
