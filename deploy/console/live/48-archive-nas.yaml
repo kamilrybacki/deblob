@@ -1,0 +1,72 @@
+# Bronze archive — raw events sunk to lw-nas (NFS) as compressed JSONL.
+# Redpanda's hot log stays on lw-c2 local-path (broker never touches NFS); this
+# job is a downstream CONSUMER that drains new records with a committed group
+# offset and writes date-partitioned gzip files to the NAS PVC. The durable,
+# backed-up copy of the raw event history lives here. (Hermes-recommended shape:
+# fast local hot log + independent object/file archive.)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: {name: deblob-archive, namespace: deblob}
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: nfs          # nfs-subdir provisioner → lands on lw-nas
+  resources: {requests: {storage: 50Gi}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: deblob-archiver-sh, namespace: deblob}
+data:
+  archive.sh: |
+    #!/bin/sh
+    set -u
+    BROKER="redpanda.deblob.svc.cluster.local:9092"
+    DT=$(date -u +%Y-%m-%d)
+    TS=$(date -u +%Y%m%dT%H%M%SZ)
+    DIR="/archive/dt=$DT"
+    mkdir -p "$DIR"
+    OUT="$DIR/deblob-$TS.jsonl.gz"
+    # Bounded, resumable drain: --group commits offsets as it reads, so each run
+    # picks up where the last left off (at-least-once — dedupe downstream by
+    # topic+partition+offset). timeout caps the run; Forbid prevents overlap.
+    timeout 240 rpk topic consume -r 'events\..*' \
+      --group deblob-archiver --brokers "$BROKER" -o start \
+      -f '{"topic":"%t","partition":%p,"offset":%o,"ts":%d,"value":%v}\n' \
+      2>/dev/null | gzip -c > "$OUT.tmp"
+    mv "$OUT.tmp" "$OUT"                       # atomic: partials never get a final name
+    N=$(gzip -dc "$OUT" 2>/dev/null | wc -l)
+    if [ "$N" -eq 0 ]; then rm -f "$OUT"; echo "no new records"; else echo "archived $N records -> $OUT"; fi
+    # Lifecycle: drop archive files older than 365 days.
+    find /archive -name '*.jsonl.gz' -mtime +365 -delete 2>/dev/null
+    echo "archiver done"
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: deblob-archiver, namespace: deblob, labels: {app: deblob-archiver}}
+spec:
+  schedule: "*/20 * * * *"          # every 20 min
+  concurrencyPolicy: Forbid         # two group members would split partitions — never overlap
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata: {labels: {app: deblob-archiver}}
+        spec:
+          restartPolicy: Never
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65535, fsGroup: 65535, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: archive
+            image: docker.redpanda.com/redpandadata/redpanda:v24.2.7
+            command: ["/bin/sh", "/scripts/archive.sh"]
+            env: [{name: HOME, value: /tmp}]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {cpu: "1", memory: 512Mi}}
+            volumeMounts:
+            - {name: script, mountPath: /scripts, readOnly: true}
+            - {name: archive, mountPath: /archive}
+          volumes:
+          - {name: script, configMap: {name: deblob-archiver-sh}}
+          - {name: archive, persistentVolumeClaim: {claimName: deblob-archive}}
