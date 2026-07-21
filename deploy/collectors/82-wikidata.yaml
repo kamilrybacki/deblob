@@ -1,0 +1,69 @@
+# greenwindow collector — Wikidata entities: the curl+jq-native "hard mode" boss.
+# Maximal single-document amorphousness: `claims` is a dynamic map keyed by
+# thousands of Property IDs; polymorphic values; depth ~13; Item/Property/Lexeme
+# roots → 30-80 meaningful families. Two bounded calls (recentchanges → wbgetentities).
+#
+# PII gate (per Hermes' design, belt-and-suspenders — humans never leave the
+# collector): item-only, must be TYPED (P31 present), DROP all humans (P31==Q5),
+# and claims ONLY — no labels/aliases/descriptions/sitelinks/editor identity.
+# NOT in [samples]/[auto_promote]. maxlag guarded (200-with-.error is a real fixture).
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-wikidata-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.kg.wikidata"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    API="https://www.wikidata.org/w/api.php"
+    # 1. discover recently-changed Item IDs (no user/comment requested)
+    IDS=$(curl -sf -A "$UA" --compressed --max-time 25 \
+      "$API?action=query&list=recentchanges&rcnamespace=0&rctype=edit%7Cnew&rcprop=title%7Cids&rclimit=25&format=json&formatversion=2" \
+      | jq -r '.query.recentchanges[]?.title' 2>/dev/null | grep '^Q' | head -8 | paste -sd '|' -)
+    [ -z "$IDS" ] && { echo "NO-IDS (maxlag/empty)"; exit 0; }
+    # 2. fetch entities — claims only (no labels/descriptions/aliases/sitelinks)
+    body=$(curl -sf -A "$UA" --compressed --max-time 30 \
+      "$API?action=wbgetentities&ids=$IDS&props=info%7Cclaims&format=json&formatversion=2&maxlag=30") \
+      || { echo FETCH-FAIL; exit 0; }
+    # 200-with-.error (maxlag) guard — inspect the body, not just the status
+    if echo "$body" | jq -e '.error' >/dev/null 2>&1; then echo "API-ERROR (maxlag)"; exit 0; fi
+    # 3. PII gate: item + typed(P31) + NOT human(Q5); emit claims structure only
+    echo "$body" | jq -c '{records: [ .entities | to_entries[] | .value as $e
+      | select($e.type == "item")
+      | select(($e.claims.P31 // []) | length > 0)
+      | select( (any($e.claims.P31[]?; .mainsnak.datavalue.value.id? == "Q5")) | not )
+      | {value: {id: $e.id, type: $e.type, lastrevid: $e.lastrevid, modified: $e.modified, claims: $e.claims}} ]}' 2>/dev/null \
+      | curl -sf -X POST "$P" -H "$CT" --data-binary @- \
+          -o /dev/null -w "PRODUCED wikidata -> %{http_code}\n" || echo PRODUCE-FAIL
+    echo done
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-wikidata, namespace: deblob, labels: {app: greenwindow-collector, source: wikidata}}
+spec:
+  schedule: "*/5 * * * *"           # every 5 min (sampler, not a mirror)
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: wikidata}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 500m, memory: 256Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-wikidata-sh}}

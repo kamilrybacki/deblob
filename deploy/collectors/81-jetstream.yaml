@@ -1,0 +1,61 @@
+# greenwindow collector — Bluesky Jetstream: DEBLOB'S FINAL BOSS.
+# The ATProto firehose (all lexicons) as JSON over WebSocket — one stream carrying
+# dozens of wildly different, deeply-nested, EVOLVING record schemas from many
+# unrelated apps (Bluesky social, IoT sensorthings, music scrobbles, podcasts,
+# livestreams, communities...). Deblob discovers a family per lexicon $type —
+# 50-100+ per hour. Uses the :2 image (websocat). Bounded drain per run.
+#
+# PII: records carry user content (post text, profile bios). Deblob DISCARDS raw
+# after shape extraction; this source is deliberately EXCLUDED from [samples] and
+# from the NAS Bronze archive (see 48-archive-nas grep filter) so user content
+# never lands on disk. NOT in [auto_promote] — final-boss is a discovery showcase.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-jetstream-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.firehose.jetstream"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    URL="wss://jetstream2.us-east.bsky.network/subscribe"
+    # Bounded drain: 50s OR the first 600 create/update commits, whichever first
+    # (grep -m closes the pipe → websocat stops). Each commit's .record is a real
+    # lexicon object (self-labelled by $type) → Deblob profiles its shape.
+    timeout 50 websocat -n "$URL" </dev/null 2>/dev/null \
+      | grep -m 600 '"operation":"create"' \
+      | jq -c 'select(.commit.record != null) | {value: .commit.record}' 2>/dev/null \
+      | jq -s -c '{records: .}' 2>/dev/null \
+      | curl -sf -X POST "$P" -H "$CT" --data-binary @- \
+          -o /dev/null -w "PRODUCED jetstream -> %{http_code}\n" || echo "PRODUCE-FAIL/EMPTY"
+    echo done
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-jetstream, namespace: deblob, labels: {app: greenwindow-collector, source: jetstream}}
+spec:
+  schedule: "* * * * *"             # every minute; 50s drain ≈ continuous coverage
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 90
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: jetstream}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:2
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 20m, memory: 32Mi}, limits: {cpu: "1", memory: 256Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-jetstream-sh}}

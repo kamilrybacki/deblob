@@ -28,10 +28,13 @@ data:
     # Bounded, resumable drain: --group commits offsets as it reads, so each run
     # picks up where the last left off (at-least-once — dedupe downstream by
     # topic+partition+offset). timeout caps the run; Forbid prevents overlap.
+    # EXCLUDE events.firehose.* (Bluesky Jetstream = user content) from the NAS
+    # archive — Deblob discovers its shape but the raw user text must never land
+    # on disk. grep drops those lines before gzip.
     timeout 240 rpk topic consume -r 'events\..*' \
       --group deblob-archiver --brokers "$BROKER" -o start \
       -f '{"topic":"%t","partition":%p,"offset":%o,"ts":%d,"value":%v}\n' \
-      2>/dev/null | gzip -c > "$OUT.tmp"
+      2>/dev/null | grep -v '"topic":"events.firehose' | gzip -c > "$OUT.tmp"
     mv "$OUT.tmp" "$OUT"                       # atomic: partials never get a final name
     N=$(gzip -dc "$OUT" 2>/dev/null | wc -l)
     if [ "$N" -eq 0 ]; then rm -f "$OUT"; echo "no new records"; else echo "archived $N records -> $OUT"; fi
