@@ -608,27 +608,28 @@ function candCard(c,group){
     <div class="actions"><button class="btn" data-inspect="${esc(c.candidate_id)}">🔍 Inspect examples</button><button class="btn good" data-act="promote" data-id="${esc(c.candidate_id)}" ${canPromote?'':'disabled'}>Promote</button><button class="btn risk" data-act="reject" data-id="${esc(c.candidate_id)}" ${canMutate()?'':'disabled'}>Reject</button></div></div>`;
 }
 function mutate(kind,id){
-  const typed=kind==='promote';
-  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>${typed?'Promote':'Reject'} candidate</h3>
-    <p>${typed?'Publishes this cluster as a governed schema in the registry.':'Drops this candidate from the discovery queue.'} The API enforces authentication, state-transition legality, and audit attribution.</p>
+  // Promote is now ONE CLICK — just assign a schema id (new family, auto-named).
+  // No reason/name/confirm friction. The API still enforces auth + state-transition
+  // legality + audit attribution; the recorded reason is a fixed console marker.
+  if(kind==='promote'){
+    api(`/api/v1/candidates/${encodeURIComponent(id)}/promote`,{method:'POST',body:JSON.stringify({family:'new',name:null,reason:'promoted via console'})})
+      .then(()=>{toast('Promoted — schema published.');state.data.candidates=state.data.candidates.filter(c=>c.candidate_id!==id);render();})
+      .catch(e=>toast('Failed: '+e.message));
+    return;
+  }
+  // Reject keeps a lightweight confirm — it drops the candidate from discovery.
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>Reject candidate</h3>
+    <p>Drops this candidate from the discovery queue. The API enforces authentication, state-transition legality, and audit attribution.</p>
     <p class="muted num" style="font-size:11.5px">${esc(id)}</p>
     <label>Reason (recorded)</label><input id="mreason" placeholder="why">
-    ${typed?`<label>New family name (optional)</label><input id="mname" placeholder="e.g. Grid carbon intensity">
-    <label>Type the candidate id to confirm</label><input id="mconfirm" placeholder="${esc(id)}">`:''}
-    <div class="row2"><button class="btn" data-mno>Cancel</button><button class="btn ${typed?'good':'risk'}" data-myes>${typed?'Promote':'Reject'}</button></div></div></div>`;
+    <div class="row2"><button class="btn" data-mno>Cancel</button><button class="btn risk" data-myes>Reject</button></div></div></div>`;
   $('#overlay').querySelector('[data-mno]').onclick=()=>$('#overlay').innerHTML='';
   $('#overlay').querySelector('[data-myes]').onclick=async()=>{
     const reason=($('#mreason').value||'').trim();
     if(!reason){toast('A reason is required.');return;}
-    if(typed&&($('#mconfirm').value||'').trim()!==id){toast('Typed id does not match.');return;}
-    // Read inputs BEFORE clearing the overlay — clearing removes #mname from the DOM.
-    // promote wants a FamilyChoice — default a NEW family (FamilyChoice::New
-    // serialises as the string "new"); reject just carries the reason.
-    const name=typed?(($('#mname').value||'').trim()||null):null;
     $('#overlay').innerHTML='';
-    const body=typed?{family:'new',name,reason}:{reason};
-    try{await api(`/api/v1/candidates/${encodeURIComponent(id)}/${kind}`,{method:'POST',body:JSON.stringify(body)});
-      toast(`Candidate ${kind}d.`);state.data.candidates=state.data.candidates.filter(c=>c.candidate_id!==id);render();
+    try{await api(`/api/v1/candidates/${encodeURIComponent(id)}/reject`,{method:'POST',body:JSON.stringify({reason})});
+      toast('Candidate rejected.');state.data.candidates=state.data.candidates.filter(c=>c.candidate_id!==id);render();
     }catch(e){toast('Failed: '+e.message);}
   };
 }
