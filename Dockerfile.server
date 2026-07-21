@@ -64,15 +64,14 @@ COPY crates ./crates
 # own docs), so it needs no system libraries beyond the ones already
 # installed above for rdkafka.
 #
-# Cache mounts on the cargo registry + target dir: without them, every
-# source change re-links AND re-downloads/re-compiles the full dependency
-# graph (~15 min). `target/` is a cache mount, so it never lands in the
-# image's layer filesystem — the three binaries are copied out to /out
-# (a normal, non-mounted path) inside this same RUN before the mount is
-# torn down, so the runtime stage can still COPY them out below.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/build/target \
-    cargo build --release --locked \
+# A plain (non-BuildKit) build: no `RUN --mount=type=cache`, because the
+# image is built in-cluster by Kaniko (deploy/build/kaniko-deblob.yaml), which
+# does NOT support BuildKit cache mounts — it fails to parse them. Cross-build
+# caching is handled instead by Kaniko's `--cache`/`--cache-repo` layer cache
+# (the stable apt + dependency layers are reused; only the final compile of a
+# genuinely-changed `crates/` reruns, ~15 min cold). `target/` is a normal dir
+# here, so the `cp` of the built binary to /out below still works unchanged.
+RUN cargo build --release --locked \
         --package deblob \
     && mkdir -p /out \
     && cp target/release/deblob /out/

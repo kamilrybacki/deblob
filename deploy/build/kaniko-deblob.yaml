@@ -1,0 +1,71 @@
+# In-cluster image build for the Deblob SERVER (Dockerfile.server), off the
+# lw-main edge node. Every deblob:bN image up to b21 was hand-built with
+# `docker build` on lw-main, whose 109G edge disk (Caddy/Vault/docker) is
+# chronically near-full — each Rust+librdkafka release build (~15-20G peak of
+# cargo target + docker layers) raced the disk and repeatedly hit 100% (b8, b22).
+#
+# This Kaniko Job builds on a k3s WORKER instead (never control-plane / lw-main),
+# clones the repo itself (public), and pushes straight to ghcr — no docker
+# daemon, no privileged mode, no edge-node disk. Deploy then becomes pull-only:
+# bump the tag in deploy/console/live/34-deblob.yaml + rollout.
+#
+# ONE-TIME SETUP (see deploy/build/README.md): create the `ghcr-push` secret (a
+# dockerconfigjson holding a GH PAT with write:packages for the `kamilrybacki`
+# ghcr namespace). The existing `ghcr-pull` secret is read-only and cannot push.
+#
+# RUN A BUILD (tag is a placeholder so each release is explicit):
+#   TAG=b22
+#   sed "s/__TAG__/$TAG/g" deploy/build/kaniko-deblob.yaml | kubectl apply -f -
+#   kubectl -n deblob logs -f job/kaniko-deblob-$TAG
+# Then bump 34-deblob.yaml to :$TAG and `kubectl rollout restart deploy/deblob -n deblob`.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: kaniko-deblob-__TAG__
+  namespace: deblob
+  labels: {app: kaniko-deblob, tag: "__TAG__"}
+spec:
+  backoffLimit: 1
+  # Cold Rust+librdkafka build; generous ceiling. Kaniko exits when the push
+  # completes, so this is a wall-clock guard, not the expected duration.
+  activeDeadlineSeconds: 2400
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: {labels: {app: kaniko-deblob, tag: "__TAG__"}}
+    spec:
+      restartPolicy: Never
+      # NEVER the control-plane / edge node (lw-main): that is the whole point.
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - {key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}
+      containers:
+      - name: kaniko
+        image: gcr.io/kaniko-project/executor:v1.23.2
+        args:
+        # Kaniko clones the public repo itself — no initContainer, no git creds.
+        # Pin a different ref by changing refs/heads/main to refs/tags/<t> or a sha.
+        - --context=git://github.com/kamilrybacki/deblob.git#refs/heads/main
+        - --dockerfile=Dockerfile.server
+        - --destination=ghcr.io/kamilrybacki/deblob:__TAG__
+        # Layer cache in a sibling ghcr repo: the stable apt/dependency layers
+        # are reused across builds; only a genuinely-changed final compile reruns.
+        - --cache=true
+        - --cache-repo=ghcr.io/kamilrybacki/deblob-cache
+        - --cache-copy-layers=true
+        - --compressed-caching=false   # lower peak memory on the build node
+        - --use-new-run                # smaller layer snapshots, less scratch disk
+        - --verbosity=info
+        resources:
+          requests: {cpu: "2", memory: 4Gi, ephemeral-storage: 20Gi}
+          limits: {cpu: "6", memory: 10Gi, ephemeral-storage: 40Gi}
+        volumeMounts:
+        - {name: docker-config, mountPath: /kaniko/.docker}
+      volumes:
+      # ghcr push auth: config.json with a PAT (write:packages). See README.
+      - name: docker-config
+        secret:
+          secretName: ghcr-push
+          items: [{key: .dockerconfigjson, path: config.json}]
