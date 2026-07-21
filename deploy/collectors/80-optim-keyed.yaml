@@ -1,0 +1,179 @@
+# Held-key compute-optimization collectors (joint-research jr-compute-optim).
+# These 3 need an API key/credential you hold in-cluster. Shipped SUSPENDED so
+# nothing 401-spams until you provision the keys and unsuspend.
+#
+# ── To activate ──────────────────────────────────────────────────────────────
+# 1. Put real values in the deblob-optim-keys Secret (stub below has empty ones):
+#      kubectl -n deblob create secret generic deblob-optim-keys \
+#        --from-literal=em_token=... \
+#        --from-literal=watttime_user=... --from-literal=watttime_pass=... \
+#        --from-literal=fingrid_key=... \
+#        --dry-run=client -o yaml | kubectl apply -f -
+# 2. Add the topics to deblob-config raw_topics + [samples] + [auto_promote]:
+#      events.carbon.electricitymaps, events.carbon.watttime, events.grid.fingrid
+#    (roll deblob) and create the Redpanda topics.
+# 3. Unsuspend:  kubectl -n deblob patch cronjob/collector-electricitymaps \
+#      -p '{"spec":{"suspend":false}}'  (repeat for watttime, fingrid)
+# NOTE: the deblob-optim-keys Secret is intentionally NOT defined in this file —
+# it holds YOUR credentials and lives only in-cluster, so a bulk `kubectl apply`
+# of this directory can never reset it. Create/update it with the command above.
+# ─────────────────────────────────────────────────────────────────────────────
+# ── Electricity Maps v4 — flow-traced consumption carbon + forecast + renewable %.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-electricitymaps-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.carbon.electricitymaps"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    ZONE="${EM_ZONE:-PL}"
+    [ -z "${EM_TOKEN:-}" ] && { echo "NO-KEY (set deblob-optim-keys.em_token)"; exit 0; }
+    for EP in "carbon-intensity/latest" "carbon-intensity/forecast" "renewable-energy/latest"; do
+      body=$(curl -sf -A "$UA" -H "auth-token: $EM_TOKEN" --max-time 25 \
+        "https://api.electricitymap.org/v4/$EP?zone=$ZONE") || { echo "FETCH-FAIL [$EP]"; continue; }
+      echo "$body" | jq -c --arg ep "$EP" '{records:[{value:(. + {_endpoint:$ep})}]}' | \
+        curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED em[$EP] -> %{http_code}\n" || echo "PRODUCE-FAIL [$EP]"
+      sleep 1
+    done
+    echo done
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-electricitymaps, namespace: deblob, labels: {app: greenwindow-collector, source: electricitymaps}}
+spec:
+  suspend: true
+  schedule: "26 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: electricitymaps}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            env:
+            - {name: EM_TOKEN, valueFrom: {secretKeyRef: {name: deblob-optim-keys, key: em_token, optional: true}}}
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-electricitymaps-sh}}
+---
+# ── WattTime v3 — free marginal signal-index (0-100 run-now-vs-wait). 2-stage login.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-watttime-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.carbon.watttime"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    REGION="${WT_REGION:-CAISO_NORTH}"   # free access is region-limited; set to your account's
+    [ -z "${WT_USER:-}" ] && { echo "NO-KEY (set deblob-optim-keys.watttime_user/pass)"; exit 0; }
+    TOKEN=$(curl -sf -A "$UA" -u "$WT_USER:$WT_PASS" --max-time 20 "https://api.watttime.org/login" | jq -r '.token // empty')
+    [ -z "$TOKEN" ] && { echo "LOGIN-FAIL"; exit 0; }
+    body=$(curl -sf -A "$UA" -H "Authorization: Bearer $TOKEN" --max-time 20 \
+      "https://api.watttime.org/v3/signal-index?region=$REGION&signal_type=co2_moer") || { echo "FETCH-FAIL"; exit 0; }
+    echo "$body" | jq -c '{records:[(.data[]?)|{value:(. + {_region:($region//"")})}]}' --arg region "$REGION" | \
+      curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED watttime -> %{http_code}\n" || echo "PRODUCE-FAIL"
+    echo done
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-watttime, namespace: deblob, labels: {app: greenwindow-collector, source: watttime}}
+spec:
+  suspend: true
+  schedule: "*/10 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: watttime}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            env:
+            - {name: WT_USER, valueFrom: {secretKeyRef: {name: deblob-optim-keys, key: watttime_user, optional: true}}}
+            - {name: WT_PASS, valueFrom: {secretKeyRef: {name: deblob-optim-keys, key: watttime_pass, optional: true}}}
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-watttime-sh}}
+---
+# ── Fingrid — Nordic grid frequency (system-stress veto). x-api-key.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: collector-fingrid-sh, namespace: deblob}
+data:
+  collect.sh: |
+    #!/bin/sh
+    set -u
+    P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.grid.fingrid"
+    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
+    CT="Content-Type: application/vnd.kafka.json.v2+json"
+    [ -z "${FINGRID_KEY:-}" ] && { echo "NO-KEY (set deblob-optim-keys.fingrid_key)"; exit 0; }
+    START=$(date -u -d '-15 min' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
+    END=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    body=$(curl -sf -A "$UA" -H "x-api-key: $FINGRID_KEY" --max-time 25 \
+      "https://data.fingrid.fi/api/datasets/177/data?startTime=$START&endTime=$END") || { echo "FETCH-FAIL"; exit 0; }
+    echo "$body" | jq -c '{records:[(.data[]?)|{value:.}]}' | \
+      curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED fingrid -> %{http_code}\n" || echo "PRODUCE-FAIL"
+    echo done
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: collector-fingrid, namespace: deblob, labels: {app: greenwindow-collector, source: fingrid}}
+spec:
+  suspend: true
+  schedule: "*/3 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 120
+      template:
+        metadata: {labels: {app: greenwindow-collector, source: fingrid}}
+        spec:
+          restartPolicy: Never
+          imagePullSecrets: [{name: ghcr-pull}]
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: collect
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:1
+            command: ["/bin/sh", "/scripts/collect.sh"]
+            env:
+            - {name: FINGRID_KEY, valueFrom: {secretKeyRef: {name: deblob-optim-keys, key: fingrid_key, optional: true}}}
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 16Mi}, limits: {cpu: 200m, memory: 96Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: collector-fingrid-sh}}
