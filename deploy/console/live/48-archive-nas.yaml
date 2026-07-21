@@ -21,8 +21,13 @@ data:
     set -u
     BROKER="redpanda.deblob.svc.cluster.local:9092"
     # Fail loudly if the broker is unreachable, so a real outage is NOT
-    # silently reported as "no new records" (empty archive).
-    rpk cluster health --brokers "$BROKER" >/dev/null 2>&1 || { echo "BROKER-UNREACHABLE"; exit 1; }
+    # silently reported as "no new records" (empty archive). Use a KAFKA-API
+    # check (`rpk topic list`) — the same API path the consume below uses.
+    # NOT `rpk cluster health`: this rpk version rejects its `--brokers` flag
+    # ("unknown flag"), so that preflight ALWAYS false-failed as
+    # BROKER-UNREACHABLE and aborted every archive run (found while observing
+    # Deblob quality — Kafka itself was healthy the whole time).
+    rpk topic list --brokers "$BROKER" >/dev/null 2>&1 || { echo "BROKER-UNREACHABLE"; exit 1; }
     DT=$(date -u +%Y-%m-%d)
     TS=$(date -u +%Y%m%dT%H%M%SZ)
     DIR="/archive/dt=$DT"
