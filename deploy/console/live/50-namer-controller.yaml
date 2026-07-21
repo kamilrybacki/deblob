@@ -1,0 +1,268 @@
+# Namer controller (jr-schema-naming-211140) — gives discovered schema families
+# MEANINGFUL, human-editable display names instead of "fam-<last6>".
+#
+# Governance: "the model proposes, deterministic code + policy decides", and a
+# HUMAN edit always wins. This controller NEVER overwrites a human-set name
+# (double-guarded: it skips schemas whose provenance.name_source == "human", and
+# the server refuses the write atomically anyway). Pipeline per schema:
+#   1. normalize field paths -> tokens (camel/snake/kebab/dot/array split, plumbing downweighted)
+#   2. deterministic HEURISTIC baseline (signature dictionary + conservative composition)
+#   3. SLM REFINE: Qwen2.5-0.5B via Ollama /api/chat, structured JSON, temp 0, seeded
+#   4. VALIDATE (grounding gates): regex 2-4 Title-Case words, <=40 chars, every token
+#      licensed by a field token / head-noun / signature; reject-if-weaker-than-heuristic
+#   5. PUT /schemas/{id}/name {source: slm | heuristic}  (heuristic = safe fallback)
+# Idempotent: re-runs skip schemas already named by this controller whose field-set
+# hash + prompt/normalizer version are unchanged (no redundant Ollama call). Qwen's
+# IFEval is weak (27.9), so the deterministic gates — not the model — decide.
+# External controller: reuses the tested API + the in-cluster Ollama, no core rebuild.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: namer-controller-py, namespace: deblob}
+data:
+  run.py: |
+    import os, re, json, sys, time, hashlib, urllib.parse, urllib.request, urllib.error
+    BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
+    OLLAMA = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
+    MODEL = "qwen2.5:0.5b"
+    PROMPT_VERSION = "v1"
+    NORMALIZER_VERSION = "v1"
+    SEED = 211140
+    H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
+    FAIL = 0
+    DEADLINE = time.monotonic() + 230       # < CronJob activeDeadlineSeconds
+    NAME_RE = re.compile(r'^[A-Za-z][A-Za-z0-9]*(?: [A-Za-z][A-Za-z0-9]*){1,3}$')
+
+    def req(method, path, body=None, base=BASE, raw=False, timeout=25):
+        global FAIL
+        data = json.dumps(body).encode() if body is not None else None
+        r = urllib.request.Request((base if raw else BASE + path), data=data, headers=H, method=method)
+        try:
+            with urllib.request.urlopen(r, timeout=timeout) as resp:
+                return resp.status, json.loads(resp.read() or "null")
+        except urllib.error.HTTPError as e:
+            return e.code, None
+        except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+            FAIL += 1; print("NET-ERR", method, path, repr(e)); return None, None
+
+    # --- field-name normalization -> lowercase concept tokens ------------------
+    PLUMBING = {"id","uuid","guid","url","uri","href","link","ts","time","timestamp","date",
+                "datetime","created","updated","modified","at","version","rev","type","kind",
+                "data","items","item","list","array","object","node","children","key","value",
+                "val","meta","metadata","self","href","count","index","idx","hash","etag","seq"}
+    ABBREV = {"lat":"latitude","lon":"longitude","lng":"longitude","geo":"geo","gpu":"gpu",
+              "doi":"doi","co2":"carbon","pw":"power","mw":"power","px":"price","qty":"quantity"}
+    def split_tokens(name):
+        # camelCase + snake + kebab + dots + digits boundaries
+        s = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', name)
+        s = re.sub(r'[._\-/\[\]]+', ' ', s)
+        out = []
+        for t in s.lower().split():
+            t = re.sub(r'[^a-z0-9]', '', t)
+            if not t or t.isdigit():
+                continue
+            out.append(ABBREV.get(t, t))
+        return out
+    def walk_leaf_names(node, out):
+        for k, v in (node.get('children') or {}).items():
+            if v.get('children'):
+                walk_leaf_names(v, out)
+            else:
+                out.append(k)
+    def field_tokens(canon):
+        leaves = []
+        walk_leaf_names(canon, leaves)
+        toks = []
+        for leaf in leaves:
+            toks.extend(split_tokens(leaf))
+        return toks, leaves
+
+    # --- deterministic heuristic baseline --------------------------------------
+    # Signature dictionary: a strong field-token COMBO -> a confident name. Keys
+    # are frozensets of required tokens (all must be present). First match wins.
+    SIGNATURES = [
+        (frozenset({"doi"}), "Scholarly Works"),
+        (frozenset({"latitude","longitude"}), "Location Observations"),
+        (frozenset({"claims","labels","sitelinks"}), "Knowledge Graph Entities"),
+        (frozenset({"repository","actor"}), "Repository Events"),
+        (frozenset({"carbon"}), "Carbon Intensity Readings"),
+        (frozenset({"price","currency"}), "Price Listings"),
+        (frozenset({"power","generation"}), "Power Generation Readings"),
+        (frozenset({"magnitude","depth"}), "Seismic Events"),
+        (frozenset({"downloads"}), "Package Downloads"),
+        (frozenset({"benchmark"}), "Benchmark Results"),
+        (frozenset({"temperature","humidity"}), "Weather Readings"),
+        (frozenset({"callsign"}), "Flight Positions"),
+    ]
+    HEAD_NOUNS = {"events","records","observations","entities","works","metrics","listings",
+                  "snapshots","readings","updates","prices","releases","results","positions",
+                  "downloads","measurements","reports"}
+    def titlecase(tokens):
+        return " ".join(t.capitalize() for t in tokens)
+    def heuristic_name(toks):
+        tset = set(toks)
+        for sig, name in SIGNATURES:
+            if sig <= tset:
+                return name, "signature"
+        # conservative composition: 1-2 most frequent salient (non-plumbing) tokens
+        # + a neutral head noun. Prefer under-claiming ("Status Records") over a
+        # confident-but-wrong guess.
+        freq = {}
+        for t in toks:
+            if t in PLUMBING or t in HEAD_NOUNS or len(t) < 3:
+                continue
+            freq[t] = freq.get(t, 0) + 1
+        salient = sorted(freq, key=lambda t: (-freq[t], t))[:2]
+        if not salient:
+            return None, "none"
+        return titlecase(salient) + " Records", "composed"
+
+    # --- SLM refine (Ollama /api/chat, structured) -----------------------------
+    SYS = ("You name data schemas. Given a schema's field names and a safe baseline "
+           "name, output a 2 to 4 word Title Case name describing the KIND of record. "
+           "Use only concepts supported by the field names. Never output the words Data, "
+           "JSON, Schema, Family, Payload, Information, Misc, or Unknown. No explanations. "
+           "The baseline is safe; change it only when the fields clearly support a better "
+           "name. Respond as JSON: {\"name\": \"...\"}.")
+    FEWSHOT = [
+        ("Fields: doi, author, title, journal, year. Baseline: Scholarly Works", "Scholarly Works"),
+        ("Fields: latitude, longitude, observed_at, station. Baseline: Location Observations", "Weather Station Observations"),
+        ("Fields: repository, actor, ref, payload. Baseline: Repository Events", "Repository Events"),
+        ("Fields: sku, warehouse, on_hand. Baseline: Sku Warehouse Records", "Inventory Levels"),
+    ]
+    def slm_name(leaves, baseline):
+        msgs = [{"role": "system", "content": SYS}]
+        for u, a in FEWSHOT:
+            msgs.append({"role": "user", "content": u})
+            msgs.append({"role": "assistant", "content": json.dumps({"name": a})})
+        flds = ", ".join(sorted(set(leaves))[:40])
+        msgs.append({"role": "user", "content": "Fields: %s. Baseline: %s" % (flds, baseline)})
+        body = {"model": MODEL, "messages": msgs, "stream": False,
+                "format": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
+                "options": {"temperature": 0, "seed": SEED, "num_predict": 32}}
+        st, d = req("POST", "", body, base=OLLAMA, raw=True, timeout=20)
+        if st != 200 or not d:
+            return None
+        try:
+            return json.loads(d["message"]["content"]).get("name")
+        except (KeyError, TypeError, json.JSONDecodeError):
+            return None
+
+    BANNED = {"data","json","schema","family","payload","information","misc","unknown"}
+    def licensed(name, toks, baseline):
+        # every content token of the name must be licensed by a field token, an
+        # abbrev expansion, a head noun, or a token from the (already-grounded)
+        # baseline. Rejects hallucinated concepts the fields don't support.
+        if not name or not NAME_RE.match(name) or len(name) > 40:
+            return False
+        low = [w.lower() for w in name.split()]
+        if any(w in BANNED for w in low):
+            return False
+        lic = set(toks) | HEAD_NOUNS | {w.lower() for w in (baseline or "").split()}
+        # allow simple plural/singular of field tokens
+        for w in low:
+            if w in lic or (w.endswith("s") and w[:-1] in lic) or (w + "s") in lic:
+                continue
+            return False
+        return True
+
+    def field_set_hash(leaves):
+        return hashlib.sha256(("\x1f".join(sorted(set(leaves)))).encode()).hexdigest()[:16]
+
+    # --- main loop -------------------------------------------------------------
+    named = skipped = human = fallback = 0
+    cursor = None; pages = 0
+    while pages < 50 and time.monotonic() < DEADLINE:
+        pages += 1
+        q = "/api/v1/schemas?limit=200" + ("&cursor=" + urllib.parse.quote(cursor, safe='') if cursor else "")
+        st, d = req("GET", q)
+        if st != 200 or not d:
+            if st is not None: FAIL += 1; print("LIST-ERR", st)
+            break
+        for r in d.get('data', []):
+            if time.monotonic() >= DEADLINE:
+                print("deadline reached mid-page"); break
+            prov = r.get('provenance') or {}
+            if prov.get('name_source') == 'human':
+                human += 1; continue
+            try:
+                canon = json.loads(r['canonical'])
+            except (KeyError, json.JSONDecodeError):
+                continue
+            toks, leaves = field_tokens(canon)
+            if not leaves:
+                continue
+            fsh = field_set_hash(leaves)
+            nm = prov.get('name_meta') or {}
+            # idempotency: already named by us for this exact field set + prompt -> skip
+            if (prov.get('name_source') in ('slm', 'heuristic')
+                    and nm.get('field_set_hash') == fsh
+                    and nm.get('prompt_version') == PROMPT_VERSION
+                    and nm.get('normalizer_version') == NORMALIZER_VERSION):
+                skipped += 1; continue
+            base, conf = heuristic_name(toks)
+            if base is None:
+                continue
+            proposal = slm_name(leaves, base)
+            accepted = False
+            name, source = base, "heuristic"
+            if proposal and proposal != base and licensed(proposal, toks, base):
+                # protect strong signatures: a signature baseline requires the SLM
+                # to keep at least one of its non-head-noun tokens, else keep it.
+                if conf == "signature":
+                    base_core = {w.lower() for w in base.split()} - HEAD_NOUNS
+                    prop_low = {w.lower() for w in proposal.split()}
+                    if base_core and base_core.isdisjoint(prop_low):
+                        pass  # SLM drifted off a confident signature -> keep baseline
+                    else:
+                        name, source, accepted = proposal, "slm", True
+                else:
+                    name, source, accepted = proposal, "slm", True
+            meta = {"prompt_version": PROMPT_VERSION, "normalizer_version": NORMALIZER_VERSION,
+                    "model": MODEL, "field_set_hash": fsh, "heuristic": base,
+                    "slm_raw": proposal, "confidence": conf, "accepted": accepted}
+            st2, d2 = req("PUT", "/api/v1/schemas/" + urllib.parse.quote(r['schema_id'], safe='') + "/name",
+                          {"name": name, "source": source, "meta": meta})
+            if st2 == 200:
+                if d2 and d2.get('data', {}).get('applied') is False:
+                    human += 1                 # raced a human edit; server protected it
+                else:
+                    named += 1
+                    if source == "heuristic": fallback += 1
+            elif st2 is not None:
+                FAIL += 1; print("NAME-ERR", st2, r.get('schema_id'))
+        cursor = d.get('next_cursor')
+        if not cursor:
+            break
+    print("named=%d (heuristic-fallback=%d) skipped=%d human-protected=%d" % (named, fallback, skipped, human))
+    if FAIL:
+        print("FAILURES this run: %d" % FAIL); sys.exit(1)
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: namer-controller, namespace: deblob, labels: {app: namer-controller}}
+spec:
+  schedule: "*/15 * * * *"           # every 15 min; idempotent, steady-state is cheap
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300     # > the script's own 230s budget + margin
+      template:
+        metadata: {labels: {app: namer-controller}}
+        spec:
+          restartPolicy: Never
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: controller
+            image: python:3.12-alpine
+            command: ["python3", "/scripts/run.py"]
+            env:
+            - {name: DEBLOB_API_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}}
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: namer-controller-py}}

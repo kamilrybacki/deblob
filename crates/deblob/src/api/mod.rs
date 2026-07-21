@@ -8,6 +8,7 @@
 
 pub mod auth;
 pub mod candidates;
+pub mod naming;
 pub mod schemas;
 pub mod semantic;
 pub mod sources;
@@ -19,7 +20,7 @@ use std::sync::Arc;
 use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{middleware, Json, Router};
 use deblob_core::ports::{EvidenceStore, Registry, SourceRegistry, ValueProfileStore};
 use deblob_redis::health::HealthGate;
@@ -295,6 +296,7 @@ pub fn router(state: ApiState) -> Router {
     let authenticated = Router::new()
         .route("/schemas", get(schemas::list_schemas))
         .route("/schemas/{sch_id}", get(schemas::get_schema))
+        .route("/schemas/{sch_id}/name", put(naming::put_name))
         .route(
             "/schemas/{sch_id}/value-profile",
             get(schemas::get_schema_value_profile),

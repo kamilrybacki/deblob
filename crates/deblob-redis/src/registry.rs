@@ -1,10 +1,10 @@
 //! Redis-backed `Registry`: the permanent schema vault (spec §6).
 
 use crate::health::HealthGate;
-use crate::lua::{PUBLISH_SCRIPT, SEM_APPEND_SCRIPT};
+use crate::lua::{PUBLISH_SCRIPT, SEM_APPEND_SCRIPT, SET_NAME_SCRIPT};
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
-use deblob_core::ports::{FamilyRecord, FamilyRef, Registry, SchemaRecord};
+use deblob_core::ports::{FamilyRecord, FamilyRef, NameWriteOutcome, Registry, SchemaRecord};
 use redis::{AsyncCommands, Client, Script};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,6 +38,10 @@ pub struct RedisRegistry {
     /// review §4) — see `crate::lua::SEM_APPEND_SCRIPT` and
     /// `crate::semantic` for the storage methods that invoke it.
     pub(crate) sem_append_script: Script,
+    /// The atomic, governed display-name write (`jr-schema-naming-211140`) —
+    /// see `crate::lua::SET_NAME_SCRIPT` and `set_schema_name`. Enforces the
+    /// human-override-wins guard inside one Lua transition.
+    set_name_script: Script,
     /// Runtime persistence health gate (Task 10, spec §6). `None` for
     /// registries built without one (the default, and every existing
     /// caller/test) — publishing then behaves exactly as before this task,
@@ -127,6 +131,42 @@ fn record_from_hash(record_json: &str, version: Option<String>) -> Result<Schema
         .map_err(|e| CoreError::RegistryUnavailable(format!("corrupt schema record: {e}")))
 }
 
+/// Overlay the governed display name (stored in SEPARATE small hash fields by
+/// `SET_NAME_SCRIPT`, never re-serialized into `record`) onto the record's
+/// provenance, so `provenance.label` — the field the console renders — carries
+/// the human/SLM name. A no-op when the schema was never named
+/// (`jr-schema-naming-211140`).
+fn overlay_name(
+    rec: &mut SchemaRecord,
+    label: Option<String>,
+    source: Option<String>,
+    meta: Option<String>,
+) {
+    if label.is_none() && source.is_none() && meta.is_none() {
+        return;
+    }
+    if !rec.provenance.is_object() {
+        rec.provenance = serde_json::Value::Object(serde_json::Map::new());
+    }
+    let obj = rec
+        .provenance
+        .as_object_mut()
+        .expect("provenance coerced to a JSON object above");
+    if let Some(l) = label {
+        obj.insert("label".to_string(), serde_json::Value::String(l));
+    }
+    if let Some(s) = source {
+        obj.insert("name_source".to_string(), serde_json::Value::String(s));
+    }
+    if let Some(m) = meta {
+        // Stored as a JSON string; re-parse to a value, or keep as a string
+        // if it isn't valid JSON (never fail a read over metadata).
+        let v =
+            serde_json::from_str::<serde_json::Value>(&m).unwrap_or(serde_json::Value::String(m));
+        obj.insert("name_meta".to_string(), v);
+    }
+}
+
 impl RedisRegistry {
     /// Connect and run the startup persistence gate. This only checks the
     /// state at connect time; runtime drift monitoring (AOF write errors,
@@ -163,6 +203,7 @@ impl RedisRegistry {
             conn,
             publish_script: Script::new(PUBLISH_SCRIPT),
             sem_append_script: Script::new(SEM_APPEND_SCRIPT),
+            set_name_script: Script::new(SET_NAME_SCRIPT),
             health_gate: None,
         })
     }
@@ -202,17 +243,81 @@ impl RedisRegistry {
 impl Registry for RedisRegistry {
     async fn get_schema(&self, id: &SchemaId) -> Result<Option<SchemaRecord>, CoreError> {
         let mut conn = self.conn();
-        let (record_json, version): (Option<String>, Option<String>) = redis::cmd("HMGET")
+        // Also pull the governed name fields (jr-schema-naming-211140) and
+        // overlay them onto provenance.label — see `overlay_name`.
+        let (record_json, version, name_label, name_source, name_meta): (
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ) = redis::cmd("HMGET")
             .arg(schema_key(id))
             .arg("record")
             .arg("version")
+            .arg("name_label")
+            .arg("name_source")
+            .arg("name_meta")
             .query_async(&mut conn)
             .await
             .map_err(redis_err)?;
         match record_json {
             None => Ok(None),
-            Some(json) => record_from_hash(&json, version).map(Some),
+            Some(json) => {
+                let mut rec = record_from_hash(&json, version)?;
+                overlay_name(&mut rec, name_label, name_source, name_meta);
+                Ok(Some(rec))
+            }
         }
+    }
+
+    async fn set_schema_name(
+        &self,
+        id: &SchemaId,
+        label: &str,
+        source: &str,
+        meta: Option<serde_json::Value>,
+    ) -> Result<NameWriteOutcome, CoreError> {
+        // Same persistence gate as `publish`: refuse writes while the
+        // background probe reports Redis degraded.
+        if let Some(gate) = &self.health_gate {
+            if !gate.is_healthy() {
+                return Err(CoreError::RegistryUnavailable(
+                    "persistence degraded".to_string(),
+                ));
+            }
+        }
+        let mut conn = self.conn();
+        let now_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .to_string();
+        let meta_str = match &meta {
+            Some(v) => serde_json::to_string(v)
+                .map_err(|e| CoreError::RegistryUnavailable(format!("serialize name meta: {e}")))?,
+            None => String::new(),
+        };
+        let outcome: String = self
+            .set_name_script
+            .key(schema_key(id))
+            .arg(label)
+            .arg(source)
+            .arg(meta_str)
+            .arg(now_ms)
+            .invoke_async(&mut conn)
+            .await
+            .map_err(redis_err)?;
+        Ok(match outcome.as_str() {
+            "applied" => NameWriteOutcome::Applied,
+            "skipped_human" => NameWriteOutcome::SkippedHumanProtected,
+            "not_found" => NameWriteOutcome::NotFound,
+            other => {
+                return Err(CoreError::RegistryUnavailable(format!(
+                    "unexpected set_name reply: {other}"
+                )))
+            }
+        })
     }
 
     async fn resolve_structural(
@@ -367,15 +472,26 @@ impl Registry for RedisRegistry {
         let mut records = Vec::with_capacity(ids.len());
         for id in ids {
             let key = format!("deblob:schema:{id}");
-            let (record_json, version): (Option<String>, Option<String>) = redis::cmd("HMGET")
+            let (record_json, version, name_label, name_source, name_meta): (
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+                Option<String>,
+            ) = redis::cmd("HMGET")
                 .arg(&key)
                 .arg("record")
                 .arg("version")
+                .arg("name_label")
+                .arg("name_source")
+                .arg("name_meta")
                 .query_async(&mut conn)
                 .await
                 .map_err(redis_err)?;
             if let Some(json) = record_json {
-                records.push(record_from_hash(&json, version)?);
+                let mut rec = record_from_hash(&json, version)?;
+                overlay_name(&mut rec, name_label, name_source, name_meta);
+                records.push(rec);
             }
         }
 

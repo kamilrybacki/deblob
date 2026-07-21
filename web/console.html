@@ -339,6 +339,9 @@ async function loadData(){
         // created in the same window share their leading segment — slicing the
         // PREFIX makes them collide. Use the distinctive random tail instead.
         label:(r.provenance&&r.provenance.label)||('fam-'+r.family_id.slice(-6)),
+        // Governed display-name provenance (jr-schema-naming-211140): human > slm >
+        // heuristic. null = unnamed (still showing the fam-<tail> fallback above).
+        name_source:(r.provenance&&r.provenance.name_source)||null,
         observation_count:(r.provenance&&r.provenance.observation_count)||0,
         fields:canonToFields(r.canonical),semantic_fingerprint:r.semantic_fingerprint||null,
         privacy_class:r.privacy_class||'internal',canonicalizer:r.canonicalizer}));
@@ -494,9 +497,15 @@ V.schemas=()=>{const list=state.data.families;
   </div>`;
 };
 function schemaRows(list){return list.map(f=>`<div class="row ${f.schema_id===state.sel.schema?'on':''}" data-sch="${f.schema_id}"><div><div class="lab">${esc(f.label)}</div><div class="meta">${shortId(f.schema_id)}</div></div><span class="cnt">${f.observation_count} obs</span></div>`).join('')||'<div class="empty">No schemas</div>';}
+// Display-name source badge (jr-schema-naming-211140). human=operator edit (wins),
+// slm=accepted model proposal, heuristic=deterministic fallback. Absent = unnamed.
+function nameBadge(f){if(!f.name_source)return '';
+  const m={human:'✎ human',slm:'✨ SLM',heuristic:'⚙ auto'};
+  const c={human:'#087F6D',slm:'#8a6d00',heuristic:'#777'}[f.name_source]||'#777';
+  return `<span class="src-badge" title="name source: ${esc(f.name_source)} — a human edit always wins over the model" style="font-size:10px;font-weight:600;letter-spacing:.3px;padding:2px 7px;border:1px solid currentColor;border-radius:10px;color:${c};white-space:nowrap">${m[f.name_source]||esc(f.name_source)}</span>`;}
 function schemaDetail(f){if(!f)return '<div class="card empty">Select a schema</div>';
   const fields=f.fields.map(x=>`<div class="field"><span class="fp">${x.path.split('.').map((p,i)=>i?'<span class="dot">.</span>'+esc(p):esc(p)).join('')}</span><span class="ty ${x.type}">${x.type}</span><span class="muted" style="font-size:11px">${x.nullable?'nullable':'required'}</span></div>`).join('');
-  return `<div class="card"><button class="btn schback" data-schback>← Schemas</button><div class="schdhead" style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin:0 0 4px;flex-wrap:wrap"><div style="min-width:0"><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2><div class="muted num" style="font-size:11px;margin-top:3px;overflow-wrap:anywhere">${esc(f.schema_id)}</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" data-act="export-oapi" data-id="${esc(f.schema_id)}" title="Download this schema as OpenAPI 3.1">⬇ OpenAPI</button><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div></div>
+  return `<div class="card"><button class="btn schback" data-schback>← Schemas</button><div class="schdhead" style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin:0 0 4px;flex-wrap:wrap"><div style="min-width:0"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2>${nameBadge(f)}</div><div class="muted num" style="font-size:11px;margin-top:3px;overflow-wrap:anywhere">${esc(f.schema_id)}</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" data-rename="${esc(f.schema_id)}" ${canMutate()?'':'disabled'} title="${canMutate()?'Edit this schema&#39;s display name — a human edit always wins over the model':'connect with a token to rename'}">✎ Rename</button><button class="btn" data-act="export-oapi" data-id="${esc(f.schema_id)}" title="Download this schema as OpenAPI 3.1">⬇ OpenAPI</button><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div></div>
     <dl class="kv"><dt>family</dt><dd>${esc(f.family_id)}</dd><dt>version</dt><dd>v${f.version}</dd><dt>observations</dt><dd>${f.observation_count}</dd><dt>semantic sem_</dt><dd>${f.semantic_fingerprint?esc(f.semantic_fingerprint):'<span class="muted">not annotated</span>'}</dd><dt>canonicalizer</dt><dd>${esc(f.canonicalizer)}</dd></dl>
     <h2 class="sec" style="margin:16px 0 10px">Canonical shape · ${f.fields.length} fields</h2>${fields}
   </div>`;}
@@ -632,6 +641,36 @@ function mutate(kind,id){
       toast('Candidate rejected.');state.data.candidates=state.data.candidates.filter(c=>c.candidate_id!==id);render();
     }catch(e){toast('Failed: '+e.message);}
   };
+}
+
+// Edit a schema's display name (jr-schema-naming-211140). Writes source:"human",
+// which ALWAYS wins — the automatic namer never overwrites it. Idempotency meta
+// (field_set_hash/prompt/model) is the controller's concern, so a human edit sends
+// none; the server clears the machine name_meta implicitly by taking over the label.
+function renameSchema(id){
+  const f=state.data.families.find(x=>x.schema_id===id);if(!f)return;
+  const cur=(f.name_source?f.label:'');
+  $('#overlay').innerHTML=`<div class="modal-bg"><div class="modal"><h3>Rename schema</h3>
+    <p>Set a human display name. This <b>always wins</b> over the automatic namer — it is never overwritten by a later model run.</p>
+    <p class="muted num" style="font-size:11.5px">${esc(id)}</p>
+    <label>Display name</label><input id="mname" maxlength="60" placeholder="e.g. Location Observations" value="${esc(cur)}">
+    <div class="row2"><button class="btn" data-mno>Cancel</button><button class="btn good" data-myes>Save</button></div></div></div>`;
+  const inp=$('#mname');inp.focus();inp.select();
+  $('#overlay').querySelector('[data-mno]').onclick=()=>$('#overlay').innerHTML='';
+  const save=async()=>{
+    const name=(inp.value||'').trim();
+    if(!name){toast('A name is required.');return;}
+    $('#overlay').innerHTML='';
+    try{
+      const r=await api(`/api/v1/schemas/${encodeURIComponent(id)}/name`,{method:'PUT',body:JSON.stringify({name,source:'human'})});
+      if(r&&r.data&&r.data.applied===false){toast('Not applied: '+(r.data.reason||'protected'));}
+      else{f.label=name;f.name_source='human';toast('Name saved.');
+        $('#schdetail').innerHTML=schemaDetail(f);
+        const row=$(`#schrows .row[data-sch="${id}"] .lab`);if(row)row.textContent=name;}
+    }catch(e){toast('Failed: '+e.message);}
+  };
+  $('#overlay').querySelector('[data-myes]').onclick=save;
+  inp.addEventListener('keydown',e=>{if(e.key==='Enter')save();});
 }
 
 V.families=()=>{const fams=state.data.families;
@@ -834,7 +873,7 @@ function afterRender(v){
 }
 // event delegation (no inline handlers -> CSP-safe)
 $('#main').addEventListener('click',e=>{
-  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate],[data-ufl],[data-inspect],[data-schback]');if(!t)return;
+  const t=e.target.closest('[data-tab],[data-sch],[data-act],[data-uact],[data-umbstate],[data-ufl],[data-inspect],[data-schback],[data-rename]');if(!t)return;
   if(t.dataset.tab!=null){state.tab=+t.dataset.tab;render();}
   else if(t.hasAttribute('data-schback')){const sp=$('.split');if(sp)sp.classList.remove('open');window.scrollTo(0,0);}
   else if(t.dataset.sch){state.sel.schema=t.dataset.sch;$('#schdetail').innerHTML=schemaDetail(state.data.families.find(f=>f.schema_id===t.dataset.sch));$$('#schrows .row').forEach(x=>x.classList.toggle('on',x.dataset.sch===t.dataset.sch));const sp=$('.split');if(sp)sp.classList.add('open');window.scrollTo(0,0);}
@@ -842,6 +881,7 @@ $('#main').addEventListener('click',e=>{
   else if(t.dataset.uact&&!t.disabled){umbMutate(t.dataset.uact,t.dataset.id);}
   else if(t.dataset.ufl){toggleFieldLineage(t.dataset.ufl);}
   else if(t.dataset.inspect){candidateInspect(t.dataset.inspect);}
+  else if(t.dataset.rename!=null&&!t.disabled){renameSchema(t.dataset.rename);}
   else if(t.dataset.act&&!t.disabled){if(t.dataset.act==='export-oapi')exportOpenAPI(t.dataset.id);else mutate(t.dataset.act,t.dataset.id);}
 });
 const _app=$('.app');

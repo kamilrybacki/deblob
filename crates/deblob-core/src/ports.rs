@@ -254,9 +254,58 @@ pub struct FamilyRecord {
     pub current_version: FamilyVersion,
 }
 
+/// Outcome of [`Registry::set_schema_name`] — the display-name write is
+/// governed (a `human` name is never clobbered by an automatic write), so the
+/// call reports which of the three terminal states it reached rather than a
+/// bare `()`. `jr-schema-naming-211140`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NameWriteOutcome {
+    /// The name (and its `name_source`) were written to provenance.
+    Applied,
+    /// The schema already carries a `human` name and the incoming write was
+    /// `slm`/`heuristic` — refused atomically, the human name kept. This is a
+    /// benign no-op (the automatic namer must NOT treat it as a failure).
+    SkippedHumanProtected,
+    /// No schema exists for the given id.
+    NotFound,
+}
+
 #[async_trait]
 pub trait Registry: Send + Sync {
     async fn get_schema(&self, id: &SchemaId) -> Result<Option<SchemaRecord>, CoreError>;
+
+    /// Patch the display NAME on a schema's provenance in place: sets
+    /// `provenance.label` = `label`, `provenance.name_source` = `source`
+    /// (`human`|`slm`|`heuristic`), `provenance.name_meta` = `meta`, and
+    /// `provenance.name_updated_ms` = now. Never touches the schema's identity
+    /// digest (`schema_id` is content-addressed over SHAPE, not provenance) or
+    /// its version — this is display metadata, so the fingerprint domain is
+    /// untouched. SLM-proposed, human-editable schema names
+    /// (`jr-schema-naming-211140`).
+    ///
+    /// GOVERNANCE (human override always wins): when `source != "human"` and
+    /// the record already has `name_source == "human"`, the write is refused
+    /// and [`NameWriteOutcome::SkippedHumanProtected`] returned. Implementations
+    /// MUST enforce this ATOMICALLY (read-guard-write under a single
+    /// optimistic transaction), so a human edit landing between an automatic
+    /// namer's read and write can never be clobbered.
+    ///
+    /// Default impl: unsupported — only a durable registry persists names. The
+    /// in-memory test fakes that exercise the naming endpoint override this.
+    async fn set_schema_name(
+        &self,
+        id: &SchemaId,
+        label: &str,
+        source: &str,
+        meta: Option<serde_json::Value>,
+    ) -> Result<NameWriteOutcome, CoreError> {
+        let _ = (id, label, source, meta);
+        Err(CoreError::RegistryUnavailable(
+            "set_schema_name is not supported by this registry".to_string(),
+        ))
+    }
+
     async fn resolve_structural(
         &self,
         bucket_key: &str,

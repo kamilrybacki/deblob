@@ -221,6 +221,46 @@ redis.call('HSET', candidate_key, 'state', new_state)
 return 1
 "#;
 
+/// Atomic, governed display-NAME write (`jr-schema-naming-211140`).
+///
+/// The SLM-proposed / human-edited schema name lives in SEPARATE small hash
+/// fields on the schema key (`name_label`/`name_source`/`name_meta`/
+/// `name_updated_ms`) — deliberately NOT re-serialized into the big `record`
+/// JSON, so the schema's shape/identity is never round-tripped (and never at
+/// risk of an empty-array to `{}` cjson corruption). The read path overlays
+/// these fields onto `provenance.label` so the console renders the name.
+///
+/// GOVERNANCE — a human name always wins: when the incoming `source` is not
+/// `human` and the record already carries `name_source == 'human'`, the write
+/// is refused (`skipped_human`) inside this single atomic transition, so a
+/// human edit landing between an automatic namer's read and write can never be
+/// clobbered.
+///
+/// KEYS:
+///   1. schema key   deblob:schema:<sch_id>   (HASH)
+///
+/// ARGV:
+///   1. label   2. source   3. meta_json (`''` = none)   4. now_ms
+///
+/// Returns a status string: `applied`, `skipped_human`, or `not_found`.
+pub const SET_NAME_SCRIPT: &str = r#"
+local key = KEYS[1]
+if redis.call('HEXISTS', key, 'record') == 0 then
+  return 'not_found'
+end
+local cur = redis.call('HGET', key, 'name_source')
+if ARGV[2] ~= 'human' and cur == 'human' then
+  return 'skipped_human'
+end
+redis.call('HSET', key, 'name_label', ARGV[1], 'name_source', ARGV[2], 'name_updated_ms', ARGV[4])
+if ARGV[3] == '' then
+  redis.call('HDEL', key, 'name_meta')
+else
+  redis.call('HSET', key, 'name_meta', ARGV[3])
+end
+return 'applied'
+"#;
+
 /// The atomic semantic-assertion append transition (P2-D Task 5, Hermes
 /// review §4): "append + pointer-advance + reverse-index update + audit is
 /// ONE Lua transition (crash → all-or-nothing)." See `crate::semantic` for
