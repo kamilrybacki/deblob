@@ -1,0 +1,118 @@
+# Consolidation controller (B + C) — makes the /#consolidation tab actually work.
+# The umbrella proposer only groups SEMANTICALLY-ANNOTATED schemas, and nothing
+# auto-annotates. This controller: (B) heuristically maps each schema's field
+# NAMES to the canonical vocabulary (config [semantic].canonical_field_ids) and
+# writes the annotation via the validated PUT /schemas/{id}/semantic; then
+# (C) triggers POST /umbrellas/propose so umbrellas form over the real data.
+# External controller — reuses the tested API, no core rebuild.
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: consolidation-controller-py, namespace: deblob}
+data:
+  run.py: |
+    import os, re, json, urllib.request, urllib.error
+    BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
+    H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
+    def req(method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
+        r = urllib.request.Request(BASE + path, data=data, headers=H, method=method)
+        try:
+            with urllib.request.urlopen(r, timeout=25) as resp:
+                return resp.status, json.loads(resp.read() or "null")
+        except urllib.error.HTTPError as e:
+            return e.code, None
+    # Heuristic field-name -> canonical_field_id (first match wins). Only the
+    # strong, cross-source signals — a small backbone so similar schemas collide
+    # on an identical canonical signature and consolidate.
+    RULES = [
+        (r'^lat$|latitude', 'cfid_latitude'),
+        (r'^lon$|^lng$|longitude', 'cfid_longitude'),
+        (r'time|date|dtime|_seen|generated|created|publish|modified|last_contact|captured|updated', 'cfid_timestamp'),
+        (r'price|cost|dph|marketprice|rce_pln|_pln|retail|spot', 'cfid_price'),
+        (r'currency', 'cfid_currency'),
+        (r'region|zone|country|_area|armregion|bzn|geoloc|pricearea', 'cfid_region'),
+        (r'carbon|co2|intensity|emission|taux', 'cfid_carbon'),
+        (r'power|generation|_gen|_mw|demand', 'cfid_power'),
+        (r'^unit$|_unit', 'cfid_unit'),
+        (r'status|state|rentable|on_ground|verified', 'cfid_status'),
+        (r'count|downloads|pullcount|upvotes|votes', 'cfid_count'),
+        (r'name|label|title|displayname|longname|shortname|stacja', 'cfid_name'),
+        (r'value|measurement', 'cfid_value'),
+    ]
+    def cfid(name):
+        n = name.lower()
+        for pat, c in RULES:
+            if re.search(pat, n):
+                return c
+        return None
+    def walk(node, prefix, out):
+        ch = node.get('children') or {}
+        for k, v in ch.items():
+            p = prefix + [k]
+            if v.get('children'):
+                walk(v, p, out)
+            else:
+                c = cfid(k)
+                if c:
+                    out.append((p, c))
+    annotated = 0
+    cursor = None
+    while True:
+        q = "/api/v1/schemas?limit=200" + ("&cursor=" + cursor if cursor else "")
+        st, d = req("GET", q)
+        if st != 200 or not d:
+            break
+        for r in d.get('data', []):
+            if r.get('semantic_fingerprint'):
+                continue  # already annotated (idempotent)
+            try:
+                canon = json.loads(r['canonical'])
+            except Exception:
+                continue
+            out = []
+            walk(canon, [], out)
+            if not out:
+                continue
+            fields = [{"path": [{"key": s} for s in p], "semantics": {"canonical_field_id": c}} for p, c in out]
+            body = {"metadata": {"event_type": None, "fields": fields}, "reason": "auto-annotated (consolidation controller)"}
+            st2, _ = req("PUT", "/api/v1/schemas/" + r['schema_id'] + "/semantic", body)
+            if st2 in (200, 201):
+                annotated += 1
+            else:
+                print("annotate FAIL", r['schema_id'], st2)
+        cursor = d.get('next_cursor')
+        if not cursor:
+            break
+    print("annotated %d schemas this run" % annotated)
+    st, d = req("POST", "/api/v1/umbrellas/propose")
+    print("propose ->", st, (d or {}).get('data'))
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: consolidation-controller, namespace: deblob, labels: {app: consolidation-controller}}
+spec:
+  schedule: "*/10 * * * *"          # every 10 min
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 180
+      template:
+        metadata: {labels: {app: consolidation-controller}}
+        spec:
+          restartPolicy: Never
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: controller
+            image: python:3.12-alpine
+            command: ["python3", "/scripts/run.py"]
+            env:
+            - {name: DEBLOB_API_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}}
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+            volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+          volumes:
+          - {name: script, configMap: {name: consolidation-controller-py}}
