@@ -10,7 +10,11 @@ data:
     UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
     CT="Content-Type: application/vnd.kafka.json.v2+json"
     body=$(curl -sf -A "$UA" --max-time 25 "https://opensky-network.org/api/states/all?lamin=48&lomin=12&lamax=56&lomax=26") || { echo FETCH-FAIL; exit 0; }
-    echo "$body" | jq -c '{records:[(.states[]?)|{value:.}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED opensky -> %{http_code}\n" || echo PRODUCE-FAIL
+    # OpenSky state vectors are POSITIONAL arrays (no field names) — Deblob can't
+    # infer a schema from a bare array-of-scalars. Zip the documented 17-field
+    # order into a keyed object so a real named shape is discovered (index 12
+    # "sensors" is usually null/array — dropped).
+    echo "$body" | jq -c '{records:[(.states[]?)|{value:{icao24:.[0],callsign:.[1],origin_country:.[2],time_position:.[3],last_contact:.[4],longitude:.[5],latitude:.[6],baro_altitude:.[7],on_ground:.[8],velocity:.[9],true_track:.[10],vertical_rate:.[11],geo_altitude:.[13],squawk:.[14],spi:.[15],position_source:.[16]}}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED opensky -> %{http_code}\n" || echo PRODUCE-FAIL
     echo done
 
 ---
