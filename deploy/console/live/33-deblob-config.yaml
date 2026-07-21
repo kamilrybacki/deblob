@@ -67,7 +67,7 @@ data:
     enabled = true
     allowed_sources = ["events.grid.carbonintensity", "events.grid.energy-charts", "events.compute.azure", "events.compute.vast", "events.compute.runpod", "events.compute.gpu-prices", "events.ai.benchmarks", "events.ai.arena", "events.ai.papers", "events.hw.gpu-specs", "events.ai.evalplus", "events.compute.ovh", "events.compute.scaleway", "events.registry.crates", "events.registry.pypi", "events.registry.hf-models", "events.registry.hf-datasets", "events.registry.ollama", "events.registry.dockerhub", "events.registry.npm", "events.geo.quakes", "events.space.weather", "events.geo.flights", "events.weather.openmeteo", "events.weather.metno", "events.transit.gdansk", "events.env.imgw", "events.env.pegel", "events.env.gios", "events.env.dwd", "events.civic.wikidata", "events.ai.openalex", "events.compute.spot-advisor", "events.energy.cheapest-hours", "events.energy.awattar", "events.energy.prices-eu", "events.carbon.dk", "events.energy.pse-pl", "events.carbon.fr"]
     min_samples = 50
-    min_age_ms = 600000
+    min_age_ms = 0
     min_required_fields = 2
     min_required_ratio = 0.5
     sweep_interval_ms = 60000
