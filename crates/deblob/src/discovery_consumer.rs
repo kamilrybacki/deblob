@@ -142,7 +142,7 @@ pub async fn run(
                 }
             }
         } else {
-            tracing::debug!("discovery consumer: skipping message with no payload");
+            tracing::debug!("discovery consumer: skipping message with empty body");
         }
 
         let _ = pending_offsets.add_partition_offset(&topic, partition, Offset::Offset(offset + 1));
