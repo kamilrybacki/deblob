@@ -25,7 +25,7 @@ data:
     OLLAMA_URL = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
     MODEL = "qwen2.5:0.5b"
     PROMPT_VERSION = "v2"          # v2 = source-aware naming (re-names v1 schemas)
-    NORMALIZER_VERSION = "v1"
+    NORMALIZER_VERSION = "v2"      # v2 = source qualifier + adjacent-dup collapse
     SEED = 211140
     H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
     FAIL = 0
@@ -147,9 +147,15 @@ data:
         if nl[:len(sl)] == sl:                          # already leads with the source
             return name
         words = src_concept.split() + name.split()
-        if len(words) <= 4:
-            return " ".join(words)
-        return " ".join(src_concept.split()[:2] + name.split()[-2:])   # trim to <=4
+        # collapse consecutive duplicate tokens ("Energy Price" + "Price Listings"
+        # -> "Energy Price Listings"), case-insensitive.
+        dedup = []
+        for w in words:
+            if not dedup or dedup[-1].lower() != w.lower():
+                dedup.append(w)
+        if len(dedup) <= 4:
+            return " ".join(dedup)
+        return " ".join(dedup[:2] + dedup[-2:])         # trim to <=4
 
     def heuristic_name(toks, src_concept):
         tset = set(toks)
