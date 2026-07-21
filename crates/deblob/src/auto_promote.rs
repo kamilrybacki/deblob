@@ -130,13 +130,14 @@ async fn sweep_once(
             }
         };
 
+        let now_ms = crate::policy::now_epoch_ms();
         for record in &records {
             // Default-deny source gate first — cheapest, and the strongest
             // abuse control: only operator-named sources are auto-promotable.
             if !source_allowed(record.source.as_deref(), allowed_sources) {
                 continue;
             }
-            match policy.eligible(record) {
+            match policy.eligible(record, now_ms) {
                 // Not yet eligible is the common, expected case — debug only.
                 Err(reason) => tracing::debug!(
                     candidate_id = %record.candidate_id.as_str(),

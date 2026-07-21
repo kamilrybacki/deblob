@@ -4,6 +4,7 @@
 //! never the instant it's first observed.
 
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use deblob_core::error::CoreError;
@@ -42,21 +43,35 @@ impl Default for PromotionPolicy {
     }
 }
 
+/// Current wall-clock time in epoch milliseconds. Used by the promotion guards
+/// to measure a candidate's real AGE (now - first_seen) rather than its
+/// observation SPAN (last_seen - first_seen), so burst sources aren't starved.
+pub(crate) fn now_epoch_ms() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}
+
 impl PromotionPolicy {
     /// `Ok(())` iff `cand` has crossed both guards; otherwise `Err` with a
     /// human-readable reason, surfaced verbatim to the API caller as the
     /// 422 response's error message.
-    pub fn check(&self, cand: &CandidateRecord) -> Result<(), String> {
+    pub fn check(&self, cand: &CandidateRecord, now_ms: i64) -> Result<(), String> {
         if cand.sample_count < self.min_samples {
             return Err(format!(
                 "candidate has {} sample(s), below the minimum of {}",
                 cand.sample_count, self.min_samples
             ));
         }
-        let age_ms = cand.last_seen_ms - cand.first_seen_ms;
+        // WALL-CLOCK age (now - first_seen), NOT the observation span
+        // (last_seen - first_seen). A burst source that emits its whole shape in
+        // one poll has a ~0 span but is still genuinely old; the span-based check
+        // permanently starved such candidates (auto-promote incident 2026-07-21).
+        let age_ms = now_ms - cand.first_seen_ms;
         if age_ms < self.min_age_ms {
             return Err(format!(
-                "candidate has been observed for {age_ms}ms, below the minimum age of {}ms",
+                "candidate first seen {age_ms}ms ago, below the minimum age of {}ms",
                 self.min_age_ms
             ));
         }
@@ -139,13 +154,13 @@ impl AutoPromotePolicy {
     /// `Ok(())` iff `cand` is statistically solid enough to promote with no
     /// human review; otherwise `Err` with a human-readable reason (logged by
     /// the sweep at debug level — this path has no API caller to surface it to).
-    pub fn eligible(&self, cand: &CandidateRecord) -> Result<(), String> {
+    pub fn eligible(&self, cand: &CandidateRecord, now_ms: i64) -> Result<(), String> {
         // 1. The manual sample/age guards apply verbatim.
         PromotionPolicy {
             min_samples: self.min_samples,
             min_age_ms: self.min_age_ms,
         }
-        .check(cand)?;
+        .check(cand, now_ms)?;
         // 2. Shape stability from the candidate's GENERALIZED profile: walk to
         //    the LEAF fields (any depth) and require a real backbone of leaves
         //    present in EVERY sample. This looks past a single-key envelope
@@ -270,7 +285,7 @@ impl PromoterTrait for Promoter {
         }
 
         self.policy
-            .check(&record)
+            .check(&record, now_epoch_ms())
             .map_err(CoreError::PolicyRejected)?;
 
         let profile: Profile = serde_json::from_value(record.profile.clone()).map_err(|e| {
@@ -675,9 +690,10 @@ mod tests {
         let evidence = Arc::new(FakeEvidence::default());
         let registry = Arc::new(FakeRegistry::new(1));
         let cand_id = some_cand_id();
-        // Enough samples, but first_seen == last_seen (age 0).
+        // Enough samples, but first_seen is NOW (wall-clock age ~0 < min_age).
+        let fresh = now_epoch_ms();
         evidence
-            .upsert_candidate(candidate_record(cand_id.clone(), 50, 1_000, 1_000))
+            .upsert_candidate(candidate_record(cand_id.clone(), 50, fresh, fresh))
             .await
             .unwrap();
         let promoter = Promoter::new(registry.clone(), evidence);
@@ -696,7 +712,7 @@ mod tests {
     fn auto_promote_below_min_samples_rejected() {
         // 10 samples < default auto min (50); old enough + settled shape.
         let cand = candidate_record(some_cand_id(), 10, 0, 700_000);
-        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
         assert!(err.contains("sample"), "reason was: {err}");
     }
 
@@ -704,7 +720,7 @@ mod tests {
     fn auto_promote_below_min_age_rejected() {
         // Enough samples, but observed for 0ms (first_seen == last_seen).
         let cand = candidate_record(some_cand_id(), 60, 1_000, 1_000);
-        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
         assert!(err.contains("age"), "reason was: {err}");
     }
 
@@ -713,7 +729,7 @@ mod tests {
         // candidate_record's `{"a":1,"b":"x"}` profile => 2 required top-level
         // fields (present == count). 60 samples over 700s => eligible.
         let cand = candidate_record(some_cand_id(), 60, 0, 700_000);
-        assert!(AutoPromotePolicy::default().eligible(&cand).is_ok());
+        assert!(AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).is_ok());
     }
 
     #[test]
@@ -725,7 +741,7 @@ mod tests {
             min_required_fields: 5,
             ..AutoPromotePolicy::default()
         };
-        let err = policy.eligible(&cand).unwrap_err();
+        let err = policy.eligible(&cand, cand.last_seen_ms).unwrap_err();
         assert!(err.contains("required leaf"), "reason was: {err}");
     }
 
@@ -735,7 +751,7 @@ mod tests {
         // no field backbone — below the default 2-required-leaf minimum.
         let mut cand = candidate_record(some_cand_id(), 60, 0, 700_000);
         cand.profile = serde_json::to_value(profile_of("5")).unwrap();
-        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
         assert!(err.contains("required leaf"), "reason was: {err}");
     }
 
@@ -750,7 +766,7 @@ mod tests {
         let merged = MonoidProfile::merge(&a, &b);
         let mut cand = candidate_record(some_cand_id(), 60, 0, 700_000);
         cand.profile = serde_json::to_value(&merged).unwrap();
-        let err = AutoPromotePolicy::default().eligible(&cand).unwrap_err();
+        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
         assert!(err.contains("required leaf"), "reason was: {err}");
     }
 
@@ -768,7 +784,7 @@ mod tests {
             min_required_fields: 1,
             ..AutoPromotePolicy::default()
         };
-        let err = policy.eligible(&cand).unwrap_err();
+        let err = policy.eligible(&cand, cand.last_seen_ms).unwrap_err();
         assert!(err.contains("%"), "reason was: {err}");
     }
 
@@ -1010,10 +1026,10 @@ mod tests {
     fn policy_check_reports_both_guards() {
         let policy = PromotionPolicy::default();
         let too_few = candidate_record(some_cand_id(), 1, 0, DEFAULT_MIN_AGE_MS * 2);
-        assert!(policy.check(&too_few).unwrap_err().contains("sample"));
+        assert!(policy.check(&too_few, too_few.last_seen_ms).unwrap_err().contains("sample"));
 
         let too_young = candidate_record(some_cand_id(), DEFAULT_MIN_SAMPLES, 0, 10);
-        assert!(policy.check(&too_young).unwrap_err().contains("age"));
+        assert!(policy.check(&too_young, too_young.last_seen_ms).unwrap_err().contains("age"));
 
         let ok = candidate_record(
             some_cand_id(),
@@ -1021,6 +1037,6 @@ mod tests {
             0,
             DEFAULT_MIN_AGE_MS + 1,
         );
-        assert!(policy.check(&ok).is_ok());
+        assert!(policy.check(&ok, ok.last_seen_ms).is_ok());
     }
 }
