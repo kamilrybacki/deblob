@@ -20,6 +20,9 @@ data:
     #!/bin/sh
     set -u
     BROKER="redpanda.deblob.svc.cluster.local:9092"
+    # Fail loudly if the broker is unreachable, so a real outage is NOT
+    # silently reported as "no new records" (empty archive).
+    rpk cluster health --brokers "$BROKER" >/dev/null 2>&1 || { echo "BROKER-UNREACHABLE"; exit 1; }
     DT=$(date -u +%Y-%m-%d)
     TS=$(date -u +%Y%m%dT%H%M%SZ)
     DIR="/archive/dt=$DT"
@@ -34,7 +37,7 @@ data:
     timeout 240 rpk topic consume -r 'events\..*' \
       --group deblob-archiver --brokers "$BROKER" -o start \
       -f '{"topic":"%t","partition":%p,"offset":%o,"ts":%d,"value":%v}\n' \
-      2>/dev/null | grep -v '"topic":"events.firehose' | gzip -c > "$OUT.tmp"
+      2>/dev/null | grep -v '^{"topic":"events\.firehose' | gzip -c > "$OUT.tmp"
     mv "$OUT.tmp" "$OUT"                       # atomic: partials never get a final name
     N=$(gzip -dc "$OUT" 2>/dev/null | wc -l)
     if [ "$N" -eq 0 ]; then rm -f "$OUT"; echo "no new records"; else echo "archived $N records -> $OUT"; fi

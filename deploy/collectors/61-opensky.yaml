@@ -14,7 +14,7 @@ data:
     # infer a schema from a bare array-of-scalars. Zip the documented 17-field
     # order into a keyed object so a real named shape is discovered (index 12
     # "sensors" is usually null/array — dropped).
-    echo "$body" | jq -c '{records:[(.states[]?)|{value:{icao24:.[0],callsign:.[1],origin_country:.[2],time_position:.[3],last_contact:.[4],longitude:.[5],latitude:.[6],baro_altitude:.[7],on_ground:.[8],velocity:.[9],true_track:.[10],vertical_rate:.[11],geo_altitude:.[13],squawk:.[14],spi:.[15],position_source:.[16]}}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED opensky -> %{http_code}\n" || echo PRODUCE-FAIL
+    echo "$body" | jq -c '{records:[(.states[]?)|{value:{icao24:.[0],callsign:.[1],origin_country:.[2],time_position:.[3],last_contact:.[4],longitude:.[5],latitude:.[6],baro_altitude:.[7],on_ground:.[8],velocity:.[9],true_track:.[10],vertical_rate:.[11],geo_altitude:.[13],squawk:.[14],spi:.[15],position_source:.[16]}}]}' | curl -sf -X POST "$P" -H "$CT" --data-binary @- -o /dev/null -w "PRODUCED opensky -> %{http_code}\n" || { echo PRODUCE-FAIL; exit 1; }
     echo done
 
 ---

@@ -712,7 +712,9 @@ mod tests {
     fn auto_promote_below_min_samples_rejected() {
         // 10 samples < default auto min (50); old enough + settled shape.
         let cand = candidate_record(some_cand_id(), 10, 0, 700_000);
-        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
+        let err = AutoPromotePolicy::default()
+            .eligible(&cand, cand.last_seen_ms)
+            .unwrap_err();
         assert!(err.contains("sample"), "reason was: {err}");
     }
 
@@ -720,7 +722,9 @@ mod tests {
     fn auto_promote_below_min_age_rejected() {
         // Enough samples, but observed for 0ms (first_seen == last_seen).
         let cand = candidate_record(some_cand_id(), 60, 1_000, 1_000);
-        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
+        let err = AutoPromotePolicy::default()
+            .eligible(&cand, cand.last_seen_ms)
+            .unwrap_err();
         assert!(err.contains("age"), "reason was: {err}");
     }
 
@@ -729,7 +733,34 @@ mod tests {
         // candidate_record's `{"a":1,"b":"x"}` profile => 2 required top-level
         // fields (present == count). 60 samples over 700s => eligible.
         let cand = candidate_record(some_cand_id(), 60, 0, 700_000);
-        assert!(AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).is_ok());
+        assert!(AutoPromotePolicy::default()
+            .eligible(&cand, cand.last_seen_ms)
+            .is_ok());
+    }
+
+    #[test]
+    fn auto_promote_burst_source_eligible_by_wall_clock_not_span() {
+        // Regression for the 2026-07-21 incident: a burst source emits its whole
+        // shape in one poll, so the observation SPAN (last_seen - first_seen) is
+        // ~0, yet the candidate is genuinely OLD by wall clock. Span-based age
+        // permanently starved these; wall-clock age promotes them. Uses an
+        // EXPLICIT synthetic `now` (not last_seen) so it actually exercises the
+        // wall-clock-vs-span distinction — a silent revert to the span formula
+        // would flip the first assert to Err.
+        let now = 2_000_000_000_000i64;
+        // first seen 20 min ago (> 10 min default), but span is only 3 ms.
+        let first_seen = now - 20 * 60 * 1000;
+        let burst = candidate_record(some_cand_id(), 60, first_seen, first_seen + 3);
+        assert!(
+            AutoPromotePolicy::default().eligible(&burst, now).is_ok(),
+            "burst source (span 3ms, wall-clock age 20min) must be eligible"
+        );
+        // The age guard still bites a genuinely young candidate (5 ms old).
+        let young = candidate_record(some_cand_id(), 60, now - 5, now);
+        let err = AutoPromotePolicy::default()
+            .eligible(&young, now)
+            .unwrap_err();
+        assert!(err.contains("age"), "reason was: {err}");
     }
 
     #[test]
@@ -751,7 +782,9 @@ mod tests {
         // no field backbone — below the default 2-required-leaf minimum.
         let mut cand = candidate_record(some_cand_id(), 60, 0, 700_000);
         cand.profile = serde_json::to_value(profile_of("5")).unwrap();
-        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
+        let err = AutoPromotePolicy::default()
+            .eligible(&cand, cand.last_seen_ms)
+            .unwrap_err();
         assert!(err.contains("required leaf"), "reason was: {err}");
     }
 
@@ -766,7 +799,9 @@ mod tests {
         let merged = MonoidProfile::merge(&a, &b);
         let mut cand = candidate_record(some_cand_id(), 60, 0, 700_000);
         cand.profile = serde_json::to_value(&merged).unwrap();
-        let err = AutoPromotePolicy::default().eligible(&cand, cand.last_seen_ms).unwrap_err();
+        let err = AutoPromotePolicy::default()
+            .eligible(&cand, cand.last_seen_ms)
+            .unwrap_err();
         assert!(err.contains("required leaf"), "reason was: {err}");
     }
 
@@ -851,8 +886,13 @@ mod tests {
         let evidence = Arc::new(FakeEvidence::default());
         let registry = Arc::new(FakeRegistry::new(7));
         let cand_id = some_cand_id();
-        let first_seen = 0i64;
-        let last_seen = DEFAULT_MIN_AGE_MS + 1;
+        // Wall-clock age: first_seen must be JUST past the min-age threshold
+        // relative to real `now` (promote() reads now_epoch_ms()). Epoch-0
+        // (1970) would make this vacuous — always "old enough" regardless of
+        // the threshold — so it's anchored to now instead.
+        let now = now_epoch_ms();
+        let first_seen = now - (DEFAULT_MIN_AGE_MS + 1);
+        let last_seen = now;
         evidence
             .upsert_candidate(candidate_record(
                 cand_id.clone(),
@@ -1026,10 +1066,16 @@ mod tests {
     fn policy_check_reports_both_guards() {
         let policy = PromotionPolicy::default();
         let too_few = candidate_record(some_cand_id(), 1, 0, DEFAULT_MIN_AGE_MS * 2);
-        assert!(policy.check(&too_few, too_few.last_seen_ms).unwrap_err().contains("sample"));
+        assert!(policy
+            .check(&too_few, too_few.last_seen_ms)
+            .unwrap_err()
+            .contains("sample"));
 
         let too_young = candidate_record(some_cand_id(), DEFAULT_MIN_SAMPLES, 0, 10);
-        assert!(policy.check(&too_young, too_young.last_seen_ms).unwrap_err().contains("age"));
+        assert!(policy
+            .check(&too_young, too_young.last_seen_ms)
+            .unwrap_err()
+            .contains("age"));
 
         let ok = candidate_record(
             some_cand_id(),

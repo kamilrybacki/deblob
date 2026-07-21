@@ -534,7 +534,12 @@ impl ShadowClassifier {
         let Some(record) = self.evidence.get_candidate(cand_id).await? else {
             return Ok(None);
         };
-        if self.config.eligibility.check(&record, crate::policy::now_epoch_ms()).is_err() {
+        if self
+            .config
+            .eligibility
+            .check(&record, crate::policy::now_epoch_ms())
+            .is_err()
+        {
             return Ok(None);
         }
 

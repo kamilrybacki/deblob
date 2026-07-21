@@ -6,9 +6,13 @@
 # 50-100+ per hour. Uses the :2 image (websocat). Bounded drain per run.
 #
 # PII: records carry user content (post text, profile bios). Deblob DISCARDS raw
-# after shape extraction; this source is deliberately EXCLUDED from [samples] and
-# from the NAS Bronze archive (see 48-archive-nas grep filter) so user content
-# never lands on disk. NOT in [auto_promote] — final-boss is a discovery showcase.
+# after shape extraction (only the schema shape persists). This source is EXCLUDED
+# from [samples] and the NAS Bronze archive (48-archive-nas grep filter) and NOT in
+# [auto_promote]. NOTE: Redpanda's own topic log IS disk-backed, so raw records do
+# transit disk on lw-c2 — mitigated by a short 1h retention.ms on this topic (set in
+# 31-topic-bootstrap), so nothing user-generated is retained beyond ~1h. The guarantee
+# is "not exported/aggregated to durable stores + short-lived on the broker", NOT
+# "never on disk". Final-boss = discovery showcase.
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: collector-jetstream-sh, namespace: deblob}
@@ -17,18 +21,21 @@ data:
     #!/bin/sh
     set -u
     P="http://redpanda.deblob.svc.cluster.local:8082/topics/events.firehose.jetstream"
-    UA="greenwindow-collector (kamilandrzejrybacki@gmail.com)"
     CT="Content-Type: application/vnd.kafka.json.v2+json"
     URL="wss://jetstream2.us-east.bsky.network/subscribe"
     # Bounded drain: 50s OR the first 600 create/update commits, whichever first
     # (grep -m closes the pipe → websocat stops). Each commit's .record is a real
     # lexicon object (self-labelled by $type) → Deblob profiles its shape.
-    timeout 50 websocat -n "$URL" </dev/null 2>/dev/null \
-      | grep -m 600 '"operation":"create"' \
+    # (Jetstream is public/no-auth, so no identifying UA is sent over the WS.)
+    BODY=$(timeout 50 websocat -n "$URL" </dev/null 2>/dev/null \
+      | grep -E -m 600 '"operation":"(create|update)"' \
       | jq -c 'select(.commit.record != null) | {value: .commit.record}' 2>/dev/null \
-      | jq -s -c '{records: .}' 2>/dev/null \
-      | curl -sf -X POST "$P" -H "$CT" --data-binary @- \
-          -o /dev/null -w "PRODUCED jetstream -> %{http_code}\n" || echo "PRODUCE-FAIL/EMPTY"
+      | jq -s -c '{records: .}' 2>/dev/null)
+    N=$(printf '%s' "$BODY" | jq '.records | length' 2>/dev/null || echo 0)
+    if [ "${N:-0}" -eq 0 ]; then echo "jetstream: no records this window"; exit 0; fi
+    printf '%s' "$BODY" | curl -sf -X POST "$P" -H "$CT" --data-binary @- \
+      -o /dev/null -w "PRODUCED jetstream(%{http_code}) $N records\n" \
+      || { echo "PRODUCE-FAIL"; exit 1; }
     echo done
 ---
 apiVersion: batch/v1
@@ -52,7 +59,7 @@ spec:
           securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
           containers:
           - name: collect
-            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:2
+            image: ghcr.io/kamilandrzejrybacki-inc/greenwindow-collector:3
             command: ["/bin/sh", "/scripts/collect.sh"]
             securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
             resources: {requests: {cpu: 20m, memory: 32Mi}, limits: {cpu: "1", memory: 256Mi}}

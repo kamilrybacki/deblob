@@ -21,7 +21,7 @@ data:
     # 1. discover recently-changed Item IDs (no user/comment requested)
     IDS=$(curl -sf -A "$UA" --compressed --max-time 25 \
       "$API?action=query&list=recentchanges&rcnamespace=0&rctype=edit%7Cnew&rcprop=title%7Cids&rclimit=25&format=json&formatversion=2" \
-      | jq -r '.query.recentchanges[]?.title' 2>/dev/null | grep '^Q' | head -8 | paste -sd '|' -)
+      | jq -r '.query.recentchanges[]?.title' 2>/dev/null | grep -E '^Q[0-9]+$' | head -8 | paste -sd '|' -)
     [ -z "$IDS" ] && { echo "NO-IDS (maxlag/empty)"; exit 0; }
     # 2. fetch entities — claims only (no labels/descriptions/aliases/sitelinks)
     body=$(curl -sf -A "$UA" --compressed --max-time 30 \
@@ -36,7 +36,7 @@ data:
       | select( (any($e.claims.P31[]?; .mainsnak.datavalue.value.id? == "Q5")) | not )
       | {value: {id: $e.id, type: $e.type, lastrevid: $e.lastrevid, modified: $e.modified, claims: $e.claims}} ]}' 2>/dev/null \
       | curl -sf -X POST "$P" -H "$CT" --data-binary @- \
-          -o /dev/null -w "PRODUCED wikidata -> %{http_code}\n" || echo PRODUCE-FAIL
+          -o /dev/null -w "PRODUCED wikidata -> %{http_code}\n" || { echo PRODUCE-FAIL; exit 1; }
     echo done
 ---
 apiVersion: batch/v1

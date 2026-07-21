@@ -19,6 +19,13 @@ data:
       rpk topic create "$T" -p 4 --brokers "$BROKER" >/dev/null 2>&1 \
         && echo "created $T" || echo "exists  $T"
     done
+    # PII retention: the Jetstream firehose carries raw user content (post text,
+    # bios). It's excluded from [samples] and the NAS archive, but Redpanda's log
+    # is disk-backed — so cap its on-disk lifetime to 1h (the relay consumes it
+    # near-instantly; discovery only needs shape). Durable here so it survives a
+    # topic recreation (unlike a one-off `rpk topic alter-config`).
+    rpk topic alter-config events.firehose.jetstream --set retention.ms=3600000 \
+      --brokers "$BROKER" >/dev/null 2>&1 && echo "retention 1h -> events.firehose.jetstream" || true
     echo "bootstrap done"
 ---
 apiVersion: batch/v1

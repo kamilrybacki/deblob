@@ -2,18 +2,26 @@
 # The umbrella proposer only groups SEMANTICALLY-ANNOTATED schemas, and nothing
 # auto-annotates. This controller: (B) heuristically maps each schema's field
 # NAMES to the canonical vocabulary (config [semantic].canonical_field_ids) and
-# writes the annotation via the validated PUT /schemas/{id}/semantic; then
-# (C) triggers POST /umbrellas/propose so umbrellas form over the real data.
-# External controller — reuses the tested API, no core rebuild.
+# writes the annotation via the validated PUT /schemas/{id}/semantic (idempotent
+# server-side — a byte-identical replay is a cheap no-op); then (C) triggers
+# POST /umbrellas/propose so umbrellas form over the real data. External
+# controller — reuses the tested API, no core rebuild.
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: consolidation-controller-py, namespace: deblob}
 data:
   run.py: |
-    import os, re, json, urllib.request, urllib.error
+    import os, re, json, sys, time, urllib.parse, urllib.request, urllib.error
     BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
     H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
+    FAIL = 0            # any non-2xx / network error increments this -> exit 1
+    DEADLINE = time.monotonic() + 150   # wall-clock budget; still attempt propose before k8s SIGKILL
     def req(method, path, body=None):
+        # Returns (status_or_None, body). Only NETWORK failures (None) are counted
+        # as run failures here; HTTP status is returned for the caller to judge
+        # (a PUT 409 = "already annotated", which is benign for this idempotent flow
+        # and must NOT fail the job).
+        global FAIL
         data = json.dumps(body).encode() if body is not None else None
         r = urllib.request.Request(BASE + path, data=data, headers=H, method=method)
         try:
@@ -21,20 +29,24 @@ data:
                 return resp.status, json.loads(resp.read() or "null")
         except urllib.error.HTTPError as e:
             return e.code, None
-    # Heuristic field-name -> canonical_field_id (first match wins). Only the
-    # strong, cross-source signals — a small backbone so similar schemas collide
-    # on an identical canonical signature and consolidate.
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            FAIL += 1; print("NET-ERR", method, path, repr(e)); return None, None
+    # Heuristic field-name -> canonical_field_id (first match wins). Tokens are
+    # boundary-anchored where ambiguous ('state' -> region not status; 'unit' only
+    # when exact, so 'business_unit' is NOT tagged; carbon needs carbon/co2 not a
+    # bare 'intensity'). A wrong tag is PERSISTED to the audited semantic store and
+    # feeds umbrella grouping, so the mapping is deliberately conservative.
     RULES = [
-        (r'^lat$|latitude', 'cfid_latitude'),
-        (r'^lon$|^lng$|longitude', 'cfid_longitude'),
+        (r'(^|_)(lat|latitude)($|_)', 'cfid_latitude'),
+        (r'(^|_)(lon|lng|longitude)($|_)', 'cfid_longitude'),
         (r'time|date|dtime|_seen|generated|created|publish|modified|last_contact|captured|updated', 'cfid_timestamp'),
-        (r'price|cost|dph|marketprice|rce_pln|_pln|retail|spot', 'cfid_price'),
-        (r'currency', 'cfid_currency'),
-        (r'region|zone|country|_area|armregion|bzn|geoloc|pricearea', 'cfid_region'),
-        (r'carbon|co2|intensity|emission|taux', 'cfid_carbon'),
+        (r'price|cost|_dph|dph_|marketprice|rce_pln|_pln|retail|spot', 'cfid_price'),
+        (r'(^|_)currency($|_)', 'cfid_currency'),
+        (r'region|zone|country|armregion|bzn|geoloc|pricearea|(^|_)state($|_)', 'cfid_region'),
+        (r'carbon|co2|emission|taux', 'cfid_carbon'),
         (r'power|generation|_gen|_mw|demand', 'cfid_power'),
-        (r'^unit$|_unit', 'cfid_unit'),
-        (r'status|state|rentable|on_ground|verified', 'cfid_status'),
+        (r'^unit$', 'cfid_unit'),
+        (r'status|rentable|on_ground|verified', 'cfid_status'),
         (r'count|downloads|pullcount|upvotes|votes', 'cfid_count'),
         (r'name|label|title|displayname|longname|shortname|stacja', 'cfid_name'),
         (r'value|measurement', 'cfid_value'),
@@ -46,8 +58,7 @@ data:
                 return c
         return None
     def walk(node, prefix, out):
-        ch = node.get('children') or {}
-        for k, v in ch.items():
+        for k, v in (node.get('children') or {}).items():
             p = prefix + [k]
             if v.get('children'):
                 walk(v, p, out)
@@ -57,35 +68,48 @@ data:
                     out.append((p, c))
     annotated = 0
     cursor = None
-    while True:
-        q = "/api/v1/schemas?limit=200" + ("&cursor=" + cursor if cursor else "")
+    pages = 0
+    # The /schemas list ALWAYS reports semantic_fingerprint=null (annotations live
+    # in a separate store), so there is no cheap client-side "already annotated"
+    # skip — the server-side PUT is idempotent, so we just re-send. This re-PUTs
+    # every schema each run (cheap no-op on unchanged); accepted over a per-schema
+    # GET /semantic pre-check that would double the request count.
+    while pages < 50 and time.monotonic() < DEADLINE:
+        pages += 1
+        q = "/api/v1/schemas?limit=200" + ("&cursor=" + urllib.parse.quote(cursor, safe='') if cursor else "")
         st, d = req("GET", q)
         if st != 200 or not d:
+            if st is not None:   # a live but non-200 list response is a real failure
+                FAIL += 1; print("LIST-ERR", st)
             break
         for r in d.get('data', []):
-            if r.get('semantic_fingerprint'):
-                continue  # already annotated (idempotent)
             try:
                 canon = json.loads(r['canonical'])
-            except Exception:
-                continue
+            except (KeyError, json.JSONDecodeError) as e:
+                print("SKIP unparseable canonical", r.get('schema_id'), repr(e)); continue
             out = []
             walk(canon, [], out)
             if not out:
                 continue
             fields = [{"path": [{"key": s} for s in p], "semantics": {"canonical_field_id": c}} for p, c in out]
             body = {"metadata": {"event_type": None, "fields": fields}, "reason": "auto-annotated (consolidation controller)"}
-            st2, _ = req("PUT", "/api/v1/schemas/" + r['schema_id'] + "/semantic", body)
+            st2, _ = req("PUT", "/api/v1/schemas/" + urllib.parse.quote(r['schema_id'], safe='') + "/semantic", body)
             if st2 in (200, 201):
                 annotated += 1
-            else:
-                print("annotate FAIL", r['schema_id'], st2)
+            elif st2 == 409:
+                pass   # already annotated with different metadata — benign, skip
+            elif st2 is not None:
+                FAIL += 1; print("ANNOTATE-ERR", st2, r.get('schema_id'))
         cursor = d.get('next_cursor')
         if not cursor:
             break
-    print("annotated %d schemas this run" % annotated)
+    print("annotate PUTs OK: %d (idempotent — includes unchanged replays)" % annotated)
     st, d = req("POST", "/api/v1/umbrellas/propose")
     print("propose ->", st, (d or {}).get('data'))
+    if st not in (200, 201):
+        FAIL += 1
+    if FAIL:
+        print("FAILURES this run: %d" % FAIL); sys.exit(1)
 ---
 apiVersion: batch/v1
 kind: CronJob
@@ -94,11 +118,11 @@ spec:
   schedule: "*/10 * * * *"          # every 10 min
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
-  failedJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       backoffLimit: 1
-      activeDeadlineSeconds: 180
+      activeDeadlineSeconds: 300     # > the script's own 150s budget + margin
       template:
         metadata: {labels: {app: consolidation-controller}}
         spec:

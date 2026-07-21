@@ -48,8 +48,12 @@ fn source_allowed(source: Option<&str>, allowed: &[String]) -> bool {
 /// novel candidate has, by definition, no existing family to join), with a
 /// reason string that records the evidence that cleared the bar. Pure — unit
 /// tested without any I/O.
-pub(crate) fn auto_promote_request(cand: &CandidateRecord) -> PromoteRequest {
-    let age_ms = cand.last_seen_ms - cand.first_seen_ms;
+pub(crate) fn auto_promote_request(cand: &CandidateRecord, now_ms: i64) -> PromoteRequest {
+    // Wall-clock age (now - first_seen) — matches the gate in `PromotionPolicy::
+    // check`. Must NOT be the observation span (last_seen - first_seen): a burst
+    // source has a ~0 span but is genuinely old, so the audit reason would read a
+    // misleading "over 3ms" while the gate actually cleared it on wall-clock age.
+    let age_ms = now_ms - cand.first_seen_ms;
     PromoteRequest {
         family: FamilyChoice::New,
         name: None,
@@ -145,7 +149,7 @@ async fn sweep_once(
                     "auto-promote: candidate not yet eligible"
                 ),
                 Ok(()) => {
-                    let req = auto_promote_request(record);
+                    let req = auto_promote_request(record, now_ms);
                     // `promote` re-fetches, re-verifies state==Provisional and
                     // the manual policy, publishes, and transitions state — so
                     // a candidate rejected or already published between this
@@ -221,7 +225,7 @@ mod tests {
     #[test]
     fn request_targets_new_family_and_records_evidence() {
         let c = cand(7, 60, 700_100, Some("events.ok"));
-        let req = auto_promote_request(&c);
+        let req = auto_promote_request(&c, c.last_seen_ms);
         assert!(matches!(req.family, FamilyChoice::New));
         assert!(req.name.is_none());
         assert!(req.reason.contains("60 samples"));
