@@ -1,0 +1,125 @@
+# Naming-dataset collector (jr-slm-finetune-nu-211549, step B — start collecting
+# gold labels for a future naming LoRA, BEFORE deciding to train).
+#
+# The gold signal is human name edits (name_source=human) + the drafts they
+# overrode. CATCH: a human PUT deletes provenance.name_meta, so the overridden
+# draft (the DPO "rejected") vanishes the instant someone edits. So we snapshot
+# PERIODICALLY, append-only, to the NAS archive: each run writes one row per
+# schema {schema_id, source, source_concept, fields, heuristic, slm_raw,
+# label, name_source, field_set_hash, ts}. At training time:
+#   - SFT gold  = latest row per schema where name_source == 'human'
+#   - DPO pairs = join snapshots on schema_id where name_source flips slm/heuristic
+#                 -> human: rejected = the prior draft, chosen = the human label
+# Read-only against the API; writes only to /archive/datasets/naming on the NAS
+# PVC. Weekly CronJob + on-demand:
+#   kubectl -n deblob create job naming-export-now --from=cronjob/naming-dataset-export
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: naming-dataset-export-py, namespace: deblob}
+data:
+  run.py: |
+    import os, re, json, time, urllib.parse, urllib.request
+    BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
+    OUT = "/archive/datasets/naming"
+    H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"]}
+    TS = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+
+    def walk_leaves(node, out):
+        for k, v in (node.get('children') or {}).items():
+            walk_leaves(v, out) if v.get('children') else out.append(k)
+    def req_get(path):
+        r = urllib.request.Request(BASE + path, headers=H, method="GET")
+        with urllib.request.urlopen(r, timeout=25) as resp:
+            return json.loads(resp.read() or "null")
+
+    os.makedirs(OUT, exist_ok=True)
+    rows = []
+    cursor = None
+    while True:
+        d = req_get("/api/v1/schemas?limit=200" + ("&cursor=" + urllib.parse.quote(cursor, safe='') if cursor else ""))
+        for r in d.get("data", []):
+            prov = r.get("provenance") or {}
+            m = prov.get("name_meta") or {}
+            try:
+                canon = json.loads(r["canonical"]); leaves = []; walk_leaves(canon, leaves)
+            except Exception:
+                leaves = []
+            rows.append({
+                "schema_id": r.get("schema_id"),
+                "family_id": r.get("family_id"),
+                "source": prov.get("source") or m.get("source"),
+                "source_concept": m.get("source_concept"),
+                "fields": sorted(set(leaves)),
+                "heuristic": m.get("heuristic"),      # deterministic draft (may be null after a human edit)
+                "slm_raw": m.get("slm_raw"),           # SLM draft, if any
+                "label": prov.get("label"),            # the effective name right now
+                "name_source": prov.get("name_source"),
+                "field_set_hash": m.get("field_set_hash"),
+                "ts": TS,
+            })
+        cursor = d.get("next_cursor")
+        if not cursor:
+            break
+
+    # 1) append-only snapshot for this run (the durable record)
+    snap = os.path.join(OUT, "snapshots")
+    os.makedirs(snap, exist_ok=True)
+    snap_path = os.path.join(snap, "naming-%s.jsonl" % TS)
+    with open(snap_path, "w") as f:
+        for row in rows:
+            f.write(json.dumps(row, sort_keys=True) + "\n")
+
+    # 2) the current human-gold SFT set (chat format, ready for the trainer)
+    human = [r for r in rows if r["name_source"] == "human" and r["label"]]
+    sft_path = os.path.join(OUT, "sft-human-latest.jsonl")
+    with open(sft_path, "w") as f:
+        for r in human:
+            flds = ", ".join(r["fields"][:40])
+            user = "Source: %s. Fields: %s." % (r["source_concept"] or r["source"] or "unknown", flds)
+            f.write(json.dumps({"messages": [
+                {"role": "user", "content": user},
+                {"role": "assistant", "content": json.dumps({"name": r["label"]})},
+            ]}) + "\n")
+
+    by_src = {}
+    for r in rows:
+        by_src[r["name_source"]] = by_src.get(r["name_source"], 0) + 1
+    with_source = sum(1 for r in rows if r["source"])
+    print("snapshot: %s (%d schemas)" % (snap_path, len(rows)))
+    print("by name_source: %s" % by_src)
+    print("schemas carrying an ingest source: %d/%d" % (with_source, len(rows)))
+    print("human-gold SFT rows -> %s : %d" % (sft_path, len(human)))
+    print("(DPO pairs are recovered at train time by joining snapshots/ on schema_id where name_source flips to human.)")
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata: {name: naming-dataset-export, namespace: deblob, labels: {app: naming-dataset-export}}
+spec:
+  schedule: "17 4 * * 1"           # weekly, Mon 04:17 — off-peak, distinct from the archiver
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 2
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      activeDeadlineSeconds: 300
+      template:
+        metadata: {labels: {app: naming-dataset-export}}
+        spec:
+          restartPolicy: Never
+          affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+          securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+          containers:
+          - name: export
+            image: python:3.12-alpine
+            command: ["python3", "/scripts/run.py"]
+            env:
+            - {name: DEBLOB_API_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}}
+            securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+            resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+            volumeMounts:
+            - {name: script, mountPath: /scripts, readOnly: true}
+            - {name: archive, mountPath: /archive}
+          volumes:
+          - {name: script, configMap: {name: naming-dataset-export-py}}
+          - {name: archive, persistentVolumeClaim: {claimName: deblob-archive}}

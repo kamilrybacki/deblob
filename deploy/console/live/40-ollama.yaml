@@ -28,9 +28,15 @@ spec:
         - {name: OLLAMA_HOST, value: "0.0.0.0:11434"}
         - {name: OLLAMA_KEEP_ALIVE, value: "-1"}          # keep the 0.5B model resident
         - {name: OLLAMA_MAX_LOADED_MODELS, value: "1"}
+        # Serve 2 requests concurrently on the ONE loaded model so the namer and
+        # the cold-discovery decision lane don't head-of-line block each other —
+        # the benchmark (jr-slm-finetune-nu-211549) traced the rare naming timeout
+        # to queue contention, not prompt cost. Bump cpu limit 3->4 so 2 parallel
+        # 0.5B contexts have headroom; the 0.5B is ~1GiB so 3Gi still fits two.
+        - {name: OLLAMA_NUM_PARALLEL, value: "2"}
         - {name: HOME, value: /home/ollama}
         securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
-        resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "3", memory: 3Gi}}
+        resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "4", memory: 3Gi}}
         volumeMounts:
         - {name: models, mountPath: /home/ollama/.ollama}
         readinessProbe: {httpGet: {path: /, port: 11434}, initialDelaySeconds: 5, periodSeconds: 10}

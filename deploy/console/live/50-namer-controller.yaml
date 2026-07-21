@@ -209,11 +209,15 @@ data:
         msgs.append({"role": "user", "content": "Source: %s. Fields: %s. Baseline: %s"
                      % (src_concept or "unknown", flds, baseline)})
         body = {"model": MODEL, "messages": msgs, "stream": False,
+                "keep_alive": -1,     # pin the model resident regardless of server default / decision-lane evictions
                 "format": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
                 "options": {"temperature": 0, "seed": SEED, "num_predict": 32}}
         r = urllib.request.Request(OLLAMA["url"], data=json.dumps(body).encode(), headers=H, method="POST")
         try:
-            with urllib.request.urlopen(r, timeout=15) as resp:
+            # 30s (was 15s): the benchmark showed warm p95 ~2s, so the rare miss is
+            # queue/contention with the decision lane, not prompt cost — absorb the
+            # tail rather than tripping the circuit breaker. Fallback still protects.
+            with urllib.request.urlopen(r, timeout=30) as resp:
                 d = json.loads(resp.read() or "null")
             OLLAMA["consec_fail"] = 0
             return json.loads(d["message"]["content"]).get("name")
