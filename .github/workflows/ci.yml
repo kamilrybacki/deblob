@@ -5,6 +5,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # `rdkafka-sys` (pulled by `deblob-kafka`) builds the vendored librdkafka
+      # from source, which needs curl/ssl/sasl/zstd dev headers — absent on the
+      # bare `ubuntu-latest` image, so `clippy --all-targets`/`test` fail at the
+      # native build (`fatal error: curl/curl.h`). Install them before any cargo
+      # step that compiles the kafka crate.
+      - run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libssl-dev libsasl2-dev libzstd-dev
       - uses: dtolnay/rust-toolchain@stable
         with: { components: "rustfmt, clippy" }
       - run: cargo fmt --all --check
