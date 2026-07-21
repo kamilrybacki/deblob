@@ -1,0 +1,254 @@
+# Namer benchmark (jr-slm-finetune-nu-211549, phase 0 — "measure first").
+# Before spending Modal credits on a naming LoRA, answer two questions with data:
+#   1. WHERE does the SLM time budget go? Decompose each Ollama /api/chat call into
+#      model-load / prompt-eval / eval / queue-overhead (from the response's own
+#      *_duration fields) — a LoRA only helps prompt-eval+eval, NEVER cold-load or
+#      queueing (Hermes). If load/queue dominates, fix serving, don't train.
+#   2. Does DROPPING THE FEW-SHOT BLOCK (compact zero-shot prompt) fit the CPU
+#      budget the current few-shot prompt times out on — WITHOUT losing name
+#      validity? This is the cheapest possible "specialization" and may reclaim
+#      the SLM with zero training.
+# Read-only: lists schemas, calls Ollama with BOTH prompt variants, prints an
+# aggregate report to the log. Writes NO names, mutates nothing. One-shot Job:
+#   kubectl -n deblob create -f deploy/console/live/51-namer-benchmark.yaml
+#   kubectl -n deblob logs -f job/namer-benchmark
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: namer-benchmark-py, namespace: deblob}
+data:
+  run.py: |
+    import os, re, json, time, statistics, urllib.parse, urllib.request
+    BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
+    OLLAMA = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
+    MODEL = "qwen2.5:0.5b"
+    SEED = 211549
+    PROD_BUDGET_MS = 15000          # the live namer's per-call timeout (circuit-breaker)
+    SAMPLE = int(os.environ.get("SAMPLE", "16"))   # schemas per variant
+    CALL_TIMEOUT = 60               # high, so we MEASURE slow calls instead of censoring them
+    H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
+
+    # --- naming primitives (copied verbatim from the live namer so the A/B is
+    # --- apples-to-apples with production) --------------------------------------
+    PLUMBING = {"id","uuid","guid","url","uri","href","link","ts","time","timestamp","date",
+                "datetime","created","updated","modified","at","version","rev","type","kind",
+                "data","items","item","list","array","object","node","children","key","value",
+                "val","meta","metadata","self","count","index","idx","hash","etag","seq"}
+    ABBREV = {"lat":"latitude","lon":"longitude","lng":"longitude","gpu":"gpu","doi":"doi",
+              "co2":"carbon","pw":"power","mw":"power","px":"price","qty":"quantity"}
+    def split_tokens(name):
+        s = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', name)
+        s = re.sub(r'[._\-/\[\]]+', ' ', s)
+        out = []
+        for t in s.lower().split():
+            t = re.sub(r'[^a-z0-9]', '', t)
+            if t and not t.isdigit():
+                out.append(ABBREV.get(t, t))
+        return out
+    def walk_leaves(node, out):
+        for k, v in (node.get('children') or {}).items():
+            walk_leaves(v, out) if v.get('children') else out.append(k)
+    def field_tokens(canon):
+        leaves = []; walk_leaves(canon, leaves)
+        toks = []
+        for l in leaves: toks += split_tokens(l)
+        return toks, leaves
+    SIGNATURES = [
+        (frozenset({"doi"}), "Scholarly Works"), (frozenset({"latitude","longitude"}), "Location Observations"),
+        (frozenset({"claims","labels","sitelinks"}), "Knowledge Graph Entities"), (frozenset({"repository","actor"}), "Repository Events"),
+        (frozenset({"carbon"}), "Carbon Intensity Readings"), (frozenset({"price","currency"}), "Price Listings"),
+        (frozenset({"power","generation"}), "Power Generation Readings"), (frozenset({"magnitude","depth"}), "Seismic Events"),
+        (frozenset({"downloads"}), "Package Downloads"), (frozenset({"benchmark"}), "Benchmark Results"),
+        (frozenset({"temperature","humidity"}), "Weather Readings"), (frozenset({"callsign"}), "Flight Positions"),
+    ]
+    HEAD_NOUNS = {"events","records","observations","entities","works","metrics","listings","snapshots",
+                  "readings","updates","prices","releases","results","positions","downloads","measurements","reports"}
+    SOURCE_CONCEPTS = {
+        "events.firehose.jetstream":"Bluesky","events.kg.wikidata":"Wikidata","events.civic.wikidata":"Wikidata",
+        "events.ai.openalex":"OpenAlex","events.registry.crates":"Crates","events.registry.pypi":"PyPI",
+        "events.registry.npm":"NPM","events.registry.ollama":"Ollama","events.registry.dockerhub":"DockerHub",
+        "events.geo.flights":"Flight","events.geo.quakes":"Earthquake","events.space.weather":"Space Weather",
+        "events.grid.carbonintensity":"Carbon Intensity","events.compute.azure":"Azure","events.compute.vast":"Vast",
+        "events.compute.runpod":"RunPod","events.ai.benchmarks":"Benchmark","events.hw.gpu-specs":"GPU",
+        "events.weather.openmeteo":"Weather","events.energy.pse-pl":"Grid","events.transit.gdansk":"Transit",
+    }
+    def source_concept(src):
+        if not src: return None
+        c = SOURCE_CONCEPTS.get(src)
+        if c: return c
+        seg = src.split('.')[-1]
+        w = [x for x in re.split(r'[-_]', seg) if x and x != "events"]
+        return " ".join(x.capitalize() for x in w[:2]) or None
+    def qualify(sc, name):
+        if not sc: return name
+        if not name: return sc + " Records"
+        if [x.lower() for x in name.split()][:len(sc.split())] == sc.lower().split(): return name
+        words = sc.split() + name.split()
+        dd = []
+        for w in words:
+            if not dd or dd[-1].lower() != w.lower(): dd.append(w)
+        return " ".join(dd if len(dd) <= 4 else dd[:2] + dd[-2:])
+    def heuristic_name(toks, sc):
+        tset = set(toks)
+        for sig, nm in SIGNATURES:
+            if sig <= tset: return qualify(sc, nm)
+        freq = {}
+        for t in toks:
+            if t in PLUMBING or t in HEAD_NOUNS or len(t) < 3: continue
+            freq[t] = freq.get(t, 0) + 1
+        sal = sorted(freq, key=lambda t: (-freq[t], t))[:2]
+        return qualify(sc, (" ".join(s.capitalize() for s in sal) + " Records") if sal else None)
+    NAME_RE = re.compile(r'^[A-Za-z][A-Za-z0-9]*(?: [A-Za-z][A-Za-z0-9]*){1,3}$')
+    BANNED = {"data","json","schema","family","payload","information","misc","unknown"}
+    def licensed(name, toks, baseline, sc):
+        if not name or not NAME_RE.match(name) or len(name) > 40: return False
+        low = [w.lower() for w in name.split()]
+        if any(w in BANNED for w in low): return False
+        lic = set(toks) | HEAD_NOUNS | {w.lower() for w in (baseline or "").split()} | {w.lower() for w in (sc or "").split()}
+        for w in low:
+            if not (w in lic or (w.endswith("s") and w[:-1] in lic) or (w + "s") in lic): return False
+        return True
+
+    # --- the two prompt variants -----------------------------------------------
+    SYS_FEWSHOT = ("You name data schemas. Given the SOURCE the records come from, the schema's field "
+                   "names, and a safe baseline name, output a 2 to 4 word Title Case name describing the "
+                   "KIND of record. Use only concepts supported by the source or the field names. Never "
+                   "output the words Data, JSON, Schema, Family, Payload, Information, Misc, or Unknown. No "
+                   "explanations. The baseline is safe; change it only when the source or fields clearly "
+                   "support a better name. Respond as JSON: {\"name\": \"...\"}.")
+    FEWSHOT = [
+        ("Source: OpenAlex. Fields: doi, author, title, journal, year. Baseline: Scholarly Works", "Scholarly Works"),
+        ("Source: Weather. Fields: latitude, longitude, observed_at, station. Baseline: Weather Location Observations", "Weather Station Observations"),
+        ("Source: Crates. Fields: name, downloads, version. Baseline: Crates Package Downloads", "Crates Package Downloads"),
+        ("Source: Flight. Fields: callsign, altitude, velocity. Baseline: Flight Positions", "Flight Positions"),
+    ]
+    SYS_COMPACT = ("Name the data schema in 2-4 Title Case words describing the kind of record, using only "
+                   "the given source and field concepts. No Data/JSON/Schema/Unknown. JSON: {\"name\":\"...\"}.")
+    def build(variant, sc, flds, baseline):
+        u = "Source: %s. Fields: %s. Baseline: %s" % (sc or "unknown", flds, baseline)
+        if variant == "fewshot":
+            m = [{"role":"system","content":SYS_FEWSHOT}]
+            for a, b in FEWSHOT:
+                m += [{"role":"user","content":a},{"role":"assistant","content":json.dumps({"name":b})}]
+            m.append({"role":"user","content":u}); return m
+        return [{"role":"system","content":SYS_COMPACT},{"role":"user","content":u}]
+    def call(msgs):
+        body = {"model":MODEL,"messages":msgs,"stream":False,
+                "format":{"type":"object","properties":{"name":{"type":"string"}},"required":["name"]},
+                "options":{"temperature":0,"seed":SEED,"num_predict":32}}
+        r = urllib.request.Request(OLLAMA, data=json.dumps(body).encode(), headers=H, method="POST")
+        t0 = time.monotonic()
+        try:
+            with urllib.request.urlopen(r, timeout=CALL_TIMEOUT) as resp:
+                d = json.loads(resp.read() or "null")
+            wall = (time.monotonic() - t0) * 1000
+            nm = None
+            try: nm = json.loads(d["message"]["content"]).get("name")
+            except Exception: pass
+            return {"ok":True,"wall":wall,"load":d.get("load_duration",0)/1e6,
+                    "peval":d.get("prompt_eval_duration",0)/1e6,"ptoks":d.get("prompt_eval_count",0),
+                    "eval":d.get("eval_duration",0)/1e6,"etoks":d.get("eval_count",0),
+                    "total":d.get("total_duration",0)/1e6,"name":nm}
+        except Exception as e:
+            return {"ok":False,"wall":(time.monotonic()-t0)*1000,"err":repr(e)}
+
+    def req_get(path):
+        r = urllib.request.Request(BASE + path, headers=H, method="GET")
+        with urllib.request.urlopen(r, timeout=25) as resp:
+            return json.loads(resp.read() or "null")
+
+    def pct(xs, p):
+        if not xs: return 0.0
+        xs = sorted(xs); k = min(len(xs)-1, int(round((p/100.0)*(len(xs)-1))))
+        return xs[k]
+
+    # --- collect a sample of schemas (prefer ones with a resolvable source) -----
+    schemas = []; cursor = None
+    while len(schemas) < 400:
+        d = req_get("/api/v1/schemas?limit=200" + ("&cursor=" + urllib.parse.quote(cursor, safe='') if cursor else ""))
+        for r in d.get("data", []):
+            try: canon = json.loads(r["canonical"])
+            except Exception: continue
+            toks, leaves = field_tokens(canon)
+            if not leaves: continue
+            prov = r.get("provenance") or {}
+            src = prov.get("source")
+            schemas.append((toks, leaves, source_concept(src)))
+        cursor = d.get("next_cursor")
+        if not cursor: break
+    sample = schemas[:SAMPLE]
+    print("=== namer benchmark: %d schemas x 2 variants, prod budget %dms ===" % (len(sample), PROD_BUDGET_MS))
+
+    # warm the model (excluded from stats) so 'load' reflects steady state not first-hit
+    if sample:
+        t, l, s = sample[0]; call(build("compact", s, ", ".join(sorted(set(l))[:40]), heuristic_name(t, s) or "Records"))
+
+    report = {}
+    for variant in ("fewshot", "compact"):
+        M = {"wall":[],"load":[],"peval":[],"ptoks":[],"eval":[],"etoks":[],"total":[]}
+        ok = valid = lic = accept = over = err = 0
+        for toks, leaves, sc in sample:
+            base = heuristic_name(toks, sc) or "Records"
+            flds = ", ".join(sorted(set(leaves))[:40])
+            res = call(build(variant, sc, flds, base))
+            if not res["ok"]:
+                err += 1; continue
+            ok += 1
+            for k in M: M[k].append(res[k])
+            if res["wall"] > PROD_BUDGET_MS: over += 1
+            nm = res["name"]
+            if nm and NAME_RE.match(nm) and not any(w.lower() in BANNED for w in nm.split()):
+                valid += 1
+                if licensed(nm, toks, base, sc):
+                    lic += 1
+                    if nm != base: accept += 1
+        report[variant] = (M, ok, valid, lic, accept, over, err)
+
+    def line(label, xs, unit="ms"):
+        if not xs: return "  %-14s n=0" % label
+        return "  %-14s p50=%7.0f  p95=%7.0f  max=%7.0f %s" % (label, pct(xs,50), pct(xs,95), max(xs), unit)
+    for variant in ("fewshot", "compact"):
+        M, ok, valid, lic, accept, over, err = report[variant]
+        n = max(ok, 1)
+        print("\n--- variant: %s  (ok=%d err=%d) ---" % (variant.upper(), ok, err))
+        print(line("wall", M["wall"]))
+        print(line("  load", M["load"]))
+        print(line("  prompt_eval", M["peval"]))
+        print(line("  eval", M["eval"]))
+        print("  prompt_tokens  mean=%.0f      eval_tokens mean=%.0f" % (
+            statistics.mean(M["ptoks"]) if M["ptoks"] else 0, statistics.mean(M["etoks"]) if M["etoks"] else 0))
+        print("  queue/http gap p50=%.0fms (wall - ollama total)" % (
+            pct([w - t for w, t in zip(M["wall"], M["total"])], 50) if M["total"] else 0))
+        print("  OVER prod budget(%dms): %d/%d (%.0f%%)" % (PROD_BUDGET_MS, over, ok, 100.0*over/n))
+        print("  format-valid: %d/%d (%.0f%%)  licensed: %d/%d  accept-vs-heuristic: %d/%d" % (
+            valid, ok, 100.0*valid/n, lic, ok, accept, ok))
+    print("\n=== read this ===")
+    print("If LOAD p50 is large every call -> model not staying resident (fix keep-alive), a LoRA won't help.")
+    print("If PROMPT_EVAL dominates & compact cuts it a lot with similar valid% -> drop few-shot (free win).")
+    print("If EVAL dominates -> shrink num_predict / output; LoRA (fewer wasted tokens) may help.")
+    print("If QUEUE gap dominates -> Ollama concurrency/contention, not the prompt.")
+---
+apiVersion: batch/v1
+kind: Job
+metadata: {name: namer-benchmark, namespace: deblob, labels: {app: namer-benchmark}}
+spec:
+  backoffLimit: 0
+  activeDeadlineSeconds: 1200
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata: {labels: {app: namer-benchmark}}
+    spec:
+      restartPolicy: Never
+      affinity: {nodeAffinity: {requiredDuringSchedulingIgnoredDuringExecution: {nodeSelectorTerms: [{matchExpressions: [{key: node-role.kubernetes.io/control-plane, operator: DoesNotExist}]}]}}}
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: benchmark
+        image: python:3.12-alpine
+        command: ["python3", "/scripts/run.py"]
+        env:
+        - {name: DEBLOB_API_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: api_token}}}
+        - {name: SAMPLE, value: "16"}
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 500m, memory: 128Mi}}
+        volumeMounts: [{name: script, mountPath: /scripts, readOnly: true}]
+      volumes:
+      - {name: script, configMap: {name: namer-benchmark-py}}
