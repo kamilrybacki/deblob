@@ -22,7 +22,7 @@ data:
   run.py: |
     import os, re, json, sys, time, hashlib, urllib.parse, urllib.request, urllib.error
     BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
-    OLLAMA = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
+    OLLAMA_URL = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
     MODEL = "qwen2.5:0.5b"
     PROMPT_VERSION = "v1"
     NORMALIZER_VERSION = "v1"
@@ -129,7 +129,15 @@ data:
         ("Fields: repository, actor, ref, payload. Baseline: Repository Events", "Repository Events"),
         ("Fields: sku, warehouse, on_hand. Baseline: Sku Warehouse Records", "Inventory Levels"),
     ]
+    # A timed-out / failing Ollama is a NORMAL fallback to the deterministic
+    # heuristic — NEVER a job failure (unlike the deblob-API calls, which DO
+    # increment FAIL via req()). Qwen2.5-0.5B on CPU is slow; after 3 consecutive
+    # Ollama failures we open a circuit breaker and go heuristic-only for the rest
+    # of the run, so slow inference can't burn the whole time budget or fail the job.
+    OLLAMA = {"consec_fail": 0, "dead": False, "url": OLLAMA_URL}
     def slm_name(leaves, baseline):
+        if OLLAMA["dead"]:
+            return None
         msgs = [{"role": "system", "content": SYS}]
         for u, a in FEWSHOT:
             msgs.append({"role": "user", "content": u})
@@ -139,12 +147,17 @@ data:
         body = {"model": MODEL, "messages": msgs, "stream": False,
                 "format": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]},
                 "options": {"temperature": 0, "seed": SEED, "num_predict": 32}}
-        st, d = req("POST", "", body, base=OLLAMA, raw=True, timeout=20)
-        if st != 200 or not d:
-            return None
+        r = urllib.request.Request(OLLAMA["url"], data=json.dumps(body).encode(), headers=H, method="POST")
         try:
+            with urllib.request.urlopen(r, timeout=15) as resp:
+                d = json.loads(resp.read() or "null")
+            OLLAMA["consec_fail"] = 0
             return json.loads(d["message"]["content"]).get("name")
-        except (KeyError, TypeError, json.JSONDecodeError):
+        except Exception as e:   # any Ollama failure -> heuristic fallback, NOT a job failure
+            OLLAMA["consec_fail"] += 1
+            if OLLAMA["consec_fail"] >= 3:
+                OLLAMA["dead"] = True
+                print("ollama circuit-breaker OPEN (3 consecutive failures) -> heuristic-only for rest of run")
             return None
 
     BANNED = {"data","json","schema","family","payload","information","misc","unknown"}
