@@ -9,7 +9,7 @@
 
 use crate::executor::{self, value_scalar_type};
 use crate::types::{
-    Cardinality, ChildTransform, FieldType, JsonPath, Op, OnMissing, ScalarType, UmbrellaField,
+    Cardinality, ChildTransform, FieldType, JsonPath, OnMissing, Op, ScalarType, UmbrellaField,
     UmbrellaSchema,
 };
 use crate::units;
@@ -45,9 +45,17 @@ pub enum VerifyIssue {
     #[error("on_missing=omit is illegal for required umbrella field {0}")]
     OmitOnRequired(String),
     #[error("cast to {to:?} at target {target} is lossy from {from:?}")]
-    LossyCast { target: String, from: ScalarType, to: ScalarType },
+    LossyCast {
+        target: String,
+        from: ScalarType,
+        to: ScalarType,
+    },
     #[error("final type {got:?} at target {target} does not match umbrella type {want:?}")]
-    TypeMismatch { target: String, got: ScalarType, want: ScalarType },
+    TypeMismatch {
+        target: String,
+        got: ScalarType,
+        want: ScalarType,
+    },
     #[error("unit op at target {target} is invalid: {reason}")]
     BadUnitOp { target: String, reason: String },
     #[error("synthetic default at target {target} may not satisfy a required field")]
@@ -97,9 +105,7 @@ pub fn verify_static(
             continue;
         }
         let total = transform.bindings.iter().any(|b| {
-            b.target == uf.path
-                && !matches!(b.on_missing, OnMissing::Omit)
-                && !is_synthetic_only(b)
+            b.target == uf.path && !matches!(b.on_missing, OnMissing::Omit) && !is_synthetic_only(b)
         });
         if !total {
             issues.push(VerifyIssue::RequiredNotTotal(String::from(uf.path.clone())));
@@ -112,7 +118,15 @@ pub fn verify_static(
 /// projection) may not make a required field "total".
 fn is_synthetic_only(b: &crate::types::Binding) -> bool {
     matches!(b.on_missing, OnMissing::UseDefault)
-        && b.ops.iter().any(|o| matches!(o, Op::Default { synthetic: true, .. }))
+        && b.ops.iter().any(|o| {
+            matches!(
+                o,
+                Op::Default {
+                    synthetic: true,
+                    ..
+                }
+            )
+        })
         && b.ops.iter().all(|o| matches!(o, Op::Default { .. }))
 }
 
@@ -133,7 +147,9 @@ fn check_op_chain(
     if child.is_array || matches!(uf.ty, FieldType::Array(_)) {
         if !(child.is_array && matches!(uf.ty, FieldType::Array(_))) {
             issues.push(VerifyIssue::TypeMismatch {
-                target: tgt.into(), got: child.ty, want: umbrella_scalar(uf).unwrap_or(child.ty),
+                target: tgt.into(),
+                got: child.ty,
+                want: umbrella_scalar(uf).unwrap_or(child.ty),
             });
         }
         return;
@@ -145,7 +161,11 @@ fn check_op_chain(
         match op {
             Op::Cast { to, .. } => {
                 if !cur.widens_losslessly_to(*to) {
-                    issues.push(VerifyIssue::LossyCast { target: tgt.into(), from: cur, to: *to });
+                    issues.push(VerifyIssue::LossyCast {
+                        target: tgt.into(),
+                        from: cur,
+                        to: *to,
+                    });
                 }
                 cur = *to;
             }
@@ -157,7 +177,10 @@ fn check_op_chain(
                     });
                 }
                 if let Err(e) = units::verify_conversion(from, to, rule_id) {
-                    issues.push(VerifyIssue::BadUnitOp { target: tgt.into(), reason: e.to_string() });
+                    issues.push(VerifyIssue::BadUnitOp {
+                        target: tgt.into(),
+                        reason: e.to_string(),
+                    });
                 }
                 cur = ScalarType::Decimal;
                 cur_unit = Some(to.clone());
@@ -168,7 +191,11 @@ fn check_op_chain(
     // final scalar type must match the umbrella field
     if let Some(want) = umbrella_scalar(uf) {
         if !cur.widens_losslessly_to(want) {
-            issues.push(VerifyIssue::TypeMismatch { target: tgt.into(), got: cur, want });
+            issues.push(VerifyIssue::TypeMismatch {
+                target: tgt.into(),
+                got: cur,
+                want,
+            });
         }
     }
     // final unit must match the umbrella field's declared unit (if any)
@@ -194,7 +221,9 @@ fn value_matches(ty: &FieldType, v: &Value) -> bool {
             Some(got) => got.widens_losslessly_to(*want),
             None => false,
         },
-        FieldType::Array(el) => v.as_array().is_some_and(|a| a.iter().all(|x| value_matches(el, x))),
+        FieldType::Array(el) => v
+            .as_array()
+            .is_some_and(|a| a.iter().all(|x| value_matches(el, x))),
     }
 }
 
@@ -206,12 +235,18 @@ pub fn validate_gold(umbrella: &UmbrellaSchema, event: &Value) -> Vec<String> {
         match crate::path::get(event, &uf.path) {
             None => {
                 if uf.cardinality == Cardinality::Required {
-                    errs.push(format!("required field {} missing", String::from(uf.path.clone())));
+                    errs.push(format!(
+                        "required field {} missing",
+                        String::from(uf.path.clone())
+                    ));
                 }
             }
             Some(v) => {
                 if !value_matches(&uf.ty, v) {
-                    errs.push(format!("field {} has wrong type", String::from(uf.path.clone())));
+                    errs.push(format!(
+                        "field {} has wrong type",
+                        String::from(uf.path.clone())
+                    ));
                 }
             }
         }
@@ -239,19 +274,34 @@ impl ReplayReport {
     }
 }
 
-pub fn replay(transform: &ChildTransform, umbrella: &UmbrellaSchema, samples: &[Value]) -> ReplayReport {
-    let mut report = ReplayReport { samples: samples.len(), failures: Vec::new() };
+pub fn replay(
+    transform: &ChildTransform,
+    umbrella: &UmbrellaSchema,
+    samples: &[Value],
+) -> ReplayReport {
+    let mut report = ReplayReport {
+        samples: samples.len(),
+        failures: Vec::new(),
+    };
     for (i, sample) in samples.iter().enumerate() {
         match executor::apply(transform, sample) {
-            Err(e) => report.failures.push(ReplayFailure::Exec { index: i, error: e.to_string() }),
+            Err(e) => report.failures.push(ReplayFailure::Exec {
+                index: i,
+                error: e.to_string(),
+            }),
             Ok(gold) => {
                 let errs = validate_gold(umbrella, &gold);
                 if !errs.is_empty() {
-                    report.failures.push(ReplayFailure::Invalid { index: i, errors: errs });
+                    report.failures.push(ReplayFailure::Invalid {
+                        index: i,
+                        errors: errs,
+                    });
                 }
                 // determinism: a second application must be byte-identical
                 if executor::apply(transform, sample).ok().as_ref() != Some(&gold) {
-                    report.failures.push(ReplayFailure::NonDeterministic { index: i });
+                    report
+                        .failures
+                        .push(ReplayFailure::NonDeterministic { index: i });
                 }
             }
         }
@@ -266,34 +316,80 @@ mod tests {
     use deblob_core::semantic::{CanonicalFieldId, UnitSystem};
     use serde_json::json;
 
-    fn ucum(c: &str) -> Unit { Unit { system: UnitSystem::Ucum, code: c.into() } }
-    fn scalar(s: ScalarType) -> FieldType { FieldType::Scalar(s) }
-    fn uf(cfid: &str, path: &str, ty: FieldType, unit: Option<Unit>, card: Cardinality) -> UmbrellaField {
+    fn ucum(c: &str) -> Unit {
+        Unit {
+            system: UnitSystem::Ucum,
+            code: c.into(),
+        }
+    }
+    fn scalar(s: ScalarType) -> FieldType {
+        FieldType::Scalar(s)
+    }
+    fn uf(
+        cfid: &str,
+        path: &str,
+        ty: FieldType,
+        unit: Option<Unit>,
+        card: Cardinality,
+    ) -> UmbrellaField {
         UmbrellaField {
             canonical_field_id: CanonicalFieldId::new(cfid),
             path: JsonPath::parse(path).unwrap(),
             name: cfid.into(),
-            ty, unit, cardinality: card,
+            ty,
+            unit,
+            cardinality: card,
         }
     }
     fn cf(path: &str, ty: ScalarType, unit: Option<Unit>) -> ChildField {
-        ChildField { path: JsonPath::parse(path).unwrap(), ty, unit, is_array: false, canonical_field_id: None }
+        ChildField {
+            path: JsonPath::parse(path).unwrap(),
+            ty,
+            unit,
+            is_array: false,
+            canonical_field_id: None,
+        }
     }
     fn bind(src: &str, tgt: &str, ops: Vec<Op>, on_missing: OnMissing) -> Binding {
-        Binding { source: JsonPath::parse(src).unwrap(), target: JsonPath::parse(tgt).unwrap(),
-            ops, on_missing, on_error: OnError::Reject }
+        Binding {
+            source: JsonPath::parse(src).unwrap(),
+            target: JsonPath::parse(tgt).unwrap(),
+            ops,
+            on_missing,
+            on_error: OnError::Reject,
+        }
     }
     fn xform(bindings: Vec<Binding>) -> ChildTransform {
-        ChildTransform { child_schema_id: "sch_a".into(), umbrella_id: "u".into(),
-            child_revision: "a@1".into(), umbrella_revision: "u@1".into(), bindings, unmapped_source_paths: vec![] }
+        ChildTransform {
+            child_schema_id: "sch_a".into(),
+            umbrella_id: "u".into(),
+            child_revision: "a@1".into(),
+            umbrella_revision: "u@1".into(),
+            bindings,
+            unmapped_source_paths: vec![],
+        }
     }
 
     fn weather_umbrella() -> UmbrellaSchema {
         UmbrellaSchema {
-            umbrella_id: "umb_weather".into(), label: "weather_observation".into(), version: 1,
+            umbrella_id: "umb_weather".into(),
+            label: "weather_observation".into(),
+            version: 1,
             fields: vec![
-                uf("air_temperature", "$.air_temperature", scalar(ScalarType::Decimal), Some(ucum("K")), Cardinality::Required),
-                uf("event_time", "$.event_time", scalar(ScalarType::Integer), None, Cardinality::Required),
+                uf(
+                    "air_temperature",
+                    "$.air_temperature",
+                    scalar(ScalarType::Decimal),
+                    Some(ucum("K")),
+                    Cardinality::Required,
+                ),
+                uf(
+                    "event_time",
+                    "$.event_time",
+                    scalar(ScalarType::Integer),
+                    None,
+                    Cardinality::Required,
+                ),
             ],
         }
     }
@@ -301,11 +397,21 @@ mod tests {
     #[test]
     fn sound_transform_passes_static_and_replay() {
         let umb = weather_umbrella();
-        let child = vec![cf("$.main.temp", ScalarType::Decimal, Some(ucum("Cel"))), cf("$.dt", ScalarType::Integer, None)];
+        let child = vec![
+            cf("$.main.temp", ScalarType::Decimal, Some(ucum("Cel"))),
+            cf("$.dt", ScalarType::Integer, None),
+        ];
         let t = xform(vec![
-            bind("$.main.temp", "$.air_temperature",
-                 vec![Op::UnitConvert { from: ucum("Cel"), to: ucum("K"), rule_id: "ucum:Cel->K".into() }],
-                 OnMissing::Reject),
+            bind(
+                "$.main.temp",
+                "$.air_temperature",
+                vec![Op::UnitConvert {
+                    from: ucum("Cel"),
+                    to: ucum("K"),
+                    rule_id: "ucum:Cel->K".into(),
+                }],
+                OnMissing::Reject,
+            ),
             bind("$.dt", "$.event_time", vec![], OnMissing::Reject),
         ]);
         assert_eq!(verify_static(&t, &umb, &child), vec![]);
@@ -317,23 +423,43 @@ mod tests {
     fn required_field_without_total_binding_is_flagged() {
         let umb = weather_umbrella();
         let child = vec![cf("$.dt", ScalarType::Integer, None)];
-        let t = xform(vec![bind("$.dt", "$.event_time", vec![], OnMissing::Reject)]); // air_temperature unmapped
+        let t = xform(vec![bind(
+            "$.dt",
+            "$.event_time",
+            vec![],
+            OnMissing::Reject,
+        )]); // air_temperature unmapped
         let issues = verify_static(&t, &umb, &child);
-        assert!(issues.iter().any(|i| matches!(i, VerifyIssue::RequiredNotTotal(_))));
+        assert!(issues
+            .iter()
+            .any(|i| matches!(i, VerifyIssue::RequiredNotTotal(_))));
     }
 
     #[test]
     fn wrong_unit_op_is_flagged() {
         let umb = weather_umbrella();
-        let child = vec![cf("$.main.temp", ScalarType::Decimal, Some(ucum("Cel"))), cf("$.dt", ScalarType::Integer, None)];
+        let child = vec![
+            cf("$.main.temp", ScalarType::Decimal, Some(ucum("Cel"))),
+            cf("$.dt", ScalarType::Integer, None),
+        ];
         // op.from says K but child unit is Cel
         let t = xform(vec![
-            bind("$.main.temp", "$.air_temperature",
-                 vec![Op::UnitConvert { from: ucum("K"), to: ucum("K"), rule_id: "ucum:Cel->K".into() }], OnMissing::Reject),
+            bind(
+                "$.main.temp",
+                "$.air_temperature",
+                vec![Op::UnitConvert {
+                    from: ucum("K"),
+                    to: ucum("K"),
+                    rule_id: "ucum:Cel->K".into(),
+                }],
+                OnMissing::Reject,
+            ),
             bind("$.dt", "$.event_time", vec![], OnMissing::Reject),
         ]);
         let issues = verify_static(&t, &umb, &child);
-        assert!(issues.iter().any(|i| matches!(i, VerifyIssue::BadUnitOp { .. })));
+        assert!(issues
+            .iter()
+            .any(|i| matches!(i, VerifyIssue::BadUnitOp { .. })));
     }
 
     #[test]
@@ -342,12 +468,21 @@ mod tests {
         let child = vec![cf("$.dt", ScalarType::Integer, None)];
         let t = xform(vec![
             bind("$.dt", "$.event_time", vec![], OnMissing::Reject),
-            bind("$.missing", "$.air_temperature",
-                 vec![Op::Default { value: json!(0.0), synthetic: true }], OnMissing::UseDefault),
+            bind(
+                "$.missing",
+                "$.air_temperature",
+                vec![Op::Default {
+                    value: json!(0.0),
+                    synthetic: true,
+                }],
+                OnMissing::UseDefault,
+            ),
         ]);
         let issues = verify_static(&t, &umb, &child);
-        assert!(issues.iter().any(|i| matches!(i,
-            VerifyIssue::RequiredNotTotal(_) | VerifyIssue::SyntheticSatisfiesRequired { .. })));
+        assert!(issues.iter().any(|i| matches!(
+            i,
+            VerifyIssue::RequiredNotTotal(_) | VerifyIssue::SyntheticSatisfiesRequired { .. }
+        )));
     }
 
     #[test]
@@ -355,12 +490,27 @@ mod tests {
         // umbrella wants event_time Integer, but the child value is a string -> invalid gold
         let umb = weather_umbrella();
         let t = xform(vec![
-            bind("$.main.temp", "$.air_temperature",
-                 vec![Op::UnitConvert { from: ucum("Cel"), to: ucum("K"), rule_id: "ucum:Cel->K".into() }], OnMissing::Reject),
+            bind(
+                "$.main.temp",
+                "$.air_temperature",
+                vec![Op::UnitConvert {
+                    from: ucum("Cel"),
+                    to: ucum("K"),
+                    rule_id: "ucum:Cel->K".into(),
+                }],
+                OnMissing::Reject,
+            ),
             bind("$.dt", "$.event_time", vec![], OnMissing::Reject),
         ]);
-        let rep = replay(&t, &umb, &[json!({"main": {"temp": 25.0}, "dt": "not-an-int"})]);
+        let rep = replay(
+            &t,
+            &umb,
+            &[json!({"main": {"temp": 25.0}, "dt": "not-an-int"})],
+        );
         assert!(!rep.passed());
-        assert!(rep.failures.iter().any(|f| matches!(f, ReplayFailure::Invalid { .. })));
+        assert!(rep
+            .failures
+            .iter()
+            .any(|f| matches!(f, ReplayFailure::Invalid { .. })));
     }
 }

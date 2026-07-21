@@ -14,9 +14,7 @@
 //! canonical digest + candidate id + candidate profile digest).
 
 use deblob_core::id::{CandidateId, SchemaId, ValueProfileId};
-use deblob_core::ports::{
-    value_bucket, LeafTypeCounts, LeafValueProfile, ValueProfileSnapshot,
-};
+use deblob_core::ports::{value_bucket, LeafTypeCounts, LeafValueProfile, ValueProfileSnapshot};
 use deblob_monoid::{FieldNode, NumericBuckets, Profile, TypeCounts, GENERALIZER};
 use sha2::{Digest, Sha256};
 
@@ -160,7 +158,10 @@ mod tests {
         FieldNode {
             present,
             explicit_null: 0,
-            types: TypeCounts { number: present, ..Default::default() },
+            types: TypeCounts {
+                number: present,
+                ..Default::default()
+            },
             children: Default::default(),
             array_elem: None,
             array_empty_seen: false,
@@ -180,7 +181,10 @@ mod tests {
         FieldNode {
             present: total,
             explicit_null: 0,
-            types: TypeCounts { object: total, ..Default::default() },
+            types: TypeCounts {
+                object: total,
+                ..Default::default()
+            },
             children: map,
             array_elem: None,
             array_empty_seen: false,
@@ -200,7 +204,10 @@ mod tests {
                     "amount",
                     leaf_number(
                         100,
-                        NumericBuckets { large_positive: true, ..Default::default() },
+                        NumericBuckets {
+                            large_positive: true,
+                            ..Default::default()
+                        },
                         true,
                     ),
                 ),
@@ -208,7 +215,11 @@ mod tests {
                     "ratio",
                     leaf_number(
                         90,
-                        NumericBuckets { small_positive: true, zero: true, ..Default::default() },
+                        NumericBuckets {
+                            small_positive: true,
+                            zero: true,
+                            ..Default::default()
+                        },
                         false,
                     ),
                 ),
@@ -245,7 +256,10 @@ mod tests {
             count: 5,
             root: object(vec![(
                 "main",
-                object(vec![("temp", leaf_number(5, NumericBuckets::default(), true))]),
+                object(vec![(
+                    "temp",
+                    leaf_number(5, NumericBuckets::default(), true),
+                )]),
             )]),
         };
         let sid = SchemaId::from_digest(&[3u8; 32]);
@@ -259,22 +273,38 @@ mod tests {
     fn id_is_deterministic_across_capture_time_but_varies_by_evidence() {
         let profile = Profile {
             count: 10,
-            root: object(vec![("x", leaf_number(10, NumericBuckets::default(), true))]),
+            root: object(vec![(
+                "x",
+                leaf_number(10, NumericBuckets::default(), true),
+            )]),
         };
         let sid = SchemaId::from_digest(&[5u8; 32]);
         let cid = CandidateId::from_digest(&[6u8; 32]);
         let a = build_snapshot(&sid, "{}", &cid, &profile, 1);
         let b = build_snapshot(&sid, "{}", &cid, &profile, 999);
-        assert_eq!(a.profile_id, b.profile_id, "capture time must not affect id");
+        assert_eq!(
+            a.profile_id, b.profile_id,
+            "capture time must not affect id"
+        );
 
         let profile2 = Profile {
             count: 10,
             root: object(vec![(
                 "x",
-                leaf_number(10, NumericBuckets { negative: true, ..Default::default() }, true),
+                leaf_number(
+                    10,
+                    NumericBuckets {
+                        negative: true,
+                        ..Default::default()
+                    },
+                    true,
+                ),
             )]),
         };
         let c = build_snapshot(&sid, "{}", &cid, &profile2, 1);
-        assert_ne!(a.profile_id, c.profile_id, "different evidence -> different id");
+        assert_ne!(
+            a.profile_id, c.profile_id,
+            "different evidence -> different id"
+        );
     }
 }

@@ -103,7 +103,9 @@ pub fn name_corroborated(names: &[String]) -> bool {
         return false;
     }
     let mut norm = names.iter().map(|n| normalize_name(n));
-    let Some(first) = norm.next() else { return false };
+    let Some(first) = norm.next() else {
+        return false;
+    };
     if first.is_empty() || GENERIC_NAMES.contains(&first.as_str()) {
         return false;
     }
@@ -170,7 +172,11 @@ pub fn evaluate_field(members: &[MemberEvidence], min_support: u64) -> FieldGuar
         ValueVerdict::NotComparable => CauseCode::ValueProfileNotComparable,
     });
 
-    FieldGuard { value_verdict: verdict, name_corroborated: corroborated, causes }
+    FieldGuard {
+        value_verdict: verdict,
+        name_corroborated: corroborated,
+        causes,
+    }
 }
 
 #[cfg(test)]
@@ -195,7 +201,10 @@ mod tests {
             m("a", None, vb::LARGE_POSITIVE, 1000),
             m("b", None, vb::SMALL_POSITIVE, 1000),
         ];
-        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::Contradictory);
+        assert_eq!(
+            value_verdict(&members, MIN_SUPPORT),
+            ValueVerdict::Contradictory
+        );
         let g = evaluate_field(&members, MIN_SUPPORT);
         assert!(g.causes.contains(&CauseCode::ValueProfileContradiction));
     }
@@ -203,10 +212,23 @@ mod tests {
     #[test]
     fn overlapping_masks_are_compatible_not_proven() {
         let members = vec![
-            m("retailPrice", None, vb::SMALL_POSITIVE | vb::MEDIUM_POSITIVE | vb::LARGE_POSITIVE, 5000),
-            m("unitPrice", None, vb::SMALL_POSITIVE | vb::MEDIUM_POSITIVE | vb::LARGE_POSITIVE, 5000),
+            m(
+                "retailPrice",
+                None,
+                vb::SMALL_POSITIVE | vb::MEDIUM_POSITIVE | vb::LARGE_POSITIVE,
+                5000,
+            ),
+            m(
+                "unitPrice",
+                None,
+                vb::SMALL_POSITIVE | vb::MEDIUM_POSITIVE | vb::LARGE_POSITIVE,
+                5000,
+            ),
         ];
-        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::Compatible);
+        assert_eq!(
+            value_verdict(&members, MIN_SUPPORT),
+            ValueVerdict::Compatible
+        );
     }
 
     #[test]
@@ -216,7 +238,10 @@ mod tests {
             m("amount", Some("[cents]"), vb::LARGE_POSITIVE, 1000),
             m("amount", Some("USD"), vb::SMALL_POSITIVE, 1000),
         ];
-        assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::NotComparable);
+        assert_eq!(
+            value_verdict(&members, MIN_SUPPORT),
+            ValueVerdict::NotComparable
+        );
     }
 
     #[test]
@@ -231,16 +256,34 @@ mod tests {
     #[test]
     fn missing_profiles_are_unknown() {
         let members = vec![
-            MemberEvidence { name: "a".into(), unit: None, mask: 0, numeric_count: 0, has_profile: false },
-            MemberEvidence { name: "b".into(), unit: None, mask: 0, numeric_count: 0, has_profile: false },
+            MemberEvidence {
+                name: "a".into(),
+                unit: None,
+                mask: 0,
+                numeric_count: 0,
+                has_profile: false,
+            },
+            MemberEvidence {
+                name: "b".into(),
+                unit: None,
+                mask: 0,
+                numeric_count: 0,
+                has_profile: false,
+            },
         ];
         assert_eq!(value_verdict(&members, MIN_SUPPORT), ValueVerdict::Unknown);
     }
 
     #[test]
     fn identical_nongeneric_names_corroborate() {
-        assert!(name_corroborated(&["retailPrice".into(), "retailPrice".into()]));
-        assert!(name_corroborated(&["retail_price".into(), "retailPrice".into()])); // normalized
+        assert!(name_corroborated(&[
+            "retailPrice".into(),
+            "retailPrice".into()
+        ]));
+        assert!(name_corroborated(&[
+            "retail_price".into(),
+            "retailPrice".into()
+        ])); // normalized
     }
 
     #[test]

@@ -248,7 +248,10 @@ mod tests {
         ) -> Result<Option<SchemaId>, CoreError> {
             unimplemented!("not exercised by enrich_family_id")
         }
-        async fn get_family(&self, _family_id: &FamilyId) -> Result<Option<FamilyRecord>, CoreError> {
+        async fn get_family(
+            &self,
+            _family_id: &FamilyId,
+        ) -> Result<Option<FamilyRecord>, CoreError> {
             unimplemented!("not exercised by enrich_family_id")
         }
         async fn list_family_versions(
@@ -327,8 +330,7 @@ mod tests {
     #[tokio::test]
     async fn re_observed_candidate_is_relabelled_matched() {
         let cand = CandidateId::from_digest(&[7u8; 32]);
-        let evidence: Arc<dyn EvidenceStore> =
-            Arc::new(FakeEvidence(Some(candidate(&cand, 5))));
+        let evidence: Arc<dyn EvidenceStore> = Arc::new(FakeEvidence(Some(candidate(&cand, 5))));
         let event = new_candidate_event(cand.as_str());
 
         let resolved = resolve_matched(&evidence, &event).await;
@@ -339,8 +341,7 @@ mod tests {
     #[tokio::test]
     async fn first_sighting_candidate_stays_new() {
         let cand = CandidateId::from_digest(&[7u8; 32]);
-        let evidence: Arc<dyn EvidenceStore> =
-            Arc::new(FakeEvidence(Some(candidate(&cand, 1))));
+        let evidence: Arc<dyn EvidenceStore> = Arc::new(FakeEvidence(Some(candidate(&cand, 1))));
         let event = new_candidate_event(cand.as_str());
 
         let resolved = resolve_matched(&evidence, &event).await;
@@ -363,8 +364,7 @@ mod tests {
         // A `Tagged` event (schema_ref is a sch_ id) must never be probed as
         // a candidate — resolution only ever touches NewCandidate events.
         let cand = CandidateId::from_digest(&[7u8; 32]);
-        let evidence: Arc<dyn EvidenceStore> =
-            Arc::new(FakeEvidence(Some(candidate(&cand, 99))));
+        let evidence: Arc<dyn EvidenceStore> = Arc::new(FakeEvidence(Some(candidate(&cand, 99))));
         let mut event = base_event("sch_whatever");
         event.outcome = StreamOutcome::Tagged;
 

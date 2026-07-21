@@ -68,7 +68,11 @@ fn umbrella_id_for(sig: &[FieldSig]) -> String {
 /// Build the gold umbrella field set from the shared canonical-field-ids. Each
 /// field's type/unit is taken from a contributing child field carrying that id;
 /// cardinality is Required (every member of an identical-cfid-set group has it).
-fn build_umbrella(umbrella_id: &str, cfids: &[String], members: &[&[ChildField]]) -> UmbrellaSchema {
+fn build_umbrella(
+    umbrella_id: &str,
+    cfids: &[String],
+    members: &[&[ChildField]],
+) -> UmbrellaSchema {
     let mut fields = Vec::new();
     for (i, cfid) in cfids.iter().enumerate() {
         let src = members
@@ -98,7 +102,10 @@ fn build_umbrella(umbrella_id: &str, cfids: &[String], members: &[&[ChildField]]
     }
     UmbrellaSchema {
         umbrella_id: umbrella_id.to_string(),
-        label: format!("consolidated-{}", &umbrella_id[4..12.min(umbrella_id.len())]),
+        label: format!(
+            "consolidated-{}",
+            &umbrella_id[4..12.min(umbrella_id.len())]
+        ),
         version: 1,
         fields,
     }
@@ -173,13 +180,20 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
         }
         let cfids: Vec<String> = sig.iter().map(|(c, _)| c.clone()).collect();
         let umbrella_id = umbrella_id_for(&sig);
-        if let Some(existing) = state.umbrellas.get_umbrella(&umbrella_id).await.map_err(from_store)? {
+        if let Some(existing) = state
+            .umbrellas
+            .get_umbrella(&umbrella_id)
+            .await
+            .map_err(from_store)?
+        {
             if existing.state != UmbrellaState::Provisional {
                 continue; // never clobber a human-decided umbrella
             }
         }
-        let member_fields: Vec<&[ChildField]> =
-            member_idxs.iter().map(|&i| schemas[i].1.as_slice()).collect();
+        let member_fields: Vec<&[ChildField]> = member_idxs
+            .iter()
+            .map(|&i| schemas[i].1.as_slice())
+            .collect();
         let umbrella = build_umbrella(&umbrella_id, &cfids, &member_fields);
         let umbrella_rev = format!("{umbrella_id}@{}", umbrella.version);
 
@@ -188,7 +202,14 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
         for &i in &member_idxs {
             let (rec, fields) = &schemas[i];
             let child_id = rec.schema_id.as_str();
-            let t = assemble_transform(child_id, child_id, &umbrella, &umbrella_rev, fields, &anchor);
+            let t = assemble_transform(
+                child_id,
+                child_id,
+                &umbrella,
+                &umbrella_rev,
+                fields,
+                &anchor,
+            );
             if verify_static(&t, &umbrella, fields).is_empty() {
                 transforms.push(t);
             }
@@ -280,7 +301,11 @@ async fn shadow_evaluate_guard(
                 let p = String::from(cf.path.clone());
                 p.strip_prefix("$.").unwrap_or(&p).to_string()
             };
-            let name = leaf_path.rsplit('.').next().unwrap_or(&leaf_path).to_string();
+            let name = leaf_path
+                .rsplit('.')
+                .next()
+                .unwrap_or(&leaf_path)
+                .to_string();
             let (mask, count) = member_leaves
                 .get(&i)
                 .and_then(|m| m.get(&leaf_path).copied())

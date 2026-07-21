@@ -43,9 +43,18 @@ pub enum UnitError {
     #[error("unknown conversion rule: {0}")]
     UnknownRule(String),
     #[error("rule {rule_id} does not map {from} -> {to}")]
-    RuleMismatch { rule_id: String, from: String, to: String },
+    RuleMismatch {
+        rule_id: String,
+        from: String,
+        to: String,
+    },
     #[error("dimension mismatch: {from} is {from_dim:?}, {to} is {to_dim:?}")]
-    DimensionMismatch { from: String, from_dim: Dimension, to: String, to_dim: Dimension },
+    DimensionMismatch {
+        from: String,
+        from_dim: Dimension,
+        to: String,
+        to_dim: Dimension,
+    },
     #[error("currencies are not statically convertible: {0} -> {1}")]
     CurrencyNotConvertible(String, String),
 }
@@ -87,20 +96,104 @@ const DIMENSIONS: &[(&str, Dimension)] = &[
 /// Closed conversion table. Every rule is exact-linear and reversible; both
 /// directions are listed explicitly so no code has to invert a rule at runtime.
 const RULES: &[ConversionRule] = &[
-    ConversionRule { rule_id: "ucum:Cel->K", from_code: "Cel", to_code: "K", factor: 1.0, offset: 273.15 },
-    ConversionRule { rule_id: "ucum:K->Cel", from_code: "K", to_code: "Cel", factor: 1.0, offset: -273.15 },
-    ConversionRule { rule_id: "ucum:hPa->Pa", from_code: "hPa", to_code: "Pa", factor: 100.0, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:Pa->hPa", from_code: "Pa", to_code: "hPa", factor: 0.01, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:kPa->Pa", from_code: "kPa", to_code: "Pa", factor: 1000.0, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:kW->W", from_code: "kW", to_code: "W", factor: 1000.0, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:MW->W", from_code: "MW", to_code: "W", factor: 1_000_000.0, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:GW->W", from_code: "GW", to_code: "W", factor: 1_000_000_000.0, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:W->kW", from_code: "W", to_code: "kW", factor: 0.001, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:W->MW", from_code: "W", to_code: "MW", factor: 0.000_001, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:km->m", from_code: "km", to_code: "m", factor: 1000.0, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:m->km", from_code: "m", to_code: "km", factor: 0.001, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:h->s", from_code: "h", to_code: "s", factor: 3600.0, offset: 0.0 },
-    ConversionRule { rule_id: "ucum:min->s", from_code: "min", to_code: "s", factor: 60.0, offset: 0.0 },
+    ConversionRule {
+        rule_id: "ucum:Cel->K",
+        from_code: "Cel",
+        to_code: "K",
+        factor: 1.0,
+        offset: 273.15,
+    },
+    ConversionRule {
+        rule_id: "ucum:K->Cel",
+        from_code: "K",
+        to_code: "Cel",
+        factor: 1.0,
+        offset: -273.15,
+    },
+    ConversionRule {
+        rule_id: "ucum:hPa->Pa",
+        from_code: "hPa",
+        to_code: "Pa",
+        factor: 100.0,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:Pa->hPa",
+        from_code: "Pa",
+        to_code: "hPa",
+        factor: 0.01,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:kPa->Pa",
+        from_code: "kPa",
+        to_code: "Pa",
+        factor: 1000.0,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:kW->W",
+        from_code: "kW",
+        to_code: "W",
+        factor: 1000.0,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:MW->W",
+        from_code: "MW",
+        to_code: "W",
+        factor: 1_000_000.0,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:GW->W",
+        from_code: "GW",
+        to_code: "W",
+        factor: 1_000_000_000.0,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:W->kW",
+        from_code: "W",
+        to_code: "kW",
+        factor: 0.001,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:W->MW",
+        from_code: "W",
+        to_code: "MW",
+        factor: 0.000_001,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:km->m",
+        from_code: "km",
+        to_code: "m",
+        factor: 1000.0,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:m->km",
+        from_code: "m",
+        to_code: "km",
+        factor: 0.001,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:h->s",
+        from_code: "h",
+        to_code: "s",
+        factor: 3600.0,
+        offset: 0.0,
+    },
+    ConversionRule {
+        rule_id: "ucum:min->s",
+        from_code: "min",
+        to_code: "s",
+        factor: 60.0,
+        offset: 0.0,
+    },
 ];
 
 /// The dimension a unit measures, or `None` if its code is not in the closed
@@ -108,9 +201,10 @@ const RULES: &[ConversionRule] = &[
 pub fn dimension_of(unit: &Unit) -> Option<Dimension> {
     match unit.system {
         UnitSystem::Iso4217 => Some(Dimension::Currency),
-        UnitSystem::Ucum | UnitSystem::Registered => {
-            DIMENSIONS.iter().find(|(c, _)| *c == unit.code).map(|(_, d)| *d)
-        }
+        UnitSystem::Ucum | UnitSystem::Registered => DIMENSIONS
+            .iter()
+            .find(|(c, _)| *c == unit.code)
+            .map(|(_, d)| *d),
     }
 }
 
@@ -130,7 +224,9 @@ pub fn rule(rule_id: &str) -> Option<&'static ConversionRule> {
 /// Find the conversion rule that maps `from`'s code to `to`'s code, if one exists
 /// (used by correspondence enumeration to decide `SAME_QUANTITY_DIFFERENT_UNIT`).
 pub fn find_rule(from: &Unit, to: &Unit) -> Option<&'static ConversionRule> {
-    RULES.iter().find(|r| r.from_code == from.code && r.to_code == to.code)
+    RULES
+        .iter()
+        .find(|r| r.from_code == from.code && r.to_code == to.code)
 }
 
 /// Static check for a `unit_convert` op: the rule exists, its endpoints match the
@@ -141,19 +237,27 @@ pub fn verify_conversion(from: &Unit, to: &Unit, rule_id: &str) -> Result<(), Un
         if from == to {
             return Ok(()); // same-currency passthrough (no scaling) is allowed
         }
-        return Err(UnitError::CurrencyNotConvertible(from.code.clone(), to.code.clone()));
+        return Err(UnitError::CurrencyNotConvertible(
+            from.code.clone(),
+            to.code.clone(),
+        ));
     }
     let from_dim = dimension_of(from).ok_or_else(|| UnitError::UnknownCode(from.code.clone()))?;
     let to_dim = dimension_of(to).ok_or_else(|| UnitError::UnknownCode(to.code.clone()))?;
     if from_dim != to_dim {
         return Err(UnitError::DimensionMismatch {
-            from: from.code.clone(), from_dim, to: to.code.clone(), to_dim,
+            from: from.code.clone(),
+            from_dim,
+            to: to.code.clone(),
+            to_dim,
         });
     }
     let r = rule(rule_id).ok_or_else(|| UnitError::UnknownRule(rule_id.to_string()))?;
     if r.from_code != from.code || r.to_code != to.code {
         return Err(UnitError::RuleMismatch {
-            rule_id: rule_id.to_string(), from: from.code.clone(), to: to.code.clone(),
+            rule_id: rule_id.to_string(),
+            from: from.code.clone(),
+            to: to.code.clone(),
         });
     }
     Ok(())
@@ -170,8 +274,18 @@ pub fn convert(value: f64, rule_id: &str) -> Result<f64, UnitError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn ucum(code: &str) -> Unit { Unit { system: UnitSystem::Ucum, code: code.into() } }
-    fn iso(code: &str) -> Unit { Unit { system: UnitSystem::Iso4217, code: code.into() } }
+    fn ucum(code: &str) -> Unit {
+        Unit {
+            system: UnitSystem::Ucum,
+            code: code.into(),
+        }
+    }
+    fn iso(code: &str) -> Unit {
+        Unit {
+            system: UnitSystem::Iso4217,
+            code: code.into(),
+        }
+    }
 
     #[test]
     fn dimensions_resolve() {
@@ -209,8 +323,14 @@ mod tests {
 
     #[test]
     fn unknown_rule_is_rejected() {
-        assert!(matches!(verify_conversion(&ucum("Cel"), &ucum("K"), "ucum:made-up"), Err(UnitError::UnknownRule(_))));
-        assert!(matches!(convert(1.0, "ucum:made-up"), Err(UnitError::UnknownRule(_))));
+        assert!(matches!(
+            verify_conversion(&ucum("Cel"), &ucum("K"), "ucum:made-up"),
+            Err(UnitError::UnknownRule(_))
+        ));
+        assert!(matches!(
+            convert(1.0, "ucum:made-up"),
+            Err(UnitError::UnknownRule(_))
+        ));
     }
 
     #[test]

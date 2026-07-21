@@ -1697,8 +1697,8 @@ fn approve_fixture() -> (
     deblob_umbrella::types::ChildTransform,
 ) {
     use deblob_umbrella::types::{
-        Binding, Cardinality, ChildTransform, FieldType, JsonPath, OnError, OnMissing,
-        ScalarType, UmbrellaField, UmbrellaSchema,
+        Binding, Cardinality, ChildTransform, FieldType, JsonPath, OnError, OnMissing, ScalarType,
+        UmbrellaField, UmbrellaSchema,
     };
 
     let child_id = lineage_child_schema().schema_id.as_str().to_string();

@@ -328,7 +328,9 @@ mod tests {
         let fake = Arc::new(FakeRegistry::new(ResolveResponse::Miss));
         let m = matcher(fake.clone());
 
-        let out = m.classify("test-source", b"{not json", &Limits::default()).await;
+        let out = m
+            .classify("test-source", b"{not json", &Limits::default())
+            .await;
 
         assert_eq!(out.schema_ref, SchemaRef::Malformed);
         assert!(out.quarantine.is_some());
@@ -430,7 +432,9 @@ mod tests {
         let fake = Arc::new(FakeRegistry::new(ResolveResponse::Err));
         let m = matcher(fake.clone());
 
-        let out = m.classify("test-source", br#"{"x":1}"#, &Limits::default()).await;
+        let out = m
+            .classify("test-source", br#"{"x":1}"#, &Limits::default())
+            .await;
 
         assert_eq!(out.schema_ref, SchemaRef::Unresolved);
         assert_ne!(

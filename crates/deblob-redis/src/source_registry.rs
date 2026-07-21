@@ -104,7 +104,10 @@ impl SourceRegistry for RedisSourceRegistry {
         // converge monotonically regardless of order.
         let existing = self.read(&id).await?;
         let (first_seen_ms, last_seen_ms) = match &existing {
-            Some(r) => (r.first_seen_ms.min(observed_at_ms), r.last_seen_ms.max(observed_at_ms)),
+            Some(r) => (
+                r.first_seen_ms.min(observed_at_ms),
+                r.last_seen_ms.max(observed_at_ms),
+            ),
             None => (observed_at_ms, observed_at_ms),
         };
         let mut conn = self.conn.clone();

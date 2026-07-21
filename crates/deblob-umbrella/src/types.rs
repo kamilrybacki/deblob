@@ -91,7 +91,9 @@ pub struct PathParseError(pub String);
 impl std::convert::TryFrom<String> for JsonPath {
     type Error = PathParseError;
     fn try_from(s: String) -> Result<Self, Self::Error> {
-        let rest = s.strip_prefix("$.").ok_or_else(|| PathParseError(s.clone()))?;
+        let rest = s
+            .strip_prefix("$.")
+            .ok_or_else(|| PathParseError(s.clone()))?;
         if rest.is_empty() {
             return Err(PathParseError(s));
         }
@@ -139,10 +141,17 @@ pub enum Op {
     Cast { to: ScalarType, mode: CastMode },
     /// Registry-backed unit conversion; both units + the rule id are declared and
     /// verified against [`crate::units`].
-    UnitConvert { from: Unit, to: Unit, rule_id: String },
+    UnitConvert {
+        from: Unit,
+        to: Unit,
+        rule_id: String,
+    },
     /// A governance-supplied constant, always flagged synthetic. A synthetic
     /// default can never make a gold field `Required`.
-    Default { value: serde_json::Value, synthetic: bool },
+    Default {
+        value: serde_json::Value,
+        synthetic: bool,
+    },
     /// Cardinality-preserving element-wise mapping over an array value.
     ArrayMap { element_ops: Vec<Op> },
 }
@@ -213,7 +222,10 @@ pub enum Relation {
 impl Relation {
     /// Whether this relation may be automatically bound into a transform in V1.
     pub fn auto_bindable(self) -> bool {
-        matches!(self, Relation::ExactEquivalent | Relation::SameQuantityDifferentUnit)
+        matches!(
+            self,
+            Relation::ExactEquivalent | Relation::SameQuantityDifferentUnit
+        )
     }
 }
 
@@ -247,14 +259,23 @@ mod tests {
     fn only_two_relations_auto_bind() {
         assert!(Relation::ExactEquivalent.auto_bindable());
         assert!(Relation::SameQuantityDifferentUnit.auto_bindable());
-        for r in [Relation::Narrower, Relation::Broader, Relation::Related, Relation::Disjoint, Relation::Unknown] {
+        for r in [
+            Relation::Narrower,
+            Relation::Broader,
+            Relation::Related,
+            Relation::Disjoint,
+            Relation::Unknown,
+        ] {
             assert!(!r.auto_bindable());
         }
     }
 
     #[test]
     fn op_json_is_tagged() {
-        let op = Op::Cast { to: ScalarType::Decimal, mode: CastMode::Lossless };
+        let op = Op::Cast {
+            to: ScalarType::Decimal,
+            mode: CastMode::Lossless,
+        };
         let j = serde_json::to_string(&op).unwrap();
         assert!(j.contains("\"op\":\"cast\""));
     }

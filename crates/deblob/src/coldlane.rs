@@ -73,7 +73,10 @@ pub enum IngestOutcome {
     /// `DiscoveryMsg.cand_id`, or samples attach to the wrong candidate (joint
     /// design `dc-samples-dlp-1907`). `is_new` is `true` iff no candidate
     /// record existed under `candidate_id` before this observation.
-    Ingested { candidate_id: CandidateId, is_new: bool },
+    Ingested {
+        candidate_id: CandidateId,
+        is_new: bool,
+    },
     RateLimited,
 }
 
@@ -679,7 +682,10 @@ mod tests {
                 .ingest(cand_id_of(&json), &node_of(&json), meta("src-a"))
                 .await
                 .unwrap();
-            assert!(matches!(out, IngestOutcome::Ingested { .. }), "sample {i} should ingest");
+            assert!(
+                matches!(out, IngestOutcome::Ingested { .. }),
+                "sample {i} should ingest"
+            );
         }
 
         // 11th brand-new candidate from the SAME source in the same window

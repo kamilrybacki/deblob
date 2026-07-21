@@ -12,8 +12,8 @@ pub mod health;
 pub mod index;
 pub mod lua;
 pub mod registry;
-pub mod semantic;
 pub mod samples;
+pub mod semantic;
 pub mod source_registry;
 pub mod umbrella;
 pub mod value_profile;
@@ -25,13 +25,13 @@ pub use feedback_store::{
     SAFETY_SUITE_DEDUP_PREFIX,
 };
 pub use health::{HealthGate, HealthState, PersistenceHealth};
-pub use source_registry::RedisSourceRegistry;
-pub use samples::{RedisSampleStore, SampleStoreOpts};
-pub use umbrella::RedisUmbrella;
-pub use value_profile::RedisValueProfile;
 pub use index::{bucket_key, bucket_member};
 pub use registry::{RedisOpts, RedisRegistry};
+pub use samples::{RedisSampleStore, SampleStoreOpts};
 pub use semantic::SEM_INDEX_KEY_PATTERN;
+pub use source_registry::RedisSourceRegistry;
+pub use umbrella::RedisUmbrella;
+pub use value_profile::RedisValueProfile;
 
 /// Shared [`redis::aio::ConnectionManagerConfig`] for every long-lived Redis
 /// connection this crate hands out — `RedisRegistry`, `RedisEvidence`, and

@@ -23,13 +23,43 @@ pub enum ScalarClass {
 /// `sessionname`. Over-redaction is acceptable (safety outranks shape); gross
 /// false positives on common fields are not.
 const SENSITIVE_NAME_SUBSTRINGS: &[&str] = &[
-    "password", "passwd", "passphrase", "apikey", "apitoken", "accesstoken",
-    "refreshtoken", "idtoken", "clientsecret", "privatekey", "signingkey",
-    "encryptionkey", "secretkey", "connectionstring", "webhooksecret",
-    "sessionid", "sessiontoken", "setcookie", "cookie", "credential",
-    "mnemonic", "recoverycode", "passport", "taxid", "bankaccount",
-    "routingnumber", "sortcode", "cvv", "iban", "pesel", "ssn", "oauthtoken",
-    "bearertoken", "authtoken", "clientsecret", "pwd", "secret",
+    "password",
+    "passwd",
+    "passphrase",
+    "apikey",
+    "apitoken",
+    "accesstoken",
+    "refreshtoken",
+    "idtoken",
+    "clientsecret",
+    "privatekey",
+    "signingkey",
+    "encryptionkey",
+    "secretkey",
+    "connectionstring",
+    "webhooksecret",
+    "sessionid",
+    "sessiontoken",
+    "setcookie",
+    "cookie",
+    "credential",
+    "mnemonic",
+    "recoverycode",
+    "passport",
+    "taxid",
+    "bankaccount",
+    "routingnumber",
+    "sortcode",
+    "cvv",
+    "iban",
+    "pesel",
+    "ssn",
+    "oauthtoken",
+    "bearertoken",
+    "authtoken",
+    "clientsecret",
+    "pwd",
+    "secret",
 ];
 
 /// Normalize a field name for matching: NFKC, lowercase, keep only
@@ -194,10 +224,7 @@ fn has_payment_card(s: &str) -> bool {
 /// PII appearing ANYWHERE in the value redacts the whole scalar.
 pub fn classify_scalar(s: &str) -> ScalarClass {
     let p = patterns();
-    if p.secret.iter().any(|re| re.is_match(s))
-        || has_high_entropy_blob(s)
-        || has_payment_card(s)
-    {
+    if p.secret.iter().any(|re| re.is_match(s)) || has_high_entropy_blob(s) || has_payment_card(s) {
         return ScalarClass::Secret;
     }
     if p.email.is_match(s) {
@@ -218,10 +245,26 @@ mod tests {
 
     #[test]
     fn sensitive_names_fold_case_and_separators() {
-        for n in ["password", "apiKey", "api_key", "X-Api-Key", "clientSecret", "private_key", "PWD"] {
+        for n in [
+            "password",
+            "apiKey",
+            "api_key",
+            "X-Api-Key",
+            "clientSecret",
+            "private_key",
+            "PWD",
+        ] {
             assert!(sensitive_field_name(n), "should be sensitive: {n}");
         }
-        for n in ["author", "sessionName", "keyboard", "tokenizer", "region", "count", "status"] {
+        for n in [
+            "author",
+            "sessionName",
+            "keyboard",
+            "tokenizer",
+            "region",
+            "count",
+            "status",
+        ] {
             assert!(!sensitive_field_name(n), "should NOT be sensitive: {n}");
         }
     }
@@ -237,7 +280,9 @@ mod tests {
     fn entropy_gate_separates_blobs_from_words() {
         assert!(has_high_entropy_blob("9f8e7d6c5b4a39281706f5e4d3c2b1a0")); // 32 hex
         assert!(!has_high_entropy_blob("0000000000000000000000000000000000")); // low entropy
-        assert!(!has_high_entropy_blob("this is just some normal english text"));
+        assert!(!has_high_entropy_blob(
+            "this is just some normal english text"
+        ));
     }
 
     #[test]

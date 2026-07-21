@@ -321,7 +321,10 @@ pub fn router(state: ApiState) -> Router {
         )
         .route("/candidates", get(candidates::list_candidates))
         .route("/candidates/reindex", post(candidates::reindex))
-        .route("/candidates/{cand_id}/samples", get(candidates::get_candidate_samples))
+        .route(
+            "/candidates/{cand_id}/samples",
+            get(candidates::get_candidate_samples),
+        )
         .route("/candidates/{cand_id}/promote", post(candidates::promote))
         .route("/candidates/{cand_id}/reject", post(candidates::reject))
         .route("/quarantine", get(candidates::quarantine))

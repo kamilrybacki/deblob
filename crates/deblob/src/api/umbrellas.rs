@@ -184,11 +184,18 @@ fn bucket_names(mask: u8) -> Vec<&'static str> {
 /// `$.a.b` → `a.b` (strip the JsonPath root prefix so it joins to a
 /// value-profile leaf path); `$.x` → `x`.
 fn leaf_path_of(json_path: &str) -> String {
-    json_path.strip_prefix("$.").unwrap_or(json_path).to_string()
+    json_path
+        .strip_prefix("$.")
+        .unwrap_or(json_path)
+        .to_string()
 }
 
 fn leaf_name_of(leaf_path: &str) -> String {
-    leaf_path.rsplit('.').next().unwrap_or(leaf_path).to_string()
+    leaf_path
+        .rsplit('.')
+        .next()
+        .unwrap_or(leaf_path)
+        .to_string()
 }
 
 /// Gathers one child schema's value + unit evidence (best-effort: any missing
@@ -210,8 +217,10 @@ async fn child_info(state: &ApiState, child_schema_id: &str) -> ChildInfo {
         if let Ok(Some(snap)) = state.value_profiles.get_value_profile(vp_ref).await {
             info.has_value_profile = true;
             for leaf in snap.leaves {
-                info.leaves
-                    .insert(leaf.path, (leaf.numeric_bucket_mask, leaf.type_counts.number));
+                info.leaves.insert(
+                    leaf.path,
+                    (leaf.numeric_bucket_mask, leaf.type_counts.number),
+                );
             }
         }
     }
@@ -253,7 +262,10 @@ pub async fn get_field_lineage(
         .map_err(ApiError::from_umbrella_store)?;
 
     // Gather each distinct child schema's value + unit evidence once.
-    let mut child_ids: Vec<String> = transforms.iter().map(|t| t.child_schema_id.clone()).collect();
+    let mut child_ids: Vec<String> = transforms
+        .iter()
+        .map(|t| t.child_schema_id.clone())
+        .collect();
     child_ids.sort();
     child_ids.dedup();
     let mut cache: std::collections::HashMap<String, ChildInfo> = std::collections::HashMap::new();
@@ -277,7 +289,9 @@ pub async fn get_field_lineage(
                 let (mask, numeric_count) = info
                     .and_then(|i| i.leaves.get(&leaf_path).copied())
                     .unwrap_or((0, 0));
-                let unit = info.and_then(|i| i.units.get(&leaf_path).cloned()).flatten();
+                let unit = info
+                    .and_then(|i| i.units.get(&leaf_path).cloned())
+                    .flatten();
                 let has_value_profile = info.map(|i| i.has_value_profile).unwrap_or(false);
 
                 evidence.push(crate::umbrella_guard::MemberEvidence {

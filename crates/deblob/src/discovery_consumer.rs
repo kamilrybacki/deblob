@@ -125,10 +125,7 @@ pub async fn run(
         if let Some(payload) = payload {
             match serde_json::from_slice::<DiscoveryMsg>(&payload) {
                 Ok(discovery) => {
-                    let capture = cfg
-                        .sample_store
-                        .as_ref()
-                        .map(|s| (&cfg.sample_capture, s));
+                    let capture = cfg.sample_store.as_ref().map(|s| (&cfg.sample_capture, s));
                     if let Err(err) =
                         handle_discovery_msg(discovery, &cold_lane, &cfg.limits, capture).await
                     {
@@ -180,7 +177,10 @@ pub async fn handle_discovery_msg(
     msg: DiscoveryMsg,
     cold_lane: &ColdLane,
     limits: &Limits,
-    capture: Option<(&crate::sample_capture::SampleCaptureCfg, &Arc<dyn SampleStore>)>,
+    capture: Option<(
+        &crate::sample_capture::SampleCaptureCfg,
+        &Arc<dyn SampleStore>,
+    )>,
 ) -> Result<IngestOutcome, DiscoveryHandleError> {
     let node =
         parse_bounded(&msg.payload, limits).map_err(|_| DiscoveryHandleError::MalformedPayload)?;
@@ -204,7 +204,8 @@ pub async fn handle_discovery_msg(
     // trusted source, keyed on the RESOLVED candidate id, DLP-redacted before
     // store. Any failure drops the sample; ingest NEVER fails on it, and no raw
     // payload is ever logged.
-    if let (Some((cfg, store)), IngestOutcome::Ingested { candidate_id, .. }) = (capture, &outcome) {
+    if let (Some((cfg, store)), IngestOutcome::Ingested { candidate_id, .. }) = (capture, &outcome)
+    {
         if let Some(record) = crate::sample_capture::build_sample(
             cfg,
             &cap_source,
@@ -415,7 +416,9 @@ mod tests {
         let cand_id = cand_id_of(payload);
         let msg = discovery_msg(&cand_id, payload, "events.raw", 42);
 
-        let outcome = handle_discovery_msg(msg, &lane, &limits, None).await.unwrap();
+        let outcome = handle_discovery_msg(msg, &lane, &limits, None)
+            .await
+            .unwrap();
         assert!(matches!(outcome, IngestOutcome::Ingested { .. }));
 
         let stored = evidence
@@ -470,7 +473,9 @@ mod tests {
         let mut msg = discovery_msg(&cand_id_of(r#"{"a":1}"#), r#"{"a":1}"#, "events.raw", 0);
         msg.cand_id = "not-a-valid-cand-id".to_string();
 
-        let err = handle_discovery_msg(msg, &lane, &limits, None).await.unwrap_err();
+        let err = handle_discovery_msg(msg, &lane, &limits, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, DiscoveryHandleError::InvalidCandidateId));
     }
 
@@ -484,7 +489,9 @@ mod tests {
         let mut msg = discovery_msg(&cand_id, r#"{"a":1}"#, "events.raw", 0);
         msg.payload = Bytes::from(b"not json at all".to_vec());
 
-        let err = handle_discovery_msg(msg, &lane, &limits, None).await.unwrap_err();
+        let err = handle_discovery_msg(msg, &lane, &limits, None)
+            .await
+            .unwrap_err();
         assert!(matches!(err, DiscoveryHandleError::MalformedPayload));
     }
 }

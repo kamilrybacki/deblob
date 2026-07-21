@@ -177,7 +177,12 @@ impl ValueProfileStore for InMemoryValueProfileStore {
         &self,
         id: &ValueProfileId,
     ) -> Result<Option<ValueProfileSnapshot>, CoreError> {
-        Ok(self.inner.lock().expect("poisoned").get(id.as_str()).cloned())
+        Ok(self
+            .inner
+            .lock()
+            .expect("poisoned")
+            .get(id.as_str())
+            .cloned())
     }
 }
 
@@ -559,7 +564,10 @@ pub struct InMemorySampleStore {
 
 impl InMemorySampleStore {
     pub fn new(max_per_candidate: usize) -> Self {
-        Self { max_per_candidate, inner: std::sync::Mutex::new(std::collections::HashMap::new()) }
+        Self {
+            max_per_candidate,
+            inner: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
     }
 }
 
@@ -567,7 +575,9 @@ impl InMemorySampleStore {
 impl SampleStore for InMemorySampleStore {
     async fn put_sample(&self, sample: &SampleRecord) -> Result<bool, CoreError> {
         let mut map = self.inner.lock().expect("poisoned");
-        let v = map.entry(sample.candidate_id.as_str().to_string()).or_default();
+        let v = map
+            .entry(sample.candidate_id.as_str().to_string())
+            .or_default();
         if v.iter().any(|s| s.sample_id == sample.sample_id) {
             return Ok(false); // replay dup
         }
@@ -673,11 +683,22 @@ impl SourceRegistry for InMemorySourceRegistry {
     }
 
     async fn get_source(&self, id: &SourceId) -> Result<Option<SourceRecord>, CoreError> {
-        Ok(self.inner.lock().expect("poisoned").get(id.as_str()).cloned())
+        Ok(self
+            .inner
+            .lock()
+            .expect("poisoned")
+            .get(id.as_str())
+            .cloned())
     }
 
     async fn list_sources(&self) -> Result<Vec<SourceRecord>, CoreError> {
-        Ok(self.inner.lock().expect("poisoned").values().cloned().collect())
+        Ok(self
+            .inner
+            .lock()
+            .expect("poisoned")
+            .values()
+            .cloned()
+            .collect())
     }
 }
 

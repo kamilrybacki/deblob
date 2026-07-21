@@ -21,8 +21,10 @@ pub mod types;
 pub mod units;
 pub mod verify;
 
-pub use store::{InMemoryUmbrellaStore, StoreError, StoredUmbrella, UmbrellaBundle, UmbrellaState, UmbrellaStore};
+pub use store::{
+    InMemoryUmbrellaStore, StoreError, StoredUmbrella, UmbrellaBundle, UmbrellaState, UmbrellaStore,
+};
 pub use types::{
-    Binding, Cardinality, CastMode, ChildTransform, FieldType, JsonPath, Op, OnError, OnMissing,
+    Binding, Cardinality, CastMode, ChildTransform, FieldType, JsonPath, OnError, OnMissing, Op,
     Relation, ScalarType, UmbrellaField, UmbrellaSchema,
 };

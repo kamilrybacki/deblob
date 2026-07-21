@@ -61,8 +61,11 @@ fn parse_state(s: &str) -> Option<UmbrellaState> {
         _ => None,
     }
 }
-const ALL_STATES: [UmbrellaState; 3] =
-    [UmbrellaState::Provisional, UmbrellaState::Active, UmbrellaState::Rejected];
+const ALL_STATES: [UmbrellaState; 3] = [
+    UmbrellaState::Provisional,
+    UmbrellaState::Active,
+    UmbrellaState::Rejected,
+];
 
 fn backend(e: impl std::fmt::Display) -> StoreError {
     StoreError::Backend(e.to_string())
@@ -76,13 +79,23 @@ impl RedisUmbrella {
 
 #[async_trait]
 impl UmbrellaStore for RedisUmbrella {
-    async fn put_umbrella(&self, schema: &UmbrellaSchema, state: UmbrellaState) -> Result<(), StoreError> {
+    async fn put_umbrella(
+        &self,
+        schema: &UmbrellaSchema,
+        state: UmbrellaState,
+    ) -> Result<(), StoreError> {
         let mut conn = self.conn.clone();
         let json = serde_json::to_string(schema).map_err(backend)?;
         let id = &schema.umbrella_id;
         let mut pipe = redis::pipe();
         pipe.atomic()
-            .cmd("HSET").arg(umb_key(id)).arg("record").arg(&json).arg("state").arg(state_str(state)).ignore();
+            .cmd("HSET")
+            .arg(umb_key(id))
+            .arg("record")
+            .arg(&json)
+            .arg("state")
+            .arg(state_str(state))
+            .ignore();
         // exactly one state-index membership
         for s in ALL_STATES {
             if s == state {
@@ -98,9 +111,16 @@ impl UmbrellaStore for RedisUmbrella {
     async fn get_umbrella(&self, id: &str) -> Result<Option<StoredUmbrella>, StoreError> {
         let mut conn = self.conn.clone();
         let fields: Vec<Option<String>> = redis::cmd("HMGET")
-            .arg(umb_key(id)).arg("record").arg("state")
-            .query_async(&mut conn).await.map_err(backend)?;
-        match (fields.first().cloned().flatten(), fields.get(1).cloned().flatten()) {
+            .arg(umb_key(id))
+            .arg("record")
+            .arg("state")
+            .query_async(&mut conn)
+            .await
+            .map_err(backend)?;
+        match (
+            fields.first().cloned().flatten(),
+            fields.get(1).cloned().flatten(),
+        ) {
             (Some(record), Some(state)) => {
                 let schema: UmbrellaSchema = serde_json::from_str(&record).map_err(backend)?;
                 let state = parse_state(&state)
@@ -113,13 +133,21 @@ impl UmbrellaStore for RedisUmbrella {
 
     async fn set_state(&self, id: &str, state: UmbrellaState) -> Result<(), StoreError> {
         let mut conn = self.conn.clone();
-        let exists: bool = redis::cmd("EXISTS").arg(umb_key(id)).query_async(&mut conn).await.map_err(backend)?;
+        let exists: bool = redis::cmd("EXISTS")
+            .arg(umb_key(id))
+            .query_async(&mut conn)
+            .await
+            .map_err(backend)?;
         if !exists {
             return Err(StoreError::UmbrellaNotFound(id.to_string()));
         }
         let mut pipe = redis::pipe();
         pipe.atomic()
-            .cmd("HSET").arg(umb_key(id)).arg("state").arg(state_str(state)).ignore();
+            .cmd("HSET")
+            .arg(umb_key(id))
+            .arg("state")
+            .arg(state_str(state))
+            .ignore();
         for s in ALL_STATES {
             if s == state {
                 pipe.cmd("SADD").arg(state_index(s)).arg(id).ignore();
@@ -131,10 +159,16 @@ impl UmbrellaStore for RedisUmbrella {
         Ok(())
     }
 
-    async fn list_umbrellas(&self, state: UmbrellaState) -> Result<Vec<StoredUmbrella>, StoreError> {
+    async fn list_umbrellas(
+        &self,
+        state: UmbrellaState,
+    ) -> Result<Vec<StoredUmbrella>, StoreError> {
         let mut conn = self.conn.clone();
         let ids: Vec<String> = redis::cmd("SMEMBERS")
-            .arg(state_index(state)).query_async(&mut conn).await.map_err(backend)?;
+            .arg(state_index(state))
+            .query_async(&mut conn)
+            .await
+            .map_err(backend)?;
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             if let Some(u) = self.get_umbrella(&id).await? {
@@ -147,24 +181,44 @@ impl UmbrellaStore for RedisUmbrella {
     async fn put_transform(&self, t: &ChildTransform) -> Result<(), StoreError> {
         let mut conn = self.conn.clone();
         let json = serde_json::to_string(t).map_err(backend)?;
-        redis::pipe().atomic()
-            .cmd("SET").arg(transform_key(&t.umbrella_id, &t.child_schema_id)).arg(json).ignore()
-            .cmd("SADD").arg(transforms_index(&t.umbrella_id)).arg(&t.child_schema_id).ignore()
-            .query_async::<()>(&mut conn).await.map_err(backend)?;
+        redis::pipe()
+            .atomic()
+            .cmd("SET")
+            .arg(transform_key(&t.umbrella_id, &t.child_schema_id))
+            .arg(json)
+            .ignore()
+            .cmd("SADD")
+            .arg(transforms_index(&t.umbrella_id))
+            .arg(&t.child_schema_id)
+            .ignore()
+            .query_async::<()>(&mut conn)
+            .await
+            .map_err(backend)?;
         Ok(())
     }
 
-    async fn get_transform(&self, umbrella_id: &str, child_id: &str) -> Result<Option<ChildTransform>, StoreError> {
+    async fn get_transform(
+        &self,
+        umbrella_id: &str,
+        child_id: &str,
+    ) -> Result<Option<ChildTransform>, StoreError> {
         let mut conn = self.conn.clone();
         let json: Option<String> = redis::cmd("GET")
-            .arg(transform_key(umbrella_id, child_id)).query_async(&mut conn).await.map_err(backend)?;
-        json.map(|j| serde_json::from_str(&j).map_err(backend)).transpose()
+            .arg(transform_key(umbrella_id, child_id))
+            .query_async(&mut conn)
+            .await
+            .map_err(backend)?;
+        json.map(|j| serde_json::from_str(&j).map_err(backend))
+            .transpose()
     }
 
     async fn list_transforms(&self, umbrella_id: &str) -> Result<Vec<ChildTransform>, StoreError> {
         let mut conn = self.conn.clone();
         let children: Vec<String> = redis::cmd("SMEMBERS")
-            .arg(transforms_index(umbrella_id)).query_async(&mut conn).await.map_err(backend)?;
+            .arg(transforms_index(umbrella_id))
+            .query_async(&mut conn)
+            .await
+            .map_err(backend)?;
         let mut out = Vec::with_capacity(children.len());
         for c in children {
             if let Some(t) = self.get_transform(umbrella_id, &c).await? {
@@ -188,14 +242,35 @@ impl UmbrellaStore for RedisUmbrella {
         let umb_json = serde_json::to_string(&bundle.umbrella).map_err(backend)?;
         let mut pipe = redis::pipe();
         pipe.atomic()
-            .cmd("HSET").arg(umb_key(id)).arg("record").arg(&umb_json).arg("state").arg("active").ignore()
-            .cmd("SADD").arg(state_index(UmbrellaState::Active)).arg(id).ignore()
-            .cmd("SREM").arg(state_index(UmbrellaState::Provisional)).arg(id).ignore()
-            .cmd("SREM").arg(state_index(UmbrellaState::Rejected)).arg(id).ignore();
+            .cmd("HSET")
+            .arg(umb_key(id))
+            .arg("record")
+            .arg(&umb_json)
+            .arg("state")
+            .arg("active")
+            .ignore()
+            .cmd("SADD")
+            .arg(state_index(UmbrellaState::Active))
+            .arg(id)
+            .ignore()
+            .cmd("SREM")
+            .arg(state_index(UmbrellaState::Provisional))
+            .arg(id)
+            .ignore()
+            .cmd("SREM")
+            .arg(state_index(UmbrellaState::Rejected))
+            .arg(id)
+            .ignore();
         for t in &bundle.transforms {
             let tj = serde_json::to_string(t).map_err(backend)?;
-            pipe.cmd("SET").arg(transform_key(id, &t.child_schema_id)).arg(tj).ignore()
-                .cmd("SADD").arg(transforms_index(id)).arg(&t.child_schema_id).ignore();
+            pipe.cmd("SET")
+                .arg(transform_key(id, &t.child_schema_id))
+                .arg(tj)
+                .ignore()
+                .cmd("SADD")
+                .arg(transforms_index(id))
+                .arg(&t.child_schema_id)
+                .ignore();
         }
         pipe.query_async::<()>(&mut conn).await.map_err(backend)?;
         Ok(())

@@ -10,7 +10,7 @@
 //! [`crate::verify`].
 
 use crate::types::{
-    Binding, Cardinality, CastMode, ChildTransform, FieldType, JsonPath, Op, OnError, OnMissing,
+    Binding, Cardinality, CastMode, ChildTransform, FieldType, JsonPath, OnError, OnMissing, Op,
     Relation, ScalarType, UmbrellaField, UmbrellaSchema,
 };
 use crate::units;
@@ -54,12 +54,17 @@ fn umbrella_scalar(uf: &UmbrellaField) -> Option<ScalarType> {
     }
 }
 
-fn unit_relation(child: Option<&deblob_core::semantic::Unit>, umb: Option<&deblob_core::semantic::Unit>) -> UnitRelation {
+fn unit_relation(
+    child: Option<&deblob_core::semantic::Unit>,
+    umb: Option<&deblob_core::semantic::Unit>,
+) -> UnitRelation {
     match (child, umb) {
         (None, None) => UnitRelation::NoUnits,
         (Some(c), Some(u)) if c == u => UnitRelation::Same,
         (Some(c), Some(u)) => match units::find_rule(c, u) {
-            Some(r) => UnitRelation::Convertible { rule_id: r.rule_id.to_string() },
+            Some(r) => UnitRelation::Convertible {
+                rule_id: r.rule_id.to_string(),
+            },
             None => UnitRelation::Incompatible,
         },
         _ => UnitRelation::Incompatible, // unit-vs-unitless
@@ -77,7 +82,9 @@ pub fn enumerate<'a>(
 ) -> Vec<CandidatePair<'a>> {
     let mut pairs = Vec::new();
     for cf in child_fields {
-        let Some(cfid) = &cf.canonical_field_id else { continue };
+        let Some(cfid) = &cf.canonical_field_id else {
+            continue;
+        };
         for uf in &umbrella.fields {
             if &uf.canonical_field_id != cfid {
                 continue;
@@ -87,7 +94,11 @@ pub fn enumerate<'a>(
             pairs.push(CandidatePair {
                 child: cf,
                 umbrella_field: uf,
-                evidence: PairEvidence { canonical_id_match: true, type_lossless, unit },
+                evidence: PairEvidence {
+                    canonical_id_match: true,
+                    type_lossless,
+                    unit,
+                },
             });
         }
     }
@@ -152,19 +163,31 @@ pub fn assemble_transform(
         if bound_children.contains(&pair.child.path.0) {
             continue;
         }
-        if bindings.iter().any(|b| b.target == pair.umbrella_field.path) {
+        if bindings
+            .iter()
+            .any(|b| b.target == pair.umbrella_field.path)
+        {
             continue;
         }
         let mut ops = Vec::new();
         if let Some(want) = umbrella_scalar(pair.umbrella_field) {
             if pair.child.ty != want && pair.child.ty.widens_losslessly_to(want) {
-                ops.push(Op::Cast { to: want, mode: CastMode::Lossless });
+                ops.push(Op::Cast {
+                    to: want,
+                    mode: CastMode::Lossless,
+                });
             }
         }
         if let UnitRelation::Convertible { rule_id } = &pair.evidence.unit {
             // both units are Some here (Convertible only arises for Some/Some)
-            if let (Some(from), Some(to)) = (pair.child.unit.clone(), pair.umbrella_field.unit.clone()) {
-                ops.push(Op::UnitConvert { from, to, rule_id: rule_id.clone() });
+            if let (Some(from), Some(to)) =
+                (pair.child.unit.clone(), pair.umbrella_field.unit.clone())
+            {
+                ops.push(Op::UnitConvert {
+                    from,
+                    to,
+                    rule_id: rule_id.clone(),
+                });
             }
         }
         let on_missing = if pair.umbrella_field.cardinality == Cardinality::Required {
@@ -205,21 +228,63 @@ mod tests {
     use deblob_core::semantic::{CanonicalFieldId, Unit, UnitSystem};
     use serde_json::json;
 
-    fn ucum(c: &str) -> Unit { Unit { system: UnitSystem::Ucum, code: c.into() } }
-    fn cfid(s: &str) -> CanonicalFieldId { CanonicalFieldId::new(s) }
-    fn scalar(s: ScalarType) -> FieldType { FieldType::Scalar(s) }
-    fn uf(cf: &str, path: &str, ty: FieldType, unit: Option<Unit>, card: Cardinality) -> UmbrellaField {
-        UmbrellaField { canonical_field_id: cfid(cf), path: JsonPath::parse(path).unwrap(), name: cf.into(), ty, unit, cardinality: card }
+    fn ucum(c: &str) -> Unit {
+        Unit {
+            system: UnitSystem::Ucum,
+            code: c.into(),
+        }
+    }
+    fn cfid(s: &str) -> CanonicalFieldId {
+        CanonicalFieldId::new(s)
+    }
+    fn scalar(s: ScalarType) -> FieldType {
+        FieldType::Scalar(s)
+    }
+    fn uf(
+        cf: &str,
+        path: &str,
+        ty: FieldType,
+        unit: Option<Unit>,
+        card: Cardinality,
+    ) -> UmbrellaField {
+        UmbrellaField {
+            canonical_field_id: cfid(cf),
+            path: JsonPath::parse(path).unwrap(),
+            name: cf.into(),
+            ty,
+            unit,
+            cardinality: card,
+        }
     }
     fn cf(path: &str, ty: ScalarType, unit: Option<Unit>, canon: Option<&str>) -> ChildField {
-        ChildField { path: JsonPath::parse(path).unwrap(), ty, unit, is_array: false, canonical_field_id: canon.map(cfid) }
+        ChildField {
+            path: JsonPath::parse(path).unwrap(),
+            ty,
+            unit,
+            is_array: false,
+            canonical_field_id: canon.map(cfid),
+        }
     }
     fn weather() -> UmbrellaSchema {
         UmbrellaSchema {
-            umbrella_id: "umb_weather".into(), label: "weather_observation".into(), version: 1,
+            umbrella_id: "umb_weather".into(),
+            label: "weather_observation".into(),
+            version: 1,
             fields: vec![
-                uf("air_temperature", "$.air_temperature", scalar(ScalarType::Decimal), Some(ucum("K")), Cardinality::Required),
-                uf("event_time", "$.event_time", scalar(ScalarType::Integer), None, Cardinality::Required),
+                uf(
+                    "air_temperature",
+                    "$.air_temperature",
+                    scalar(ScalarType::Decimal),
+                    Some(ucum("K")),
+                    Cardinality::Required,
+                ),
+                uf(
+                    "event_time",
+                    "$.event_time",
+                    scalar(ScalarType::Integer),
+                    None,
+                    Cardinality::Required,
+                ),
             ],
         }
     }
@@ -229,15 +294,31 @@ mod tests {
         let umb = weather();
         // child: main.temp is Celsius (same canonical id, convertible unit); dt is the event time.
         let child = vec![
-            cf("$.main.temp", ScalarType::Decimal, Some(ucum("Cel")), Some("air_temperature")),
+            cf(
+                "$.main.temp",
+                ScalarType::Decimal,
+                Some(ucum("Cel")),
+                Some("air_temperature"),
+            ),
             cf("$.dt", ScalarType::Integer, None, Some("event_time")),
         ];
-        let t = assemble_transform("sch_ow", "sem_ow@1", &umb, "umb_weather@1", &child, &DeterministicAnchor);
+        let t = assemble_transform(
+            "sch_ow",
+            "sem_ow@1",
+            &umb,
+            "umb_weather@1",
+            &child,
+            &DeterministicAnchor,
+        );
         // both fields bound, none parked
         assert_eq!(t.bindings.len(), 2);
         assert!(t.unmapped_source_paths.is_empty());
         // the temperature binding carries a unit_convert
-        let temp = t.bindings.iter().find(|b| String::from(b.target.clone()) == "$.air_temperature").unwrap();
+        let temp = t
+            .bindings
+            .iter()
+            .find(|b| String::from(b.target.clone()) == "$.air_temperature")
+            .unwrap();
         assert!(temp.ops.iter().any(|o| matches!(o, Op::UnitConvert { .. })));
         // it passes the gate + real replay
         assert_eq!(verify_static(&t, &umb, &child), vec![]);
@@ -250,10 +331,23 @@ mod tests {
         // same canonical id, but child unit is Cel and umbrella wants W (different
         // dimension) — a data error the anchor must NOT auto-bind.
         let umb = UmbrellaSchema {
-            umbrella_id: "u".into(), label: "x".into(), version: 1,
-            fields: vec![uf("power", "$.power", scalar(ScalarType::Decimal), Some(ucum("W")), Cardinality::Optional)],
+            umbrella_id: "u".into(),
+            label: "x".into(),
+            version: 1,
+            fields: vec![uf(
+                "power",
+                "$.power",
+                scalar(ScalarType::Decimal),
+                Some(ucum("W")),
+                Cardinality::Optional,
+            )],
         };
-        let child = vec![cf("$.p", ScalarType::Decimal, Some(ucum("Cel")), Some("power"))];
+        let child = vec![cf(
+            "$.p",
+            ScalarType::Decimal,
+            Some(ucum("Cel")),
+            Some("power"),
+        )];
         let pairs = enumerate(&child, &umb);
         assert_eq!(pairs.len(), 1);
         assert_eq!(DeterministicAnchor.adjudicate(&pairs[0]), Relation::Unknown);
@@ -265,7 +359,12 @@ mod tests {
     #[test]
     fn no_canonical_id_yields_no_candidates() {
         let umb = weather();
-        let child = vec![cf("$.main.temp", ScalarType::Decimal, Some(ucum("Cel")), None)];
+        let child = vec![cf(
+            "$.main.temp",
+            ScalarType::Decimal,
+            Some(ucum("Cel")),
+            None,
+        )];
         assert!(enumerate(&child, &umb).is_empty());
     }
 
@@ -277,7 +376,9 @@ mod tests {
         // auto-bindable relation.
         struct RelatedOnly;
         impl Adjudicator for RelatedOnly {
-            fn adjudicate(&self, _: &CandidatePair) -> Relation { Relation::Related }
+            fn adjudicate(&self, _: &CandidatePair) -> Relation {
+                Relation::Related
+            }
         }
         let umb = weather();
         let child = vec![cf("$.dt", ScalarType::Integer, None, Some("event_time"))];

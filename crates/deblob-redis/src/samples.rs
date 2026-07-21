@@ -76,7 +76,9 @@ pub struct RedisSampleStore {
 
 impl std::fmt::Debug for RedisSampleStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("RedisSampleStore").field("opts", &self.opts).finish_non_exhaustive()
+        f.debug_struct("RedisSampleStore")
+            .field("opts", &self.opts)
+            .finish_non_exhaustive()
     }
 }
 
@@ -92,13 +94,18 @@ impl RedisSampleStore {
     /// from the vault — see module docs on why a separate DB number is not
     /// enough (RDB/AOF are instance-wide).
     pub async fn connect(url: &str, opts: SampleStoreOpts) -> Result<Self, CoreError> {
-        let client = redis::Client::open(url)
-            .map_err(|e| CoreError::RegistryUnavailable(format!("invalid sample redis url: {e}")))?;
+        let client = redis::Client::open(url).map_err(|e| {
+            CoreError::RegistryUnavailable(format!("invalid sample redis url: {e}"))
+        })?;
         let conn = client
             .get_connection_manager_with_config(crate::connection_manager_config())
             .await
             .map_err(|e| CoreError::RegistryUnavailable(format!("sample redis connect: {e}")))?;
-        Ok(Self { conn, put_script: Script::new(PUT_SAMPLE_LUA), opts })
+        Ok(Self {
+            conn,
+            put_script: Script::new(PUT_SAMPLE_LUA),
+            opts,
+        })
     }
 }
 

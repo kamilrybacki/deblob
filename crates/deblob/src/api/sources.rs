@@ -100,7 +100,11 @@ pub async fn reconcile(
     for (name, last_seen) in latest {
         // A candidate with an unset (0) last_seen falls back to wall-clock,
         // so a source is never registered with a meaningless zero timestamp.
-        let observed_at = if last_seen > 0 { last_seen } else { fallback_now };
+        let observed_at = if last_seen > 0 {
+            last_seen
+        } else {
+            fallback_now
+        };
         state
             .sources
             .register_source(&name, observed_at)

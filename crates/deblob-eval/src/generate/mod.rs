@@ -289,7 +289,7 @@ mod tests {
     fn family_index_of(case_name: &str) -> &str {
         // "gen_003_02_exact" -> "003"
         case_name
-            .splitn(3, '_')
+            .split('_')
             .nth(1)
             .expect("case names always have a family-index segment")
     }

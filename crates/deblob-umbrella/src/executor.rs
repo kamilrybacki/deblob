@@ -4,7 +4,7 @@
 //! execution). Any op failure rejects the whole event; nothing is silently
 //! dropped or coerced.
 
-use crate::types::{Binding, ChildTransform, Op, OnMissing, ScalarType};
+use crate::types::{Binding, ChildTransform, OnMissing, Op, ScalarType};
 use crate::{path, units};
 use serde_json::Value;
 
@@ -120,7 +120,12 @@ mod tests {
     use deblob_core::semantic::{Unit, UnitSystem};
     use serde_json::json;
 
-    fn ucum(c: &str) -> Unit { Unit { system: UnitSystem::Ucum, code: c.into() } }
+    fn ucum(c: &str) -> Unit {
+        Unit {
+            system: UnitSystem::Ucum,
+            code: c.into(),
+        }
+    }
     fn bind(src: &str, tgt: &str, ops: Vec<Op>, on_missing: OnMissing) -> Binding {
         Binding {
             source: JsonPath::parse(src).unwrap(),
@@ -145,10 +150,22 @@ mod tests {
     fn rename_cast_and_unit_convert() {
         // OpenWeather-ish {main:{temp:25.0 Cel}, dt: 1} -> {air_temperature: 298.15 K, event_time: 1}
         let t = transform(vec![
-            bind("$.main.temp", "$.air_temperature",
-                 vec![Op::Cast { to: ScalarType::Decimal, mode: CastMode::Lossless },
-                      Op::UnitConvert { from: ucum("Cel"), to: ucum("K"), rule_id: "ucum:Cel->K".into() }],
-                 OnMissing::Reject),
+            bind(
+                "$.main.temp",
+                "$.air_temperature",
+                vec![
+                    Op::Cast {
+                        to: ScalarType::Decimal,
+                        mode: CastMode::Lossless,
+                    },
+                    Op::UnitConvert {
+                        from: ucum("Cel"),
+                        to: ucum("K"),
+                        rule_id: "ucum:Cel->K".into(),
+                    },
+                ],
+                OnMissing::Reject,
+            ),
             bind("$.dt", "$.event_time", vec![], OnMissing::Reject),
         ]);
         let child = json!({"main": {"temp": 25.0}, "dt": 1});
@@ -167,11 +184,18 @@ mod tests {
     #[test]
     fn missing_source_rejects_or_defaults() {
         let reject = transform(vec![bind("$.a", "$.x", vec![], OnMissing::Reject)]);
-        assert!(matches!(apply(&reject, &json!({})), Err(ExecError::MissingSource(_))));
+        assert!(matches!(
+            apply(&reject, &json!({})),
+            Err(ExecError::MissingSource(_))
+        ));
 
         let dflt = transform(vec![bind(
-            "$.a", "$.x",
-            vec![Op::Default { value: json!("n/a"), synthetic: true }],
+            "$.a",
+            "$.x",
+            vec![Op::Default {
+                value: json!("n/a"),
+                synthetic: true,
+            }],
             OnMissing::UseDefault,
         )]);
         assert_eq!(apply(&dflt, &json!({})).unwrap(), json!({"x": "n/a"}));
@@ -187,20 +211,33 @@ mod tests {
     fn lossy_cast_is_rejected() {
         // Decimal value, cast to Integer -> lossy -> reject
         let t = transform(vec![bind(
-            "$.a", "$.x",
-            vec![Op::Cast { to: ScalarType::Integer, mode: CastMode::Lossless }],
+            "$.a",
+            "$.x",
+            vec![Op::Cast {
+                to: ScalarType::Integer,
+                mode: CastMode::Lossless,
+            }],
             OnMissing::Reject,
         )]);
-        assert!(matches!(apply(&t, &json!({"a": 1.5})), Err(ExecError::CastFailed { .. })));
+        assert!(matches!(
+            apply(&t, &json!({"a": 1.5})),
+            Err(ExecError::CastFailed { .. })
+        ));
     }
 
     #[test]
     fn array_map_converts_elementwise() {
         // generation_mw: [1.0, 2.0] MW -> [1_000_000, 2_000_000] W
         let t = transform(vec![bind(
-            "$.gen", "$.generation_w",
-            vec![Op::ArrayMap { element_ops: vec![Op::UnitConvert {
-                from: ucum("MW"), to: ucum("W"), rule_id: "ucum:MW->W".into() }] }],
+            "$.gen",
+            "$.generation_w",
+            vec![Op::ArrayMap {
+                element_ops: vec![Op::UnitConvert {
+                    from: ucum("MW"),
+                    to: ucum("W"),
+                    rule_id: "ucum:MW->W".into(),
+                }],
+            }],
             OnMissing::Reject,
         )]);
         let gold = apply(&t, &json!({"gen": [1.0, 2.0]})).unwrap();

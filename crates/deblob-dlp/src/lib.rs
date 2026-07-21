@@ -45,7 +45,10 @@ pub struct DlpConfig {
 
 impl Default for DlpConfig {
     fn default() -> Self {
-        Self { max_findings: 40, max_depth: 32 }
+        Self {
+            max_findings: 40,
+            max_depth: 32,
+        }
     }
 }
 
@@ -103,9 +106,18 @@ impl Ctx<'_> {
 /// Redact a bounded JSON document. Never panics; on any structural limit it
 /// sets `dropped` and the caller stores nothing.
 pub fn redact(value: &Value, cfg: &DlpConfig) -> RedactionOutcome {
-    let mut ctx = Ctx { cfg, counts: RedactionCounts::default(), dynamic_key_seq: 0, dropped: None };
+    let mut ctx = Ctx {
+        cfg,
+        counts: RedactionCounts::default(),
+        dynamic_key_seq: 0,
+        dropped: None,
+    };
     let document = redact_value(value, &mut ctx, 0);
-    RedactionOutcome { document, counts: ctx.counts, dropped: ctx.dropped }
+    RedactionOutcome {
+        document,
+        counts: ctx.counts,
+        dropped: ctx.dropped,
+    }
 }
 
 fn redact_value(v: &Value, ctx: &mut Ctx, depth: u32) -> Value {
@@ -138,9 +150,11 @@ fn redact_value(v: &Value, ctx: &mut Ctx, depth: u32) -> Value {
             }
             Value::Object(out)
         }
-        Value::Array(arr) => {
-            Value::Array(arr.iter().map(|e| redact_value(e, ctx, depth + 1)).collect())
-        }
+        Value::Array(arr) => Value::Array(
+            arr.iter()
+                .map(|e| redact_value(e, ctx, depth + 1))
+                .collect(),
+        ),
         Value::String(s) => match classify_scalar(s) {
             ScalarClass::Secret => {
                 ctx.counts.secret_pattern += 1;
@@ -261,7 +275,10 @@ mod tests {
 
     #[test]
     fn excessive_findings_drops_whole_sample() {
-        let cfg = DlpConfig { max_findings: 2, max_depth: 32 };
+        let cfg = DlpConfig {
+            max_findings: 2,
+            max_depth: 32,
+        };
         let out = redact(
             &json!({"a": "a@x.com", "b": "b@x.com", "c": "c@x.com", "d": "d@x.com"}),
             &cfg,
@@ -291,7 +308,10 @@ mod tests {
             concat!("AIz", "aSyA1234567890abcdefghijklmnopqrstuv"),
             concat!("sk_", "live_abcdefghijklmnop0123456789"),
             concat!("postgres://user:", "s3cr3tpw@db.internal:5432/app"),
-            concat!("eyJ", "hbGciOiJIUzI1NiJ9.eyJhIjoxfQ.c2lnbmF0dXJlX2hlcmVfb2s"),
+            concat!(
+                "eyJ",
+                "hbGciOiJIUzI1NiJ9.eyJhIjoxfQ.c2lnbmF0dXJlX2hlcmVfb2s"
+            ),
         ];
         for c in canaries {
             let out = red(json!({"field": c}));

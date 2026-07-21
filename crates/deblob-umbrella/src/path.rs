@@ -28,7 +28,9 @@ pub fn set(root: &mut Value, path: &JsonPath, v: Value) -> Result<(), PathSetErr
     let mut cur = root;
     let n = path.0.len();
     for (i, seg) in path.0.iter().enumerate() {
-        let obj = cur.as_object_mut().ok_or_else(|| PathSetError(seg.clone()))?;
+        let obj = cur
+            .as_object_mut()
+            .ok_or_else(|| PathSetError(seg.clone()))?;
         if i == n - 1 {
             obj.insert(seg.clone(), v);
             return Ok(());
@@ -55,8 +57,14 @@ mod tests {
     #[test]
     fn get_nested_and_missing() {
         let v = json!({"main": {"temp": 21.5}, "id": "x"});
-        assert_eq!(get(&v, &JsonPath::parse("$.main.temp").unwrap()), Some(&json!(21.5)));
-        assert_eq!(get(&v, &JsonPath::parse("$.id").unwrap()), Some(&json!("x")));
+        assert_eq!(
+            get(&v, &JsonPath::parse("$.main.temp").unwrap()),
+            Some(&json!(21.5))
+        );
+        assert_eq!(
+            get(&v, &JsonPath::parse("$.id").unwrap()),
+            Some(&json!("x"))
+        );
         assert_eq!(get(&v, &JsonPath::parse("$.main.humidity").unwrap()), None);
         assert_eq!(get(&v, &JsonPath::parse("$.nope.deep").unwrap()), None);
     }
@@ -64,7 +72,10 @@ mod tests {
     #[test]
     fn present_null_is_some() {
         let v = json!({"x": null});
-        assert_eq!(get(&v, &JsonPath::parse("$.x").unwrap()), Some(&Value::Null));
+        assert_eq!(
+            get(&v, &JsonPath::parse("$.x").unwrap()),
+            Some(&Value::Null)
+        );
         assert!(exists(&v, &JsonPath::parse("$.x").unwrap()));
         assert!(!exists(&v, &JsonPath::parse("$.y").unwrap()));
     }
