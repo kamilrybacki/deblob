@@ -26,6 +26,16 @@ data:
     # topic recreation (unlike a one-off `rpk topic alter-config`).
     rpk topic alter-config events.firehose.jetstream --set retention.ms=3600000 \
       --brokers "$BROKER" >/dev/null 2>&1 && echo "retention 1h -> events.firehose.jetstream" || true
+    # High-volume durable topics (gdansk transit ~264k/day, wikidata) get a
+    # retention.bytes backstop so an unbounded run can't fill lw-c2's disk.
+    # retention.bytes is PER PARTITION (x4 topics -> ~2 GiB ceiling each). These
+    # were previously set by a one-off `rpk` and were LOST when the topics were
+    # deleted+recreated on the 2026-07-22 wipe (only firehose was reapplied here)
+    # — durable now so any future topic recreation keeps the cap.
+    for HV in events.transit.gdansk events.kg.wikidata; do
+      rpk topic alter-config "$HV" --set retention.bytes=536870912 \
+        --brokers "$BROKER" >/dev/null 2>&1 && echo "retention.bytes 512Mi/part -> $HV" || true
+    done
     echo "bootstrap done"
 ---
 apiVersion: batch/v1
