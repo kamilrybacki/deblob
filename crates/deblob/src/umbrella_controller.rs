@@ -24,18 +24,15 @@ use deblob_umbrella::types::{
 use deblob_umbrella::verify::{verify_static, ChildField};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// The coarse ingest [`Domain`] of a member schema, read from the governed
-/// `provenance.name_meta.source` field that `Registry::list_schemas` overlays
-/// (`jr-deblob-domain-gate-221052`). `None` when the source is unknown — the
-/// domain gate then treats the member as domain-agnostic (one-sided: an unknown
-/// member never triggers a cross-domain suppression on its own).
+/// The coarse ingest [`Domain`] of a member schema. Uses
+/// [`crate::api::semantic::provenance_source`], which prefers the
+/// promote-stamped `provenance.source` (b23, always present) over the
+/// namer-async `name_meta.source` — the latter alone let a cross-domain umbrella
+/// (energy + carbon + weather) leak on the from-scratch rebuild because members
+/// promoted faster than they were named. `None` when the source is unknown (the
+/// gate then treats the member as domain-agnostic — one-sided).
 fn member_domain(rec: &SchemaRecord) -> Option<Domain> {
-    let source = rec
-        .provenance
-        .get("name_meta")
-        .and_then(|m| m.get("source"))
-        .and_then(|s| s.as_str())?;
-    domain_of_source(source)
+    domain_of_source(crate::api::semantic::provenance_source(&rec.provenance)?)
 }
 
 fn from_store(e: StoreError) -> ApiError {
@@ -545,6 +542,21 @@ mod repro {
         assert_eq!(member_domain(&compute), Some(Domain::Compute));
         assert_eq!(member_domain(&energy), Some(Domain::Carbon));
         assert_eq!(member_domain(&unknown), None);
+
+        // Fix: the promote-stamped provenance.source WINS over the namer-async
+        // name_meta.source (a schema promoted-but-not-yet-named must still be
+        // gated by its real ingest domain, not read as unknown).
+        let mut stamped = rec(4, "{}");
+        stamped.provenance = serde_json::json!({
+            "source": "events.compute.runpod",
+            "name_meta": {"source": "events.carbon.dk"}
+        });
+        assert_eq!(member_domain(&stamped), Some(Domain::Compute));
+        // And a promoted-but-unnamed schema (only the stamped source) is still
+        // domain-visible — the leak this fixes.
+        let mut unnamed = rec(5, "{}");
+        unnamed.provenance = serde_json::json!({"source": "events.weather.metno"});
+        assert_eq!(member_domain(&unnamed), Some(Domain::Weather));
 
         let cross: BTreeSet<Cluster> = [&compute, &energy]
             .iter()

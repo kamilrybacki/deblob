@@ -506,12 +506,26 @@ async fn schema_domain(state: &ApiState, id: &SchemaId) -> Option<Domain> {
         Ok(Some(r)) => r,
         _ => return None,
     };
-    let source = rec
-        .provenance
-        .get("name_meta")
-        .and_then(|m| m.get("source"))
-        .and_then(|s| s.as_str())?;
-    domain_of_source(source)
+    domain_of_source(provenance_source(&rec.provenance)?)
+}
+
+/// The ingest source topic for a schema. Prefers `provenance.source` — stamped
+/// authoritatively at PROMOTE (b23), so it is present the moment a schema exists
+/// — over `provenance.name_meta.source`, which the namer fills in
+/// ASYNCHRONOUSLY (a schema promoted-but-not-yet-named would otherwise read as
+/// domain-unknown and slip past the gate; that race let a cross-domain umbrella
+/// leak on the 2026-07-22 from-scratch rebuild). Falls back to `name_meta.source`
+/// for any pre-b23 record lacking the stamped field.
+pub(crate) fn provenance_source(provenance: &serde_json::Value) -> Option<&str> {
+    provenance
+        .get("source")
+        .and_then(|s| s.as_str())
+        .or_else(|| {
+            provenance
+                .get("name_meta")
+                .and_then(|m| m.get("source"))
+                .and_then(|s| s.as_str())
+        })
 }
 
 pub async fn get_semantic_neighbors(
