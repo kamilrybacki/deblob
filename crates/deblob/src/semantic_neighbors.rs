@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashMap};
 use deblob_core::id::{RevisionId, SchemaId};
 use deblob_core::revision::{SemError, SignatureCandidates};
 use deblob_semantic::signature::{
-    self, has_anchor_weighted, idf_multiplier, matched_feature_classes, semantic_signature,
+    self, has_anchor, idf_multiplier, matched_feature_classes, semantic_signature,
     shared_anchor_count_weighted, similarity_weighted, strength_weighted, Score, Strength,
 };
 
@@ -122,7 +122,12 @@ pub async fn neighbors(
         .collect();
     let idf_query = |key: &[u8]| idf_multiplier(n_query, query_df.get(key).copied().unwrap_or(0));
 
-    if !has_anchor_weighted(&query_signature, &idf_query) {
+    // Participation gate uses the hard GENERIC_CFIDS stop-list only (b24), NOT
+    // IDF — a schema must never be denied all neighbors just because its
+    // discriminative cfids are locally common (the NoAnchor regression seen at
+    // N=40). IDF still prunes the candidate union and drives pair strength/score
+    // below, so common-field-only matches are demoted, not the whole schema.
+    if !has_anchor(&query_signature) {
         return Ok(Some(NeighborOutcome::NoAnchor));
     }
 

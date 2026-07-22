@@ -697,7 +697,15 @@ pub fn strength_weighted(
     b: &SemanticSignature,
     idf_mult: &impl Fn(&[u8]) -> u64,
 ) -> Strength {
-    if !has_anchor_weighted(a, idf_mult) || !has_anchor_weighted(b, idf_mult) {
+    // Schema PARTICIPATION uses only the hard GENERIC_CFIDS stop-list (b24),
+    // NOT IDF: a schema must never lose ALL neighbors just because its
+    // discriminative cfids happen to be locally common in a small corpus (the
+    // NoAnchor regression observed live at N=40). IDF still governs the
+    // PAIR-level shared-anchor count below via `is_anchor_cfid`, so a match on
+    // only a corpus-common field is demoted to Insufficient — the false-close
+    // is dropped without dropping the schema from the graph
+    // (jr-deblob-similarity-idf-221040, corrected after the N=40 observation).
+    if !has_anchor(a) || !has_anchor(b) {
         return Strength::Insufficient;
     }
 
@@ -1023,6 +1031,31 @@ mod tests {
         assert!(!has_anchor_weighted(&gpu, &idf));
         assert_eq!(strength_weighted(&gpu, &elec, &idf), Strength::Insufficient);
         assert_eq!(shared_anchor_count_weighted(&gpu, &elec, &idf), 0);
+    }
+
+    #[test]
+    fn idf_demotes_common_shared_pair_without_stripping_schema_participation() {
+        // The N=40 regression fix: a schema whose discriminative cfid is locally
+        // common must STILL participate (has_anchor true, so it never loses all
+        // neighbors) and still match a peer sharing a RARE cfid — only the
+        // common-field-ONLY pair is demoted to Insufficient.
+        let gpu = sig_with_cfids(&["cfid_price", "cfid_gpu"]);
+        let carbon = sig_with_cfids(&["cfid_price", "cfid_carbon"]);
+        let gpu2 = sig_with_cfids(&["cfid_gpu", "cfid_memory"]);
+        let price_key = encode_field("cfid_price");
+        let idf = |k: &[u8]| if k == price_key.as_slice() { 0 } else { 8 };
+
+        // Participation preserved (hard stop-list only) — no NoAnchor.
+        assert!(has_anchor(&gpu));
+        assert!(has_anchor(&carbon));
+
+        // Share the RARE cfid_gpu -> Medium; share only the COMMON cfid_price
+        // -> Insufficient (cross-domain false-close dropped).
+        assert!(strength_weighted(&gpu, &gpu2, &idf) >= Strength::Medium);
+        assert_eq!(
+            strength_weighted(&gpu, &carbon, &idf),
+            Strength::Insufficient
+        );
     }
 
     #[test]
