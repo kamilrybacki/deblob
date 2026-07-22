@@ -687,7 +687,7 @@ function simMatrix(){
   const nb=state.data.neighbors||{};
   const dist=(a,b)=>{if(a===b)return 0;const x=(nb[a]||[]).find(n=>n.schema_id===b);if(x)return x.distance;const y=(nb[b]||[]).find(n=>n.schema_id===a);return y?y.distance:null;};
   if(!fams.some(f=>(nb[f.schema_id]||[]).length))
-    return '<div class="empty" style="padding:24px">No neighbour distances to plot — these schemas carry no semantic annotation yet. Structural retrieval still tags events; the SLM similarity lane is disabled in this deployment.</div>';
+    return `<div class="empty" style="padding:24px">${state.live&&!state._nbLoaded?'Loading similarity edges…':'No neighbour distances to plot — none of these schemas has an active semantic annotation yet (the consolidation controller adds these). Structural retrieval still tags events.'}</div>`;
   const cell=d=>{if(d===null)return '<td class="mx none" title="no computed relation">·</td>';if(d===0)return '<td class="mx self">—</td>';const c=d<0.5?'close':(d<0.85?'mid':'far');return `<td class="mx ${c}">${d.toFixed(2)}</td>`;};
   const head=`<tr><th></th>${fams.map(f=>`<th>${esc(f.label)}</th>`).join('')}</tr>`;
   const rows=fams.map(a=>`<tr><th class="l">${esc(a.label)}</th>${fams.map(b=>cell(dist(a.schema_id,b.schema_id))).join('')}</tr>`).join('');
@@ -778,6 +778,29 @@ V.sources=()=>`<div class="pagehead"><h1>Sources</h1><p>Every distinct data sour
   ${banner()}
   <div class="card"><div class="streamctl"><button class="btn ${canMutate()?'good':''}" id="srcreconcile" ${canMutate()?'':'disabled'}>↻ Reconcile</button> <span id="srcstat" class="muted">${canMutate()?'scans candidate sources and registers them':'read-only — connect with a token to reconcile'}</span></div></div>
   <div id="srclist"><div class="card empty">Loading…</div></div>`;
+// Lazily fetch real semantic-neighbour edges for every schema when the Similarity
+// tab is first opened (live mode). The endpoint is /schemas/{id}/semantic-neighbors
+// (HYPHEN) — k nearest by shared canonical-field signature; score.decimal is a
+// similarity in [0,1], mapped to the view's distance = 1 - score. Cached (runs once).
+async function loadNeighbors(){
+  if(!state.live || state._nbLoaded) return;
+  state._nbLoaded=true;                       // guard before await (avoid re-fire on re-render)
+  const fams=state.data.families; const byId={}; fams.forEach(f=>byId[f.schema_id]=f);
+  await Promise.all(fams.map(async f=>{
+    try{
+      const r=await api(`/api/v1/schemas/${encodeURIComponent(f.schema_id)}/semantic-neighbors?k=8`);
+      const raw=(r&&r.data&&r.data.neighbors)||[];
+      state.data.neighbors[f.schema_id]=raw.map(n=>{
+        const t=byId[n.schema_id];
+        const dec=(n.score&&n.score.decimal!=null)?parseFloat(n.score.decimal):0;
+        return {schema_id:n.schema_id, family_id:t?t.family_id:null,
+                label:t?t.label:shortId(n.schema_id),
+                distance:Math.max(0,Math.min(1,1-dec)), strength:n.strength};
+      });
+    }catch(e){ /* 404 = this schema has no active semantic annotation; leave empty */ }
+  }));
+  render();
+}
 async function loadSources(){
   if(!state.live){$('#srclist').innerHTML='<div class="card empty">Connect to a live instance to view the source registry.</div>';return;}
   try{const r=await api('/api/v1/sources');const list=(r.data||[]).slice().sort((a,b)=>String(a.name).localeCompare(String(b.name)));
@@ -860,6 +883,7 @@ function render(){closeStream();const v=location.hash.replace('#','')||'explorer
 function afterRender(v){
   if(v==='schemas'){const s=$('#schsearch');if(s)s.oninput=()=>{const q=s.value.toLowerCase();$('#schrows').innerHTML=schemaRows(state.data.families.filter(f=>f.label.toLowerCase().includes(q)||f.schema_id.includes(q)));};}
   if(v==='consolidation')loadUmbrellas('provisional');
+  if(v==='similarity')loadNeighbors();
   if(v==='sources'){loadSources();const b=$('#srcreconcile');if(b&&canMutate())b.onclick=reconcileSources;}
   if(v==='stream'){openStream();const p=$('#streampause');if(p)p.onclick=()=>{_streamPaused=!_streamPaused;p.textContent=_streamPaused?'Resume':'Pause';};}
   if(v==='operations'&&state.live){
