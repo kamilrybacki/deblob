@@ -37,6 +37,18 @@ spec:
         - {name: HOME, value: /home/ollama}
         securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
         resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "4", memory: 3Gi}}
+        # The models volume is an emptyDir (wiped on every pod restart), and Ollama
+        # never re-pulls on its own — so a restart silently left the server with NO
+        # model, making every namer SLM call return null and forcing 100% heuristic
+        # naming (observed 2026-07-22). This postStart hook waits for `ollama serve`
+        # to answer, then idempotently pulls the base model (instant no-op once
+        # present) — self-healing on every start. Model quality never risks a false
+        # merge (the trust gate needs deterministic corroboration), so a slow first
+        # pull only delays naming, never correctness.
+        lifecycle:
+          postStart:
+            exec:
+              command: ["/bin/sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull qwen2.5:0.5b >/tmp/poststart-pull.log 2>&1 || true"]
         volumeMounts:
         - {name: models, mountPath: /home/ollama/.ollama}
         readinessProbe: {httpGet: {path: /, port: 11434}, initialDelaySeconds: 5, periodSeconds: 10}
