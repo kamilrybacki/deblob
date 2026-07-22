@@ -18,7 +18,7 @@ spec:
         # Built in-cluster by Kaniko (deploy/build/kaniko-deblob.yaml), pushed to
         # the repo-owner's ghcr namespace (was kamilandrzejrybacki-inc, hand-built
         # on lw-main). Bump the tag + `kubectl rollout restart deploy/deblob -n deblob`.
-        image: ghcr.io/kamilrybacki/deblob:b28
+        image: ghcr.io/kamilrybacki/deblob:b29
         imagePullPolicy: IfNotPresent
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         args: [--config, /app/deblob.toml]
