@@ -458,13 +458,51 @@ pub enum Strength {
     Strong,
 }
 
-/// True when `signature` carries at least one anchor feature
-/// (`canonical_event_type_id` / `canonical_field_id` / `identifier_namespace`).
-/// A signature with none must never be used to expand a search toward the
-/// whole vault (Task 10 §4) — that gating check is exactly this predicate.
+/// Structurally-generic canonical_field_ids that appear across essentially every
+/// domain (a temporal stamp, a display name, a tally, a bare value, a state flag)
+/// and therefore carry almost no discriminative signal. They must NOT act as
+/// anchors on their own: two unrelated schemas that share only `cfid_timestamp`
+/// are not "similar". Excluding them from the anchor set is the stop-word
+/// complement to the (future) IDF/document-frequency weighting — see
+/// `jr-deblob-similarity-220904`. Kept deliberately SHORT + cross-domain-generic;
+/// domain-bearing cfids (latitude, carbon, price, currency, region, power, unit,
+/// …) remain anchors. df at investigation time: timestamp 62%, name 45%, count/
+/// status ~25-28% of annotated schemas, vs the discriminative tail <15%.
+pub const GENERIC_CFIDS: &[&str] = &[
+    "cfid_timestamp",
+    "cfid_name",
+    "cfid_count",
+    "cfid_value",
+    "cfid_status",
+];
+
+/// True when `cfid` carries domain-discriminative signal (i.e. is not one of the
+/// ubiquitous structural [`GENERIC_CFIDS`]).
+pub fn is_discriminative_cfid(cfid: &str) -> bool {
+    !GENERIC_CFIDS.contains(&cfid)
+}
+
+/// The count of shared canonical_field_ids that are DISCRIMINATIVE (generic
+/// stop-word cfids excluded) — the quantity that drives anchoring + strength,
+/// so a shared `cfid_timestamp` alone never makes two schemas neighbors.
+fn shared_discriminative_field_count(a: &SemanticSignature, b: &SemanticSignature) -> usize {
+    a.canonical_field_ids
+        .intersection(&b.canonical_field_ids)
+        .filter(|c| is_discriminative_cfid(c))
+        .count()
+}
+
+/// True when `signature` carries at least one anchor feature — an event type, a
+/// DISCRIMINATIVE `canonical_field_id`, or an `identifier_namespace`. A signature
+/// whose only cfids are generic ([`GENERIC_CFIDS`]) has NO anchor: it must never
+/// expand a search toward the whole vault (Task 10 §4) nor be returned as a
+/// neighbor, because it shares no domain-bearing signal (`jr-deblob-similarity-220904`).
 pub fn has_anchor(signature: &SemanticSignature) -> bool {
     signature.event_type.is_some()
-        || !signature.canonical_field_ids.is_empty()
+        || signature
+            .canonical_field_ids
+            .iter()
+            .any(|c| is_discriminative_cfid(c))
         || !signature.identifier_namespaces.is_empty()
 }
 
@@ -510,11 +548,21 @@ pub fn strength(a: &SemanticSignature, b: &SemanticSignature) -> Strength {
         return Strength::Insufficient;
     }
 
-    let shared_field_count = a
+    // DISCRIMINATIVE shared/total cfid counts (generic stop-word cfids like
+    // cfid_timestamp excluded) — so sharing only a ubiquitous field never earns
+    // Medium+ strength (jr-deblob-similarity-220904).
+    let shared_field_count = shared_discriminative_field_count(a, b);
+    let disc_a = a
         .canonical_field_ids
-        .intersection(&b.canonical_field_ids)
+        .iter()
+        .filter(|c| is_discriminative_cfid(c))
         .count();
-    let min_fields = a.canonical_field_ids.len().min(b.canonical_field_ids.len());
+    let disc_b = b
+        .canonical_field_ids
+        .iter()
+        .filter(|c| is_discriminative_cfid(c))
+        .count();
+    let min_fields = disc_a.min(disc_b);
     let coverage_at_least_half = min_fields > 0 && shared_field_count * 2 >= min_fields;
 
     let same_event = matches!(
@@ -570,10 +618,9 @@ pub fn shared_anchor_count(a: &SemanticSignature, b: &SemanticSignature) -> usiz
         (&a.event_type, &b.event_type),
         (Some(x), Some(y)) if x == y
     ));
-    let shared_fields = a
-        .canonical_field_ids
-        .intersection(&b.canonical_field_ids)
-        .count();
+    // Only DISCRIMINATIVE shared cfids count as anchors (generic stop-word cfids
+    // excluded) — jr-deblob-similarity-220904.
+    let shared_fields = shared_discriminative_field_count(a, b);
     let shared_namespaces = a
         .identifier_namespaces
         .intersection(&b.identifier_namespaces)
@@ -612,6 +659,54 @@ mod tests {
         let sig = semantic_signature(&metadata);
         assert_eq!(sig.feature_count(), 0);
         assert!(!has_anchor(&sig));
+    }
+
+    fn sig_with_cfids(cfids: &[&str]) -> SemanticSignature {
+        let fields = cfids
+            .iter()
+            .enumerate()
+            .map(|(i, c)| FieldEntry {
+                path: vec![key(&format!("f{i}"))],
+                semantics: FieldSemantics {
+                    canonical_field_id: Some(CanonicalFieldId::new(*c)),
+                    ..empty_semantics()
+                },
+            })
+            .collect();
+        semantic_signature(&SemanticMetadata {
+            event_type: None,
+            fields,
+        })
+    }
+
+    #[test]
+    fn generic_only_signature_has_no_anchor_and_never_neighbors() {
+        // jr-deblob-similarity-220904: a schema annotated with ONLY a ubiquitous
+        // stop-word cfid (cfid_timestamp) carries no domain signal — it must not
+        // anchor, and must not be "similar" to unrelated schemas that merely also
+        // carry a timestamp.
+        assert!(!has_anchor(&sig_with_cfids(&["cfid_timestamp"])));
+        assert!(!has_anchor(&sig_with_cfids(&["cfid_name", "cfid_count"])));
+        assert!(has_anchor(&sig_with_cfids(&["cfid_carbon"])));
+        assert!(has_anchor(&sig_with_cfids(&[
+            "cfid_timestamp",
+            "cfid_carbon"
+        ])));
+
+        // timestamp-only query vs a carbon schema that also has a timestamp:
+        // the only overlap is the generic timestamp -> Insufficient (no neighbor).
+        let ts_only = sig_with_cfids(&["cfid_timestamp"]);
+        let carbon = sig_with_cfids(&["cfid_carbon", "cfid_timestamp"]);
+        assert_eq!(strength(&ts_only, &carbon), Strength::Insufficient);
+
+        // two unrelated schemas each with a DISTINCT discriminative cfid but a
+        // shared timestamp -> still Insufficient (the bug's exact shape).
+        let power = sig_with_cfids(&["cfid_power", "cfid_timestamp"]);
+        assert_eq!(strength(&carbon, &power), Strength::Insufficient);
+
+        // genuinely related — both carbon (a discriminative shared anchor) -> Medium+.
+        let carbon2 = sig_with_cfids(&["cfid_carbon", "cfid_region"]);
+        assert!(strength(&carbon, &carbon2) >= Strength::Medium);
     }
 
     #[test]

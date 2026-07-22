@@ -127,11 +127,21 @@ pub async fn neighbors(
         };
         let candidate_signature = signature::semantic_signature(&candidate_revision.metadata);
 
+        // Drop candidates that share no DISCRIMINATIVE anchor with the query —
+        // an overlap on only generic stop-word cfids (e.g. cfid_timestamp) is
+        // Insufficient strength and is NOT a real neighbor. Without this filter
+        // the postings union returns every schema that merely shares a ubiquitous
+        // field, surfacing unrelated schemas as "close" (jr-deblob-similarity-220904).
+        let s = strength(&query_signature, &candidate_signature);
+        if s == signature::Strength::Insufficient {
+            continue;
+        }
+
         found.push(Neighbor {
             schema_id: candidate_id,
             semantic_revision_id: candidate_revision.revision_id,
             score: similarity(&query_signature, &candidate_signature),
-            strength: strength(&query_signature, &candidate_signature),
+            strength: s,
             shared_anchor_count: shared_anchor_count(&query_signature, &candidate_signature),
             matched_feature_classes: matched_feature_classes(
                 &query_signature,
