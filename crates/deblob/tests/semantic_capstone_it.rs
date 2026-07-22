@@ -524,6 +524,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
             // its existing produce/observe timing exact.
             max_batch_records: 1,
             max_batch_linger_ms: 100,
+            max_message_bytes: 1024 * 1024,
         },
         limits: LimitsConfig::default(),
         promotion: PromotionConfig::default(),

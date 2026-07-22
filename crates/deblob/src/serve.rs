@@ -564,6 +564,7 @@ pub async fn serve(
         limits: app_config.limits.to_limits(),
         max_batch_records: app_config.kafka.max_batch_records,
         max_batch_linger_ms: app_config.kafka.max_batch_linger_ms,
+        max_message_bytes: app_config.kafka.max_message_bytes,
         fault: None,
         metrics: metrics.clone(),
         sasl: secrets.kafka_sasl.clone(),

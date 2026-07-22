@@ -426,6 +426,7 @@ async fn full_pipeline_produce_tag_cluster_promote_and_recover_from_outage() {
             // than depending on the linger timer's timing.
             max_batch_records: 1,
             max_batch_linger_ms: 100,
+            max_message_bytes: 1024 * 1024,
         },
         limits: LimitsConfig::default(),
         // Task 19 brief: promotion guards configured low enough for the

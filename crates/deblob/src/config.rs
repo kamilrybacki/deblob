@@ -332,6 +332,14 @@ pub struct KafkaConfig {
     /// [`default_max_batch_linger_ms`] (100ms).
     #[serde(default = "default_max_batch_linger_ms")]
     pub max_batch_linger_ms: u64,
+    /// Hard ceiling (bytes) on a single produced Kafka message; mirrored onto
+    /// the relay producer's `message.max.bytes` and enforced BEFORE produce so
+    /// one oversized record is quarantined (payload-free `size_exceeded`
+    /// marker) rather than aborting its whole batch. Defaults to the
+    /// Redpanda/librdkafka 1 MiB default; raise only in lockstep with the
+    /// broker's `max.message.bytes`.
+    #[serde(default = "default_max_message_bytes")]
+    pub max_message_bytes: usize,
 }
 
 impl KafkaConfig {
@@ -358,6 +366,12 @@ fn default_max_batch_records() -> usize {
 /// Batching spec §3: "max_batch_linger_ms: u64 (default 100)".
 fn default_max_batch_linger_ms() -> u64 {
     100
+}
+
+/// The Redpanda/librdkafka 1 MiB default single-message ceiling —
+/// [`deblob_kafka::DEFAULT_MAX_MESSAGE_BYTES`].
+fn default_max_message_bytes() -> usize {
+    1024 * 1024
 }
 
 /// Bounds enforced by the bounded parser (spec §4). Mirrors the subset of

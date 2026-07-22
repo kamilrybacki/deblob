@@ -27,6 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bytes::Bytes;
 use deblob_core::envelope::SourceCursor;
+use deblob_core::error::QuarantineReason;
 use deblob_core::id::SchemaRef;
 use deblob_fingerprint::Limits;
 use deblob_match::discovery::DiscoveryMsg;
@@ -45,6 +46,17 @@ use tokio_util::sync::CancellationToken;
 
 use crate::headers;
 use crate::stream::{StreamEvent, StreamOutcome};
+
+/// The Redpanda / librdkafka default single-message ceiling (1 MiB) —
+/// [`RelayCfg::max_message_bytes`]'s default when no explicit value is set.
+pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// Headroom reserved below [`RelayCfg::max_message_bytes`] for a produced
+/// record's headers, key, and Kafka framing when size-guarding the payload —
+/// so `payload.len() <= max_message_bytes - RELAY_PRODUCE_MARGIN` guarantees
+/// the assembled message stays under the broker/producer limit. Generous
+/// (16 KiB) relative to the handful of small bounded relay headers.
+pub const RELAY_PRODUCE_MARGIN: usize = 16 * 1024;
 
 /// Where to inject a simulated crash inside the per-batch
 /// produce→commit sequence (Task 17's chaos harness, extended for batching
@@ -99,6 +111,18 @@ pub struct RelayCfg {
     /// not start until the batch holds at least one record: [`Relay::run`]
     /// blocks indefinitely for the first record of a new batch.
     pub max_batch_linger_ms: u64,
+    /// Hard ceiling on a single produced Kafka message (value + key +
+    /// headers + framing), mirrored onto the producer's `message.max.bytes`
+    /// and enforced BEFORE produce so one oversized record can never abort a
+    /// whole batch of good ones (the silent-data-loss bug: an enqueue
+    /// `MessageSizeTooLarge` used to abort the transaction, skipping every
+    /// record batched with the offender). A record whose payload would not
+    /// fit (minus [`RELAY_PRODUCE_MARGIN`] headroom for headers/key/framing)
+    /// is routed to the quarantine topic as a compact, PAYLOAD-FREE
+    /// `SizeExceeded` marker instead — observable, offset-advancing, never a
+    /// batch abort. Defaults to the Redpanda/librdkafka 1 MiB default; raise
+    /// it only in lockstep with the broker's `max.message.bytes`.
+    pub max_message_bytes: usize,
     /// Chaos-test hook (Task 17); `None` in normal operation — every test
     /// in this crate except the fault-point plumbing itself runs with
     /// `None`.
@@ -566,6 +590,49 @@ async fn run_transaction_body(
         return Ok((TransactionBody::Produced, vec![delivery]));
     };
 
+    // Produce-size guard (fix for the MessageSizeTooLarge batch-abort /
+    // silent-data-loss bug): a payload that would not fit under the producer's
+    // `message.max.bytes` once headers/key/framing are added is routed to
+    // quarantine as a compact, PAYLOAD-FREE `SizeExceeded` marker instead of
+    // being produced whole. A whole-payload produce that overflows returns
+    // `MessageSizeTooLarge` at enqueue, which aborts the ENTIRE batch (every
+    // good record with it) and — because the in-memory consumer position has
+    // already advanced — silently skips them. The marker always fits, so the
+    // offset commits and the batch survives; the oversized record stays
+    // observable in quarantine (its full payload is still retained in the raw
+    // topic, addressable by this cursor).
+    let produce_cap = cfg.max_message_bytes.saturating_sub(RELAY_PRODUCE_MARGIN);
+    if payload.len() > produce_cap {
+        let out_headers = headers::with_tag(inbound_headers, &SchemaRef::Malformed, cursor);
+        let out_headers =
+            headers::with_quarantine_reason(out_headers, QuarantineReason::SizeExceeded);
+        let delivery = produce(
+            producer,
+            &cfg.quarantine_topic,
+            Some(cursor.partition),
+            key.as_deref(),
+            None, // PAYLOAD-FREE marker: the oversized payload can't be produced whole
+            out_headers,
+        )?;
+        tracing::warn!(
+            topic = %cursor.topic,
+            partition = cursor.partition,
+            offset = cursor.offset,
+            payload_bytes = payload.len(),
+            cap = produce_cap,
+            "record too large to produce; quarantined as size_exceeded (payload not forwarded)"
+        );
+        emit_stream_event(
+            cfg,
+            cursor,
+            StreamOutcome::Quarantined,
+            SchemaRef::Malformed.header_value(),
+            Some(headers::quarantine_reason_value(QuarantineReason::SizeExceeded).to_string()),
+            0,
+        );
+        return Ok((TransactionBody::Produced, vec![delivery]));
+    }
+
     let mut deliveries = Vec::with_capacity(2);
 
     // `cursor.topic` (Hermes lineage gap 3, spec §4/§9) is the ACTUAL
@@ -613,22 +680,38 @@ async fn run_transaction_body(
             cursor: cursor.clone(),
         };
         let discovery_bytes = serde_json::to_vec(&discovery)?;
-        let delivery = produce(
-            producer,
-            &cfg.discovery_topic,
-            // No source-partition mapping requirement for the discovery
-            // topic (spec §3.2's p→p rule is scoped to "derived topic",
-            // i.e. the tagged topic); route by candidate id instead so a
-            // given candidate's discovery evidence lands on one partition.
-            None,
-            Some(cand_id.as_str().as_bytes()),
-            Some(&discovery_bytes),
-            OwnedHeaders::new(),
-        )?;
-        deliveries.push(delivery);
+        // The discovery record embeds the payload (as JSON/base64 ≈ 1.3× the
+        // raw bytes), so for a near-limit provisional record it overflows the
+        // produce ceiling BEFORE the tagged produce does. Skip only the
+        // discovery evidence when it won't fit — best-effort by design — and
+        // still tag the record below; never abort the batch for it.
+        if discovery_bytes.len() > produce_cap {
+            tracing::warn!(
+                topic = %cursor.topic,
+                partition = cursor.partition,
+                offset = cursor.offset,
+                discovery_bytes = discovery_bytes.len(),
+                cap = produce_cap,
+                "discovery evidence too large to produce; skipped (record still tagged)"
+            );
+        } else {
+            let delivery = produce(
+                producer,
+                &cfg.discovery_topic,
+                // No source-partition mapping requirement for the discovery
+                // topic (spec §3.2's p→p rule is scoped to "derived topic",
+                // i.e. the tagged topic); route by candidate id instead so a
+                // given candidate's discovery evidence lands on one partition.
+                None,
+                Some(cand_id.as_str().as_bytes()),
+                Some(&discovery_bytes),
+                OwnedHeaders::new(),
+            )?;
+            deliveries.push(delivery);
 
-        if cfg.fault == Some(FaultPoint::AfterDiscoveryProduce) {
-            return Ok((TransactionBody::Fault, deliveries));
+            if cfg.fault == Some(FaultPoint::AfterDiscoveryProduce) {
+                return Ok((TransactionBody::Fault, deliveries));
+            }
         }
     }
 
@@ -782,7 +865,11 @@ fn producer_client_config(cfg: &RelayCfg) -> ClientConfig {
         .set("transactional.id", &cfg.transactional_id)
         .set("enable.idempotence", "true")
         .set("message.timeout.ms", "10000")
-        .set("transaction.timeout.ms", "30000");
+        .set("transaction.timeout.ms", "30000")
+        // Mirror the relay's own produce-size guard onto the client so the two
+        // agree on the ceiling (the guard routes anything larger to quarantine
+        // BEFORE it ever reaches this limit).
+        .set("message.max.bytes", cfg.max_message_bytes.to_string());
     apply_sasl(&mut c, &cfg.sasl);
     c
 }
@@ -820,6 +907,7 @@ mod tests {
             limits: Limits::default(),
             max_batch_records: 500,
             max_batch_linger_ms: 100,
+            max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             fault: None,
             metrics: Metrics::new(),
             sasl: None,

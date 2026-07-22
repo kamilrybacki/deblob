@@ -204,6 +204,7 @@ fn relay_cfg(brokers: &str, t: &TestTopics, group_id: &str, txn_id: &str) -> Rel
         // faithful re-validation that batching didn't change any of that.
         max_batch_records: 500,
         max_batch_linger_ms: 100,
+        max_message_bytes: deblob_kafka::DEFAULT_MAX_MESSAGE_BYTES,
         fault: None,
         metrics: Metrics::new(),
         sasl: None,
@@ -518,6 +519,80 @@ async fn malformed_payload_routes_to_quarantine_with_reason_header() {
     );
     // Never silently dropped: the original payload bytes are preserved.
     assert_eq!(msg.payload(), Some(payload.as_slice()));
+
+    stop(shutdown, handle).await;
+}
+
+// ---------------------------------------------------------------------
+// Behavior 4b: an oversized record is quarantined (payload-free
+// size_exceeded marker), NEVER aborting the batch it shares with good
+// records. Regression for the MessageSizeTooLarge silent-data-loss bug.
+// ---------------------------------------------------------------------
+#[tokio::test]
+async fn oversize_record_quarantines_without_aborting_its_batch() {
+    let kafka = start_kafka().await;
+    let brokers = format!(
+        "127.0.0.1:{}",
+        kafka
+            .get_host_port_ipv4(apache::KAFKA_PORT)
+            .await
+            .expect("mapped kafka port")
+    );
+    let t = topics("big");
+    create_topics(&brokers, &[&t.raw, &t.tagged, &t.discovery, &t.quarantine]).await;
+
+    let producer = raw_producer(&brokers);
+    // A small GOOD record and an OVERSIZE record, both on partition 0 so they
+    // land in ONE batch/transaction. Before the guard, the oversize record's
+    // produce failed with MessageSizeTooLarge and aborted the whole batch —
+    // silently dropping the good record with it.
+    let good = br#"{"a":1}"#.to_vec();
+    let oversize = format!(r#"{{"big":"{}"}}"#, "x".repeat(60_000)).into_bytes();
+    for payload in [&good, &oversize] {
+        producer
+            .send(
+                FutureRecord::<[u8], [u8]>::to(&t.raw)
+                    .partition(0)
+                    .payload(payload.as_slice()),
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("produce raw record");
+    }
+
+    // Cap well below the oversize record (60 KB) but above the good one.
+    let mut cfg = relay_cfg(&brokers, &t, "big-group", "big-txn");
+    cfg.max_message_bytes = 64 * 1024;
+
+    let shutdown = CancellationToken::new();
+    let handle = tokio::spawn(Relay::run(cfg, matcher(), shutdown.clone()));
+
+    // The GOOD record still reaches the tagged topic — proving the batch was
+    // committed, not aborted by its oversize batch-mate.
+    let tagged_consumer = committed_consumer(&brokers, "big-tagged-verify", &t.tagged);
+    let tagged = recv_owned(&tagged_consumer, Duration::from_secs(30)).await;
+    assert_eq!(tagged.payload(), Some(good.as_slice()));
+
+    // The OVERSIZE record lands in quarantine as a PAYLOAD-FREE size_exceeded
+    // marker — observable, never a silent drop, never the full payload.
+    let q_consumer = committed_consumer(&brokers, "big-q-verify", &t.quarantine);
+    let q = recv_owned(&q_consumer, Duration::from_secs(30)).await;
+    let q_headers = header_map(q.headers());
+    assert_eq!(
+        q_headers.get("deblob-schema-id").unwrap().as_deref(),
+        Some(b"malformed".as_slice())
+    );
+    assert_eq!(
+        q_headers
+            .get("deblob-quarantine-reason")
+            .unwrap()
+            .as_deref(),
+        Some(b"size_exceeded".as_slice())
+    );
+    assert!(
+        q.payload().map_or(true, |p| p.is_empty()),
+        "oversize marker must carry no payload"
+    );
 
     stop(shutdown, handle).await;
 }
