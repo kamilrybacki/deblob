@@ -15,13 +15,28 @@
 use crate::api::umbrellas::child_fields_from_schema;
 use crate::api::{ApiError, ApiState};
 use deblob_core::ports::SchemaRecord;
+use deblob_semantic::domain::{domain_of_source, Cluster, Domain};
 use deblob_umbrella::adjudicate::{assemble_transform, DeterministicAnchor};
 use deblob_umbrella::store::{StoreError, UmbrellaState};
 use deblob_umbrella::types::{
     Cardinality, FieldType, JsonPath, ScalarType, UmbrellaField, UmbrellaSchema,
 };
 use deblob_umbrella::verify::{verify_static, ChildField};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+
+/// The coarse ingest [`Domain`] of a member schema, read from the governed
+/// `provenance.name_meta.source` field that `Registry::list_schemas` overlays
+/// (`jr-deblob-domain-gate-221052`). `None` when the source is unknown — the
+/// domain gate then treats the member as domain-agnostic (one-sided: an unknown
+/// member never triggers a cross-domain suppression on its own).
+fn member_domain(rec: &SchemaRecord) -> Option<Domain> {
+    let source = rec
+        .provenance
+        .get("name_meta")
+        .and_then(|m| m.get("source"))
+        .and_then(|s| s.as_str())?;
+    domain_of_source(source)
+}
 
 fn from_store(e: StoreError) -> ApiError {
     ApiError::from_umbrella_store(e)
@@ -180,6 +195,35 @@ pub async fn propose_umbrellas(state: &ApiState) -> Result<Vec<String>, ApiError
         }
         let cfids: Vec<String> = sig.iter().map(|(c, _)| c.clone()).collect();
         let umbrella_id = umbrella_id_for(&sig);
+
+        // Domain-coherence gate (jr-deblob-domain-gate-221052): schemas with an
+        // IDENTICAL field signature can still be different subject domains — a
+        // GPU-spot-price and an electricity-spot-price schema both carry
+        // {cfid_price, cfid_region, cfid_timestamp}. Consolidating them would
+        // merge energy into a compute umbrella. When the member set spans more
+        // than one domain CLUSTER it is a cross-domain group: SHADOW logs it
+        // (default), and under the same `[semantic].domain_gate_enforce` flag as
+        // the neighbor gate the auto-proposal is SUPPRESSED (left for human
+        // review), never merged. One-sided: unknown-source members don't count,
+        // so an unknown member alone never blocks a coherent group.
+        let member_clusters: BTreeSet<Cluster> = member_idxs
+            .iter()
+            .filter_map(|&i| member_domain(&schemas[i].0).map(Domain::cluster))
+            .collect();
+        if member_clusters.len() > 1 {
+            tracing::warn!(
+                target: "domain_gate_umbrella",
+                umbrella = umbrella_id.as_str(),
+                clusters = member_clusters.len(),
+                members = member_idxs.len(),
+                enforce = state.domain_gate_enforce,
+                "umbrella members span multiple domain clusters (cross-domain) — suppressing auto-proposal"
+            );
+            if state.domain_gate_enforce {
+                continue;
+            }
+        }
+
         if let Some(existing) = state
             .umbrellas
             .get_umbrella(&umbrella_id)
@@ -485,5 +529,41 @@ mod repro {
             "bool-typed third schema must form its own group, not block the number pair: {out:?}"
         );
         assert_eq!(out[0].1, 2, "the number pair must still both verify");
+    }
+
+    // Domain gate (jr-deblob-domain-gate-221052): two schemas with an IDENTICAL
+    // field signature but different ingest clusters (compute vs energy) are a
+    // cross-domain group; an unknown-source member never fabricates a split.
+    #[test]
+    fn member_domain_extracts_ingest_source_and_flags_cross_cluster() {
+        let mut compute = rec(1, "{}");
+        compute.provenance = serde_json::json!({"name_meta": {"source": "events.compute.runpod"}});
+        let mut energy = rec(2, "{}");
+        energy.provenance = serde_json::json!({"name_meta": {"source": "events.carbon.dk"}});
+        let unknown = rec(3, "{}"); // provenance {} — no name_meta.source
+
+        assert_eq!(member_domain(&compute), Some(Domain::Compute));
+        assert_eq!(member_domain(&energy), Some(Domain::Carbon));
+        assert_eq!(member_domain(&unknown), None);
+
+        let cross: BTreeSet<Cluster> = [&compute, &energy]
+            .iter()
+            .filter_map(|r| member_domain(r).map(Domain::cluster))
+            .collect();
+        assert_eq!(
+            cross.len(),
+            2,
+            "compute + energy span two clusters -> suppress"
+        );
+
+        let coherent: BTreeSet<Cluster> = [&compute, &unknown]
+            .iter()
+            .filter_map(|r| member_domain(r).map(Domain::cluster))
+            .collect();
+        assert_eq!(
+            coherent.len(),
+            1,
+            "an unknown-source member must not create a cross-domain split (one-sided)"
+        );
     }
 }

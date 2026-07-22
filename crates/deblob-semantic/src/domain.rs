@@ -19,7 +19,7 @@
 /// A coarse subject domain derived from an ingest source topic's namespace
 /// (`events.<namespace>.<collector>`). Deliberately coarse — this is a
 /// contradiction gate, not a fine taxonomy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Domain {
     Compute,
     Ai,
@@ -44,7 +44,7 @@ pub enum Domain {
 /// vetoes GPU-price↔electricity-price (Tech vs Energy) while leaving
 /// GPU↔ML-benchmark (both Tech) and weather↔earthquake (both Geo) intact, so a
 /// genuinely single domain is never fragmented.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Cluster {
     Tech,
     Energy,
