@@ -42,6 +42,11 @@ data:
     [semantic]
     canonical_field_ids = ["cfid_timestamp","cfid_price","cfid_currency","cfid_region","cfid_latitude","cfid_longitude","cfid_carbon","cfid_power","cfid_name","cfid_entity_id","cfid_count","cfid_unit","cfid_value","cfid_status"]
     event_types = ["event.order.placed","event.user.created","event.sensor.reading","event.payment.captured"]
+    # Source-domain coherence gate (jr-deblob-domain-gate-221052): ENFORCE after a
+    # clean shadow validation (RunPod compute query dropped only its carbon/grid/
+    # energy tail, kept all compute neighbors; carbon queries kept the whole
+    # energy cluster). Set false to instantly revert to shadow (kill switch).
+    domain_gate_enforce = true
     [umbrella]
     # Value-bucket guard runs in SHADOW (records/logs, never blocks) unless
     # enforce_value_guard is turned on. min_value_support lowered from the 30
