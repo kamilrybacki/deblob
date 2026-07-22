@@ -435,6 +435,13 @@ pub struct SemanticNeighborsView {
     pub query_schema: SchemaId,
     pub signature_version: &'static str,
     pub weights_version: &'static str,
+    /// The active-annotated corpus size `N` used for this result's IDF
+    /// weighting — present only for a `Found` result (there is no ranking to
+    /// reproduce for the no-anchor case). Reported alongside `weights_version`
+    /// because an IDF-weighted score is corpus-relative
+    /// (`jr-deblob-similarity-idf-221040`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idf_population_n: Option<u64>,
     pub neighbors: Vec<NeighborView>,
     pub authority: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -491,10 +498,14 @@ pub async fn get_semantic_neighbors(
         .ok_or_else(|| ApiError::not_found("schema has no active semantic annotation"))?;
 
     let view = match outcome {
-        NeighborOutcome::Found(neighbors) => SemanticNeighborsView {
+        NeighborOutcome::Found {
+            neighbors,
+            idf_population_n,
+        } => SemanticNeighborsView {
             query_schema: id,
             signature_version: deblob_semantic::signature::SIGNATURE_VERSION,
             weights_version: deblob_semantic::signature::WEIGHTS_VERSION,
+            idf_population_n: Some(idf_population_n),
             neighbors: neighbors
                 .into_iter()
                 .map(|n| NeighborView {
@@ -514,6 +525,7 @@ pub async fn get_semantic_neighbors(
             query_schema: id,
             signature_version: deblob_semantic::signature::SIGNATURE_VERSION,
             weights_version: deblob_semantic::signature::WEIGHTS_VERSION,
+            idf_population_n: None,
             neighbors: Vec::new(),
             authority: "diagnostic_only",
             strength: Some(strength_label(Strength::Insufficient)),

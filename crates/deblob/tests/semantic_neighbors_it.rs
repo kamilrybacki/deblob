@@ -406,8 +406,12 @@ async fn excludes_self_and_ranks_feature_sharing_schema_above_unrelated() {
     );
     assert_eq!(
         body["data"]["weights_version"],
-        "deblob-semantic-signature-weights-v1"
+        "deblob-semantic-signature-weights-v2-idf-log2"
     );
+    // IDF population is surfaced for a Found result; the test corpus is below
+    // IDF_MIN_POPULATION, so scoring stays pure-b24 (saturating IDF) while the
+    // count is still reported for observability.
+    assert!(body["data"]["idf_population_n"].is_number());
     assert_eq!(body["data"]["authority"], "diagnostic_only");
 
     let neighbors = body["data"]["neighbors"].as_array().unwrap();

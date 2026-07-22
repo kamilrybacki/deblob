@@ -22,7 +22,7 @@ pub const SIGNATURE_VERSION: &str = "deblob-semantic-signature-v1";
 /// requires a new version even if the feature *shapes* are unchanged, so a
 /// score is always reported alongside the weights version it was computed
 /// under (Task 10's response shape).
-pub const WEIGHTS_VERSION: &str = "deblob-semantic-signature-weights-v1";
+pub const WEIGHTS_VERSION: &str = "deblob-semantic-signature-weights-v2-idf-log2";
 
 /// Count-capped multiset cap: `effective_count = min(actual_count, 4)`.
 const MAX_FEATURE_COUNT: u32 = 4;
@@ -271,6 +271,17 @@ impl SemanticSignature {
     pub fn feature_keys_hex(&self) -> Vec<String> {
         self.features.keys().map(|k| hex_encode(k)).collect()
     }
+
+    /// The raw (un-hex-encoded) feature-key bytes, in the SAME lexicographic
+    /// order as [`Self::feature_keys_hex`] (both iterate the `BTreeMap`'s
+    /// sorted keys). Task 10's IDF handler pairs these with the per-feature
+    /// document frequencies it fetches (keyed by the hex form) so the injected
+    /// `idf_mult` closure — which receives raw feature bytes from
+    /// [`similarity_weighted`]'s union loop — can look a feature's `df` up by
+    /// its raw bytes without re-hashing.
+    pub fn feature_keys(&self) -> Vec<Vec<u8>> {
+        self.features.keys().cloned().collect()
+    }
 }
 
 /// Lowercase-hex encoding, deliberately hand-rolled (no `data-encoding`
@@ -406,10 +417,95 @@ impl Score {
     }
 }
 
-/// Exact weighted multiset Jaccard similarity between two signatures (§1).
-/// No cosine, no MinHash, no float — the rational `(numerator,
-/// denominator)` is the score of record; rank with [`Score::cmp_rank`].
-pub fn similarity(a: &SemanticSignature, b: &SemanticSignature) -> Score {
+// ---- IDF quantization (jr-deblob-similarity-idf-221040) --------------------
+//
+// Inverse document frequency generalizes the GENERIC_CFIDS stop-list from a
+// hand-picked handful to the whole long tail: a feature's discriminative mass
+// is scaled by how RARE it is across the active-annotated corpus. The score
+// stays an exact rational because the IDF multiplier is an INTEGER
+// (`floor(log2(N/df))`) applied on top of the integer class weight — never a
+// float `log`. The corpus statistics (`N`, per-feature `df`) live in
+// `deblob-redis`; this crate stays pure by taking the multiplier as an
+// injected closure (`similarity_weighted`), keeping the Task-9/Task-10
+// boundary intact.
+
+/// Cap on the integer IDF multiplier. `floor(log2(N/df))` for an ultra-rare
+/// feature (seen in a single schema of a large corpus) can be large; capping
+/// bounds the weighted numerator/denominator and stops one rare feature from
+/// dominating a score. Hermes-recommended initial value (`jr-deblob-similarity-idf-221040`),
+/// subject to empirical calibration.
+pub const IDF_MAX: u64 = 16;
+
+/// Minimum IDF multiplier a shared discriminative `canonical_field_id` must
+/// clear to act as an ANCHOR / earn `Medium`+ strength. This is the long-tail
+/// generalization of [`GENERIC_CFIDS`]: a cfid measured to be present in more
+/// than ~`1/2^ANCHOR_IDF_MIN` of the corpus is treated as too common to anchor
+/// on its own, EVEN if it is not on the hard stop-list. [`GENERIC_CFIDS`]
+/// remains a hard floor (always non-anchor, regardless of measured `df`) — IDF
+/// only ever REMOVES anchoring from a common field, never grants it to a
+/// stop-listed one.
+pub const ANCHOR_IDF_MIN: u64 = 2;
+
+/// Minimum active-annotated population `N` before IDF weighting engages. Below
+/// this, `df/N` is not a statistically meaningful frequency estimate — on a
+/// handful of schemas a genuinely discriminative field trivially looks
+/// "present in half the corpus" and would be wrongly demoted (Hermes'
+/// "dynamic-score stability as the corpus grows" gap, `jr-deblob-similarity-idf-221040`).
+/// While `N < IDF_MIN_POPULATION`, [`idf_multiplier`] saturates to [`IDF_MAX`]
+/// for every feature, which uniformly scales all weights (leaving the exact
+/// b24 ranking) and keeps every discriminative cfid an anchor — so IDF is a
+/// no-op until the corpus is large enough to trust, then activates
+/// automatically. Observable via the response's `idf_population_n`. Conservative
+/// initial value; subject to empirical calibration.
+pub const IDF_MIN_POPULATION: u64 = 32;
+
+/// Integer IDF multiplier for a feature with document-frequency `df` in an
+/// active-annotated population of `n` schemas: `floor(log2(n / df))`, clamped
+/// to `[0, IDF_MAX]`.
+///
+/// * A feature present in HALF the corpus or more (`n/df < 2`) yields `0`: it
+///   carries no discriminative mass, contributes nothing to the weighted
+///   score, and (per the handler) is dropped from the candidate union.
+/// * `df == 0` — a feature the corpus has never posted, only reachable via a
+///   stale/racing read — is treated as maximally rare (`IDF_MAX`) rather than
+///   dividing by zero.
+///
+/// Exact integer arithmetic only (`leading_zeros`-based `floor(log2)`), never a
+/// float — so `similarity_weighted`'s score stays an exact rational.
+pub fn idf_multiplier(n: u64, df: u64) -> u64 {
+    // Corpus too small for a meaningful frequency estimate: saturate so IDF is
+    // a uniform no-op (== b24 structural behavior) until enough annotated data
+    // exists (see [`IDF_MIN_POPULATION`]).
+    if n < IDF_MIN_POPULATION {
+        return IDF_MAX;
+    }
+    if df == 0 {
+        return IDF_MAX;
+    }
+    let ratio = n / df; // integer floor division
+    if ratio < 2 {
+        // present in >= half the corpus: no discriminative mass
+        return 0;
+    }
+    // floor(log2(ratio)) for ratio >= 2 == index of the highest set bit.
+    let log2 = 63 - ratio.leading_zeros() as u64;
+    log2.min(IDF_MAX)
+}
+
+/// Exact weighted multiset Jaccard similarity between two signatures (§1),
+/// with a per-feature IDF multiplier applied ON TOP of the feature-class
+/// weight (`jr-deblob-similarity-idf-221040`). `idf_mult(feature_bytes)`
+/// returns an INTEGER multiplier the caller (the handler, which owns the
+/// Redis `df`/`N` reads) injects, so this crate performs no I/O. The effective
+/// per-feature weight is `class_weight * idf_mult`; both are integers, so the
+/// score remains the exact rational `(numerator, denominator)`. A feature
+/// whose `idf_mult` is `0` contributes to neither the numerator nor the
+/// denominator (it drops out of the union entirely).
+pub fn similarity_weighted(
+    a: &SemanticSignature,
+    b: &SemanticSignature,
+    idf_mult: &impl Fn(&[u8]) -> u64,
+) -> Score {
     let mut numerator: u64 = 0;
     let mut denominator: u64 = 0;
 
@@ -420,7 +516,9 @@ pub fn similarity(a: &SemanticSignature, b: &SemanticSignature) -> Score {
     for key in keys {
         let count_a = a.features.get(key).copied().unwrap_or(0) as u64;
         let count_b = b.features.get(key).copied().unwrap_or(0) as u64;
-        let weight = u64::from(FeatureTag::from_byte(key[0]).weight());
+        let weight = u64::from(FeatureTag::from_byte(key[0]).weight())
+            .checked_mul(idf_mult(key))
+            .expect("class-weight * idf overflow");
 
         numerator = numerator
             .checked_add(
@@ -442,6 +540,15 @@ pub fn similarity(a: &SemanticSignature, b: &SemanticSignature) -> Score {
         numerator,
         denominator,
     }
+}
+
+/// Exact weighted multiset Jaccard similarity between two signatures (§1) —
+/// the pre-IDF behavior, i.e. [`similarity_weighted`] with a constant unit
+/// multiplier. Kept for callers (and tests) that score without corpus
+/// statistics; the IDF-aware neighbor handler uses [`similarity_weighted`]
+/// with a real `df`/`N`-derived multiplier.
+pub fn similarity(a: &SemanticSignature, b: &SemanticSignature) -> Score {
+    similarity_weighted(a, b, &|_| 1)
 }
 
 // ---- strength (§3) ---------------------------------------------------------
@@ -482,13 +589,31 @@ pub fn is_discriminative_cfid(cfid: &str) -> bool {
     !GENERIC_CFIDS.contains(&cfid)
 }
 
-/// The count of shared canonical_field_ids that are DISCRIMINATIVE (generic
-/// stop-word cfids excluded) — the quantity that drives anchoring + strength,
-/// so a shared `cfid_timestamp` alone never makes two schemas neighbors.
-fn shared_discriminative_field_count(a: &SemanticSignature, b: &SemanticSignature) -> usize {
+/// True when `cfid` is an EFFECTIVE anchor under the injected IDF lookup: it is
+/// not a hard-stop-list generic ([`is_discriminative_cfid`]) AND its measured
+/// IDF multiplier clears [`ANCHOR_IDF_MIN`] (i.e. it is rare enough across the
+/// corpus to carry real signal). This is the long-tail generalization of the
+/// [`GENERIC_CFIDS`] stop-list (`jr-deblob-similarity-idf-221040`): IDF can only
+/// ever REMOVE anchoring from a measured-common field, never grant it to a
+/// stop-listed one. With a saturating `idf_mult` (`|_| u64::MAX`) this reduces
+/// exactly to [`is_discriminative_cfid`] — the pre-IDF (b24) behavior.
+fn is_anchor_cfid(cfid: &str, idf_mult: &impl Fn(&[u8]) -> u64) -> bool {
+    is_discriminative_cfid(cfid) && idf_mult(&encode_field(cfid)) >= ANCHOR_IDF_MIN
+}
+
+/// The count of shared canonical_field_ids that are effective ANCHORS under
+/// `idf_mult` (generic stop-word cfids AND measured-common cfids excluded) —
+/// the quantity that drives anchoring + strength, so neither a shared
+/// `cfid_timestamp` nor a shared but ubiquitous discriminative field alone
+/// makes two schemas neighbors.
+fn shared_anchor_field_count(
+    a: &SemanticSignature,
+    b: &SemanticSignature,
+    idf_mult: &impl Fn(&[u8]) -> u64,
+) -> usize {
     a.canonical_field_ids
         .intersection(&b.canonical_field_ids)
-        .filter(|c| is_discriminative_cfid(c))
+        .filter(|c| is_anchor_cfid(c, idf_mult))
         .count()
 }
 
@@ -498,11 +623,24 @@ fn shared_discriminative_field_count(a: &SemanticSignature, b: &SemanticSignatur
 /// expand a search toward the whole vault (Task 10 §4) nor be returned as a
 /// neighbor, because it shares no domain-bearing signal (`jr-deblob-similarity-220904`).
 pub fn has_anchor(signature: &SemanticSignature) -> bool {
+    has_anchor_weighted(signature, &|_| u64::MAX)
+}
+
+/// IDF-aware [`has_anchor`]: a `canonical_field_id` only counts as an anchor
+/// when it is an effective anchor under `idf_mult` ([`is_anchor_cfid`]) — so a
+/// schema whose only discriminative cfids are measured-ubiquitous has no anchor
+/// and never expands the search (`jr-deblob-similarity-idf-221040`). `event_type`
+/// and `identifier_namespace` are already high-signal and are not IDF-gated in
+/// this first cut. With `idf_mult = |_| u64::MAX` this is exactly [`has_anchor`].
+pub fn has_anchor_weighted(
+    signature: &SemanticSignature,
+    idf_mult: &impl Fn(&[u8]) -> u64,
+) -> bool {
     signature.event_type.is_some()
         || signature
             .canonical_field_ids
             .iter()
-            .any(|c| is_discriminative_cfid(c))
+            .any(|c| is_anchor_cfid(c, idf_mult))
         || !signature.identifier_namespaces.is_empty()
 }
 
@@ -544,23 +682,39 @@ fn overlapping_tags(a: &SemanticSignature, b: &SemanticSignature) -> BTreeSet<Fe
 /// If both schemas declare event types and they DIFFER, the computed
 /// strength is capped at `Medium` regardless of raw score.
 pub fn strength(a: &SemanticSignature, b: &SemanticSignature) -> Strength {
-    if !has_anchor(a) || !has_anchor(b) {
+    strength_weighted(a, b, &|_| u64::MAX)
+}
+
+/// IDF-aware [`strength`]: identical logic, but "discriminative field" is
+/// replaced by "effective anchor under `idf_mult`" ([`is_anchor_cfid`]).
+/// A measured-ubiquitous discriminative cfid therefore no longer earns `Medium`
+/// on its own, which is what stops the strength-FIRST ranking from preserving a
+/// false close (Hermes, `jr-deblob-similarity-idf-221040`: IDF must touch
+/// strength, not only the score). With `idf_mult = |_| u64::MAX` this is exactly
+/// [`strength`] (the b24 behavior).
+pub fn strength_weighted(
+    a: &SemanticSignature,
+    b: &SemanticSignature,
+    idf_mult: &impl Fn(&[u8]) -> u64,
+) -> Strength {
+    if !has_anchor_weighted(a, idf_mult) || !has_anchor_weighted(b, idf_mult) {
         return Strength::Insufficient;
     }
 
-    // DISCRIMINATIVE shared/total cfid counts (generic stop-word cfids like
-    // cfid_timestamp excluded) — so sharing only a ubiquitous field never earns
-    // Medium+ strength (jr-deblob-similarity-220904).
-    let shared_field_count = shared_discriminative_field_count(a, b);
+    // Shared/total ANCHOR cfid counts (generic stop-word cfids AND
+    // measured-common cfids excluded) — so sharing only a ubiquitous field, or
+    // only a discriminative-but-corpus-common one, never earns Medium+ strength
+    // (jr-deblob-similarity-220904, -idf-221040).
+    let shared_field_count = shared_anchor_field_count(a, b, idf_mult);
     let disc_a = a
         .canonical_field_ids
         .iter()
-        .filter(|c| is_discriminative_cfid(c))
+        .filter(|c| is_anchor_cfid(c, idf_mult))
         .count();
     let disc_b = b
         .canonical_field_ids
         .iter()
-        .filter(|c| is_discriminative_cfid(c))
+        .filter(|c| is_anchor_cfid(c, idf_mult))
         .count();
     let min_fields = disc_a.min(disc_b);
     let coverage_at_least_half = min_fields > 0 && shared_field_count * 2 >= min_fields;
@@ -614,13 +768,22 @@ pub fn matched_feature_classes(a: &SemanticSignature, b: &SemanticSignature) -> 
 /// `identifier_namespace`) — Task 10's `shared_anchor_count` response
 /// field.
 pub fn shared_anchor_count(a: &SemanticSignature, b: &SemanticSignature) -> usize {
+    shared_anchor_count_weighted(a, b, &|_| u64::MAX)
+}
+
+/// IDF-aware [`shared_anchor_count`]: only effective-anchor shared cfids under
+/// `idf_mult` count (`jr-deblob-similarity-idf-221040`). With
+/// `idf_mult = |_| u64::MAX` this is exactly [`shared_anchor_count`].
+pub fn shared_anchor_count_weighted(
+    a: &SemanticSignature,
+    b: &SemanticSignature,
+    idf_mult: &impl Fn(&[u8]) -> u64,
+) -> usize {
     let same_event = usize::from(matches!(
         (&a.event_type, &b.event_type),
         (Some(x), Some(y)) if x == y
     ));
-    // Only DISCRIMINATIVE shared cfids count as anchors (generic stop-word cfids
-    // excluded) — jr-deblob-similarity-220904.
-    let shared_fields = shared_discriminative_field_count(a, b);
+    let shared_fields = shared_anchor_field_count(a, b, idf_mult);
     let shared_namespaces = a
         .identifier_namespaces
         .intersection(&b.identifier_namespaces)
@@ -802,5 +965,85 @@ mod tests {
             denominator: 2,
         };
         assert_eq!(half.decimal_string(2), "0.50");
+    }
+
+    // ---- IDF (jr-deblob-similarity-idf-221040) ----------------------------
+
+    #[test]
+    fn idf_multiplier_is_exact_integer_floor_log2() {
+        // Below IDF_MIN_POPULATION the multiplier saturates (IDF is a no-op) so
+        // a tiny corpus keeps pure b24 structural behavior.
+        assert_eq!(idf_multiplier(IDF_MIN_POPULATION - 1, 10), IDF_MAX);
+        assert_eq!(idf_multiplier(3, 2), IDF_MAX);
+        // df == 0: a feature the corpus has never posted -> maximally rare.
+        assert_eq!(idf_multiplier(100, 0), IDF_MAX);
+        // Present in >= half the corpus -> zero discriminative mass.
+        assert_eq!(idf_multiplier(100, 100), 0);
+        assert_eq!(idf_multiplier(100, 60), 0); // ratio 1
+        assert_eq!(idf_multiplier(100, 50), 1); // ratio 2  -> floor(log2 2)=1
+        assert_eq!(idf_multiplier(100, 33), 1); // ratio 3  -> floor(log2 3)=1
+        assert_eq!(idf_multiplier(100, 25), 2); // ratio 4  -> 2
+        assert_eq!(idf_multiplier(1024, 1), 10); // ratio 1024 -> 10 (< cap)
+        assert_eq!(idf_multiplier(1u64 << 40, 1), IDF_MAX); // clamped to cap
+    }
+
+    #[test]
+    fn similarity_weighted_unit_closure_equals_similarity() {
+        let a = sig_with_cfids(&["cfid_carbon", "cfid_region"]);
+        let b = sig_with_cfids(&["cfid_carbon", "cfid_power"]);
+        assert_eq!(similarity_weighted(&a, &b, &|_| 1), similarity(&a, &b));
+    }
+
+    #[test]
+    fn idf_zero_multiplier_drops_a_common_shared_feature_from_the_score() {
+        // Two schemas share a corpus-COMMON cfid and each has a distinct rare
+        // one (not shared). Under IDF the shared common field contributes zero
+        // mass -> numerator 0; unit weighting counts it fully -> nonzero.
+        let a = sig_with_cfids(&["cfid_common", "cfid_rare_a"]);
+        let b = sig_with_cfids(&["cfid_common", "cfid_rare_b"]);
+        let common_key = encode_field("cfid_common");
+        let idf = |k: &[u8]| if k == common_key.as_slice() { 0 } else { 8 };
+        assert_eq!(similarity_weighted(&a, &b, &idf).numerator, 0);
+        assert!(similarity(&a, &b).numerator > 0);
+    }
+
+    #[test]
+    fn idf_anchoring_demotes_a_measured_common_discriminative_cfid() {
+        // gpu-price vs electricity-price analog: both carry a discriminative but
+        // corpus-COMMON cfid_price. b24 structural strength earns Medium off that
+        // one shared field; under IDF cfid_price is measured ubiquitous (idf 0 <
+        // ANCHOR_IDF_MIN) so it is NOT an anchor -> Insufficient. (The residual
+        // rare-shared-cfid cross-domain case is what the domain gate handles.)
+        let gpu = sig_with_cfids(&["cfid_price"]);
+        let elec = sig_with_cfids(&["cfid_price"]);
+        assert_eq!(strength(&gpu, &elec), Strength::Medium);
+
+        let price_key = encode_field("cfid_price");
+        let idf = |k: &[u8]| if k == price_key.as_slice() { 0 } else { 8 };
+        assert!(!has_anchor_weighted(&gpu, &idf));
+        assert_eq!(strength_weighted(&gpu, &elec, &idf), Strength::Insufficient);
+        assert_eq!(shared_anchor_count_weighted(&gpu, &elec, &idf), 0);
+    }
+
+    #[test]
+    fn idf_keeps_a_rare_shared_cfid_as_an_anchor() {
+        let a = sig_with_cfids(&["cfid_carbon"]);
+        let b = sig_with_cfids(&["cfid_carbon"]);
+        let idf = |_: &[u8]| 8u64; // rare everywhere
+        assert!(has_anchor_weighted(&a, &idf));
+        assert!(strength_weighted(&a, &b, &idf) >= Strength::Medium);
+    }
+
+    #[test]
+    fn saturating_idf_matches_b24_behavior_exactly() {
+        // The delegating wrappers pass |_| u64::MAX, which must reproduce b24.
+        let a = sig_with_cfids(&["cfid_carbon", "cfid_timestamp"]);
+        let b = sig_with_cfids(&["cfid_carbon", "cfid_power"]);
+        assert_eq!(strength_weighted(&a, &b, &|_| u64::MAX), strength(&a, &b));
+        assert_eq!(has_anchor_weighted(&a, &|_| u64::MAX), has_anchor(&a));
+        assert_eq!(
+            shared_anchor_count_weighted(&a, &b, &|_| u64::MAX),
+            shared_anchor_count(&a, &b)
+        );
     }
 }

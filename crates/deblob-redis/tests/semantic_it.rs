@@ -1025,3 +1025,62 @@ async fn rebuild_semantic_index_produces_byte_identical_postings_to_incremental(
         "rebuild must produce byte-identical feature_keys_json fields to incremental writes"
     );
 }
+
+/// Task 10 IDF (jr-deblob-similarity-idf-221040): `idf_stats` reports the
+/// active-annotated population `N` (`SCARD deblob:sem-active-schemas`) and each
+/// requested feature's document frequency (`SCARD deblob:sem-sig:<hex>`) in one
+/// atomic snapshot; and `rebuild_semantic_index` reconstructs the population set
+/// from the active pointers exactly like the postings.
+#[tokio::test]
+async fn idf_stats_reports_population_and_document_frequencies() {
+    let (_node, reg, url) = connect().await;
+
+    let a = publish_schema(&reg, br#"{"a":1}"#, 40).await;
+    let b = publish_schema(&reg, br#"{"b":1}"#, 41).await;
+    let c = publish_schema(&reg, br#"{"c":1}"#, 42).await;
+
+    // cfid_alpha annotated on two schemas, cfid_beta on one -> df 2 and 1, N=3.
+    for (sch, cfid) in [(&a, "cfid_alpha"), (&b, "cfid_alpha"), (&c, "cfid_beta")] {
+        let metadata = metadata_with_cfid(cfid);
+        let (bytes, sem_id) = canon(&metadata);
+        reg.append_revision(
+            sch,
+            &metadata,
+            &bytes,
+            &sem_id,
+            "kamil",
+            ReasonCode::Correction,
+            "initial",
+            1,
+            1,
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    let alpha_hex = semantic_signature(&metadata_with_cfid("cfid_alpha")).feature_keys_hex();
+    let beta_hex = semantic_signature(&metadata_with_cfid("cfid_beta")).feature_keys_hex();
+    let query: Vec<String> = alpha_hex.iter().chain(beta_hex.iter()).cloned().collect();
+
+    let (n, dfs) = reg.idf_stats(&query).await.unwrap();
+    assert_eq!(n, 3, "three schemas carry an active semantic revision");
+    assert_eq!(dfs, vec![2, 1], "cfid_alpha in 2 schemas, cfid_beta in 1");
+
+    // A never-posted feature SCARDs to 0 rather than erroring.
+    let (_n, missing) = reg.idf_stats(&["deadbeef".to_string()]).await.unwrap();
+    assert_eq!(missing, vec![0]);
+
+    // Wiping the population set drops N to 0; a rebuild restores it (and the
+    // postings) from the authoritative active pointers.
+    let client = redis::Client::open(url.as_str()).unwrap();
+    let mut conn = client.get_multiplexed_async_connection().await.unwrap();
+    let _: () = conn.del("deblob:sem-active-schemas").await.unwrap();
+    let (n_wiped, _) = reg.idf_stats(&query).await.unwrap();
+    assert_eq!(n_wiped, 0, "population set wiped");
+
+    reg.rebuild_semantic_index().await.unwrap();
+    let (n_rebuilt, dfs_rebuilt) = reg.idf_stats(&query).await.unwrap();
+    assert_eq!(n_rebuilt, 3, "rebuild restores the population set");
+    assert_eq!(dfs_rebuilt, vec![2, 1]);
+}

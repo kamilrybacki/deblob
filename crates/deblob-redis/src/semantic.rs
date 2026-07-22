@@ -496,6 +496,14 @@ impl RedisRegistry {
 
         delete_matching(conn.clone(), SEM_INDEX_KEY_PATTERN).await?;
         delete_matching(conn.clone(), SEM_SIG_KEY_PATTERN).await?;
+        // Task 10 IDF (jr-deblob-similarity-idf-221040): the active-annotated
+        // population set is rebuilt from the same authoritative `sem-active:*`
+        // pointers as the postings, so `N = SCARD` stays consistent with the
+        // `deblob:sem-sig:*` df values after any rebuild.
+        let _: () = conn
+            .del("deblob:sem-active-schemas")
+            .await
+            .map_err(redis_err)?;
 
         let mut count: u64 = 0;
         let mut cursor = "0".to_string();
@@ -535,6 +543,11 @@ impl RedisRegistry {
                 })?;
                 let _: () = conn
                     .sadd(sem_index_key(&sem_id_parsed), schema_id.as_str())
+                    .await
+                    .map_err(redis_err)?;
+                // IDF population set (jr-deblob-similarity-idf-221040).
+                let _: () = conn
+                    .sadd("deblob:sem-active-schemas", schema_id.as_str())
                     .await
                     .map_err(redis_err)?;
 
@@ -611,5 +624,33 @@ impl RedisRegistry {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(SignatureCandidates::Bounded(ids))
+    }
+
+    /// Task 10 IDF snapshot (`jr-deblob-similarity-idf-221040`): the
+    /// active-annotated population `N` plus the document frequency `df` of every
+    /// `feature_keys_hex` posting, read atomically via
+    /// [`crate::lua::SEM_IDF_STATS_SCRIPT`] so the neighbor handler never scores
+    /// over a torn view of a concurrent index transition. The returned
+    /// `Vec<u64>` is aligned to `feature_keys_hex` order; a posting key that
+    /// does not exist (never posted) `SCARD`s to `0`. An empty `feature_keys_hex`
+    /// still returns `N` (with an empty `df` vec) — the caller may want the
+    /// population for the response envelope even for a featureless query.
+    pub async fn idf_stats(
+        &self,
+        feature_keys_hex: &[String],
+    ) -> Result<(u64, Vec<u64>), SemError> {
+        let mut conn = self.conn();
+        let mut invocation = self.sem_idf_stats_script.prepare_invoke();
+        for hex in feature_keys_hex {
+            invocation.arg(hex.as_str());
+        }
+        let reply: Vec<u64> = invocation
+            .invoke_async(&mut conn)
+            .await
+            .map_err(sem_redis_err)?;
+        let mut iter = reply.into_iter();
+        let n = iter.next().unwrap_or(0);
+        let dfs: Vec<u64> = iter.collect();
+        Ok((n, dfs))
     }
 }

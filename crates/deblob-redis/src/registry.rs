@@ -1,7 +1,7 @@
 //! Redis-backed `Registry`: the permanent schema vault (spec §6).
 
 use crate::health::HealthGate;
-use crate::lua::{PUBLISH_SCRIPT, SEM_APPEND_SCRIPT, SET_NAME_SCRIPT};
+use crate::lua::{PUBLISH_SCRIPT, SEM_APPEND_SCRIPT, SEM_IDF_STATS_SCRIPT, SET_NAME_SCRIPT};
 use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{FamilyRecord, FamilyRef, NameWriteOutcome, Registry, SchemaRecord};
@@ -42,6 +42,11 @@ pub struct RedisRegistry {
     /// see `crate::lua::SET_NAME_SCRIPT` and `set_schema_name`. Enforces the
     /// human-override-wins guard inside one Lua transition.
     set_name_script: Script,
+    /// The atomic IDF read snapshot (`jr-deblob-similarity-idf-221040`) — see
+    /// `crate::lua::SEM_IDF_STATS_SCRIPT` and `idf_stats`. Reads the
+    /// active-annotated population `N` and per-feature document frequencies in
+    /// one script so the neighbor handler never scores over a torn view.
+    pub(crate) sem_idf_stats_script: Script,
     /// Runtime persistence health gate (Task 10, spec §6). `None` for
     /// registries built without one (the default, and every existing
     /// caller/test) — publishing then behaves exactly as before this task,
@@ -204,6 +209,7 @@ impl RedisRegistry {
             publish_script: Script::new(PUBLISH_SCRIPT),
             sem_append_script: Script::new(SEM_APPEND_SCRIPT),
             set_name_script: Script::new(SET_NAME_SCRIPT),
+            sem_idf_stats_script: Script::new(SEM_IDF_STATS_SCRIPT),
             health_gate: None,
         })
     }

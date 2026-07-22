@@ -67,6 +67,13 @@ pub trait SemanticStore: Send + Sync {
         &self,
         feature_keys_hex: &[String],
     ) -> Result<SignatureCandidates, SemError>;
+
+    /// Task 10 IDF (`jr-deblob-similarity-idf-221040`): the active-annotated
+    /// population `N` and the document frequency of each `feature_keys_hex`
+    /// posting (aligned to input order), read as one atomic snapshot. Powers the
+    /// `idf_multiplier` the neighbor handler injects into the weighted score /
+    /// strength so corpus-common features stop earning false-close neighbors.
+    async fn idf_stats(&self, feature_keys_hex: &[String]) -> Result<(u64, Vec<u64>), SemError>;
 }
 
 /// Delegates straight to `RedisRegistry`'s own inherent methods (Rust's
@@ -131,5 +138,9 @@ impl SemanticStore for RedisRegistry {
         feature_keys_hex: &[String],
     ) -> Result<SignatureCandidates, SemError> {
         self.signature_candidates(feature_keys_hex).await
+    }
+
+    async fn idf_stats(&self, feature_keys_hex: &[String]) -> Result<(u64, Vec<u64>), SemError> {
+        self.idf_stats(feature_keys_hex).await
     }
 }

@@ -471,6 +471,16 @@ if cur_sem_id and cur_sem_id ~= new_sem_id then
 end
 redis.call('SADD', new_index_key, sch_id)
 
+-- Task 10 (IDF, jr-deblob-similarity-idf-221040): the active-annotated-schema
+-- population set. Maintained atomically here so `N = SCARD` is O(1) and always
+-- matches the `deblob:sem-sig:*` posting semantics (both track ACTIVE
+-- signatures). A schema's FIRST annotation always reaches this append path (an
+-- idempotent replay returns far above, before any write), and SADD of an
+-- existing member is a harmless no-op on every later real change — so the set
+-- is exactly {schemas with a current active semantic revision}. Rebuilt from
+-- `deblob:sem-active:*` by `rebuild_semantic_index`, same as the postings.
+redis.call('SADD', 'deblob:sem-active-schemas', sch_id)
+
 -- Task 10: bounded inverted-index postings swap, atomically alongside the
 -- pointer move above. `old_features` comes from what THIS SAME active hash
 -- said its own feature list was, immediately before this call overwrote its
@@ -489,4 +499,21 @@ redis.call('XADD', audit_key, '*',
   'actor', actor, 'reason', reason, 'schema', sch_id, 'sem', new_sem_id, 'ts', recorded_at)
 
 return {new_revision_id, new_sem_id, tostring(new_etag), 'appended'}
+"#;
+
+/// Task 10 IDF read snapshot (`jr-deblob-similarity-idf-221040`): returns the
+/// active-annotated population `N` and the document frequency `df` of every
+/// requested feature posting, in ONE atomic script so the caller never observes
+/// a torn view across a concurrent index transition. Reply is an integer array
+/// `{N, df(ARGV[1]), df(ARGV[2]), ...}` aligned to the ARGV feature-hex order.
+/// `N = SCARD deblob:sem-active-schemas`; `df = SCARD deblob:sem-sig:<hex>`
+/// (a missing posting key SCARDs to 0). Pure reads — no key mutation, safe to
+/// run against a replica.
+pub const SEM_IDF_STATS_SCRIPT: &str = r#"
+local out = {}
+out[1] = redis.call('SCARD', 'deblob:sem-active-schemas')
+for i = 1, #ARGV do
+  out[i + 1] = redis.call('SCARD', 'deblob:sem-sig:' .. ARGV[i])
+end
+return out
 "#;

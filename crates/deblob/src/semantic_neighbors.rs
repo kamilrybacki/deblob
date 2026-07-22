@@ -19,12 +19,13 @@
 //! and asserts byte-identical state.
 
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, HashMap};
 
 use deblob_core::id::{RevisionId, SchemaId};
 use deblob_core::revision::{SemError, SignatureCandidates};
 use deblob_semantic::signature::{
-    self, has_anchor, matched_feature_classes, semantic_signature, shared_anchor_count, similarity,
-    strength, Score, Strength,
+    self, has_anchor_weighted, idf_multiplier, matched_feature_classes, semantic_signature,
+    shared_anchor_count_weighted, similarity_weighted, strength_weighted, Score, Strength,
 };
 
 use crate::semantic_store::SemanticStore;
@@ -65,8 +66,14 @@ pub enum NeighborOutcome {
     TooBroad,
     /// Ranked, top-`k`-truncated neighbor candidates (spec §5.9's
     /// tie-break: strength desc, exact rational score desc, shared-anchor
-    /// count desc, `sch_` bytes asc).
-    Found(Vec<Neighbor>),
+    /// count desc, `sch_` bytes asc). `idf_population_n` is the
+    /// active-annotated corpus size `N` used for the IDF weighting of this
+    /// result — surfaced in the response so a corpus-relative score is
+    /// reproducible alongside `weights_version` (`jr-deblob-similarity-idf-221040`).
+    Found {
+        neighbors: Vec<Neighbor>,
+        idf_population_n: u64,
+    },
 }
 
 /// Ranks `a` before `b` when `a` is the BETTER match (spec §5.9): higher
@@ -100,49 +107,120 @@ pub async fn neighbors(
     };
     let query_signature = semantic_signature(&query_revision.metadata);
 
-    if !has_anchor(&query_signature) {
+    // Phase A — IDF stats for the query's OWN feature postings. `N` and each
+    // query feature's `df` come back in one atomic snapshot; from them we build
+    // the query-side `idf_multiplier` used for the anchor gate and for pruning
+    // zero-IDF (corpus-ubiquitous) postings out of the candidate union BEFORE
+    // the `SUNION` — so a timestamp posting present in most of the corpus can
+    // never explode the candidate set (Hermes, jr-deblob-similarity-idf-221040).
+    let query_hex = query_signature.feature_keys_hex();
+    let (n_query, query_dfs) = store.idf_stats(&query_hex).await?;
+    let query_df: HashMap<Vec<u8>, u64> = query_signature
+        .feature_keys()
+        .into_iter()
+        .zip(query_dfs)
+        .collect();
+    let idf_query = |key: &[u8]| idf_multiplier(n_query, query_df.get(key).copied().unwrap_or(0));
+
+    if !has_anchor_weighted(&query_signature, &idf_query) {
         return Ok(Some(NeighborOutcome::NoAnchor));
     }
 
-    let feature_keys = query_signature.feature_keys_hex();
-    let candidate_ids = match store.signature_candidates(&feature_keys).await? {
+    // Prune zero-IDF query postings from the union. Keep every posting whose
+    // `df == 0` guard can't apply (defensive) — only a POSITIVE-df,
+    // majority-of-corpus feature is dropped. If pruning would empty the union
+    // (e.g. a query all of whose features are ubiquitous yet still anchored via
+    // an event/namespace), fall back to the full key set rather than returning
+    // nothing.
+    let pruned_hex: Vec<String> = query_signature
+        .feature_keys()
+        .into_iter()
+        .zip(query_hex.iter())
+        .filter(|(raw, _)| idf_query(raw) > 0)
+        .map(|(_, hex)| hex.clone())
+        .collect();
+    let union_hex = if pruned_hex.is_empty() {
+        query_hex.clone()
+    } else {
+        pruned_hex
+    };
+
+    let candidate_ids = match store.signature_candidates(&union_hex).await? {
         SignatureCandidates::TooBroad => return Ok(Some(NeighborOutcome::TooBroad)),
         SignatureCandidates::Bounded(ids) => ids,
     };
 
-    let mut found = Vec::new();
+    // Load every candidate's active signature first, so Phase B can fetch the
+    // document frequencies for the FULL union of query + candidate features in
+    // one coherent snapshot and score against a single `N`.
+    let mut candidates: Vec<(SchemaId, RevisionId, signature::SemanticSignature)> = Vec::new();
     for candidate_id in candidate_ids {
         if candidate_id == *query_sch_id {
             // Exclude the query schema itself (spec §6).
             continue;
         }
         // Defensive: the postings index is maintained atomically with the
-        // active pointer, so every candidate SHOULD have an active
-        // revision. A missing one (index/active-pointer race window, or a
-        // rebuild mid-flight) is skipped rather than failing the whole
-        // query — the same "skip what can't be reconstructed" posture
+        // active pointer, so every candidate SHOULD have an active revision. A
+        // missing one (index/active-pointer race window, or a rebuild
+        // mid-flight) is skipped rather than failing the whole query — the same
+        // "skip what can't be reconstructed" posture
         // `rebuild_index`/`rebuild_semantic_index` already use.
         let Some((candidate_revision, _)) = store.active_revision(&candidate_id).await? else {
             continue;
         };
         let candidate_signature = signature::semantic_signature(&candidate_revision.metadata);
+        candidates.push((
+            candidate_id,
+            candidate_revision.revision_id,
+            candidate_signature,
+        ));
+    }
 
-        // Drop candidates that share no DISCRIMINATIVE anchor with the query —
-        // an overlap on only generic stop-word cfids (e.g. cfid_timestamp) is
-        // Insufficient strength and is NOT a real neighbor. Without this filter
-        // the postings union returns every schema that merely shares a ubiquitous
-        // field, surfacing unrelated schemas as "close" (jr-deblob-similarity-220904).
-        let s = strength(&query_signature, &candidate_signature);
-        if s == signature::Strength::Insufficient {
+    // Phase B — the full-union IDF snapshot for scoring. A feature the query
+    // lacks but a candidate has still contributes to the weighted denominator,
+    // so its `df` must be known too. `raw_to_hex` dedups the union (hex is a
+    // bijection of the raw bytes) while preserving the raw⇒hex pairing the
+    // `idf_multiplier` closure needs (it is handed raw feature bytes).
+    let mut raw_to_hex: BTreeMap<Vec<u8>, String> = BTreeMap::new();
+    for (raw, hex) in query_signature
+        .feature_keys()
+        .into_iter()
+        .zip(query_signature.feature_keys_hex())
+    {
+        raw_to_hex.entry(raw).or_insert(hex);
+    }
+    for (_, _, sig) in &candidates {
+        for (raw, hex) in sig.feature_keys().into_iter().zip(sig.feature_keys_hex()) {
+            raw_to_hex.entry(raw).or_insert(hex);
+        }
+    }
+    let ordered_raw: Vec<Vec<u8>> = raw_to_hex.keys().cloned().collect();
+    let ordered_hex: Vec<String> = raw_to_hex.into_values().collect();
+    let (n, dfs) = store.idf_stats(&ordered_hex).await?;
+    let df_by_raw: HashMap<Vec<u8>, u64> = ordered_raw.into_iter().zip(dfs).collect();
+    let idf = |key: &[u8]| idf_multiplier(n, df_by_raw.get(key).copied().unwrap_or(0));
+
+    let mut found = Vec::new();
+    for (candidate_id, revision_id, candidate_signature) in candidates {
+        // Drop candidates that share no effective ANCHOR with the query under
+        // IDF — an overlap on only generic stop-word cfids (b24) OR on only
+        // corpus-ubiquitous discriminative cfids (IDF) is Insufficient strength
+        // and is NOT a real neighbor (jr-deblob-similarity-220904, -idf-221040).
+        let s = strength_weighted(&query_signature, &candidate_signature, &idf);
+        if s == Strength::Insufficient {
             continue;
         }
 
         found.push(Neighbor {
             schema_id: candidate_id,
-            semantic_revision_id: candidate_revision.revision_id,
-            score: similarity(&query_signature, &candidate_signature),
+            semantic_revision_id: revision_id,
+            score: similarity_weighted(&query_signature, &candidate_signature, &idf),
             strength: s,
-            shared_anchor_count: shared_anchor_count(&query_signature, &candidate_signature),
+            shared_anchor_count: shared_anchor_count_weighted(
+                &query_signature,
+                &candidate_signature,
+                &idf,
+            ),
             matched_feature_classes: matched_feature_classes(
                 &query_signature,
                 &candidate_signature,
@@ -152,7 +230,10 @@ pub async fn neighbors(
 
     found.sort_by(cmp_neighbors);
     found.truncate(k);
-    Ok(Some(NeighborOutcome::Found(found)))
+    Ok(Some(NeighborOutcome::Found {
+        neighbors: found,
+        idf_population_n: n,
+    }))
 }
 
 #[cfg(test)]
@@ -293,6 +374,20 @@ mod tests {
                 .collect();
             Ok(SignatureCandidates::Bounded(ids))
         }
+
+        async fn idf_stats(
+            &self,
+            feature_keys_hex: &[String],
+        ) -> Result<(u64, Vec<u64>), SemError> {
+            // Saturating stats: these handler tests exercise scoring / ranking /
+            // gating ORCHESTRATION, not corpus-relative IDF demotion (that is
+            // unit-tested directly in deblob-semantic::signature, and end-to-end
+            // against real Redis in deblob-redis's integration tests). A large
+            // `N` with `df == 1` makes every feature maximally rare, so
+            // `idf_multiplier` saturates at `IDF_MAX` and reproduces the pre-IDF
+            // (b24) ranking these fixtures assert.
+            Ok((u64::from(u32::MAX), vec![1; feature_keys_hex.len()]))
+        }
     }
 
     fn sch(seed: u8) -> SchemaId {
@@ -346,7 +441,10 @@ mod tests {
         );
 
         let outcome = neighbors(&store, &query, DEFAULT_K).await.unwrap().unwrap();
-        let NeighborOutcome::Found(found) = outcome else {
+        let NeighborOutcome::Found {
+            neighbors: found, ..
+        } = outcome
+        else {
             panic!("expected Found, got {outcome:?}");
         };
         let ids: Vec<&SchemaId> = found.iter().map(|n| &n.schema_id).collect();
@@ -386,7 +484,10 @@ mod tests {
         );
 
         let outcome = neighbors(&store, &query, DEFAULT_K).await.unwrap().unwrap();
-        let NeighborOutcome::Found(found) = outcome else {
+        let NeighborOutcome::Found {
+            neighbors: found, ..
+        } = outcome
+        else {
             panic!("expected Found");
         };
         assert_eq!(found.len(), 2);
@@ -413,7 +514,10 @@ mod tests {
         }
 
         let outcome = neighbors(&store, &query, 2).await.unwrap().unwrap();
-        let NeighborOutcome::Found(found) = outcome else {
+        let NeighborOutcome::Found {
+            neighbors: found, ..
+        } = outcome
+        else {
             panic!("expected Found");
         };
         assert_eq!(

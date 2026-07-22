@@ -475,6 +475,12 @@ impl SemanticStore for FakeSemanticStore {
         }
         Ok(SignatureCandidates::Bounded(ids))
     }
+
+    async fn idf_stats(&self, feature_keys_hex: &[String]) -> Result<(u64, Vec<u64>), SemError> {
+        // Saturating stats (see the FixtureStore note in semantic_neighbors.rs):
+        // these API tests assert orchestration, not corpus-relative IDF demotion.
+        Ok((u64::from(u32::MAX), vec![1; feature_keys_hex.len()]))
+    }
 }
 
 // ---------------------------------------------------------------------
