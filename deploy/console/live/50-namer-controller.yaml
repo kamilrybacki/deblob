@@ -25,7 +25,8 @@ data:
     OLLAMA_URL = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
     MODEL = "qwen2.5:0.5b"
     PROMPT_VERSION = "v2"          # v2 = source-aware naming (re-names v1 schemas)
-    NORMALIZER_VERSION = "v2"      # v2 = source qualifier + adjacent-dup collapse
+    NORMALIZER_VERSION = "v3"      # v3 = acronym preservation (UTC/GPU/CPU...) + temporal-plumbing
+                                   # (dtime/utc) + Polish IMGW token aliases (jr-deblob-rebuild-221850)
     SEED = 211140
     H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
     FAIL = 0
@@ -48,9 +49,24 @@ data:
     PLUMBING = {"id","uuid","guid","url","uri","href","link","ts","time","timestamp","date",
                 "datetime","created","updated","modified","at","version","rev","type","kind",
                 "data","items","item","list","array","object","node","children","key","value",
-                "val","meta","metadata","self","href","count","index","idx","hash","etag","seq"}
+                "val","meta","metadata","self","href","count","index","idx","hash","etag","seq",
+                # temporal plumbing (jr-deblob-rebuild-221850): a UTC/datetime field is a
+                # timestamp qualifier, never the salient KIND of a record ("Grid Utc Dtime").
+                "dtime","dt","utc","tz","zone","offset","epoch","millis","ms","nanos","secs",
+                # generic measurement/observation nouns (incl. Polish IMGW plumbing).
+                "pomiar","pomiaru","stan","status"}
+    # token -> canonical concept. Includes source-agnostic Polish IMGW meteorological
+    # terms (jr-deblob-rebuild-221850) so "Environmental Pomiaru Wiatru" -> "... Wind ...".
     ABBREV = {"lat":"latitude","lon":"longitude","lng":"longitude","geo":"geo","gpu":"gpu",
-              "doi":"doi","co2":"carbon","pw":"power","mw":"power","px":"price","qty":"quantity"}
+              "doi":"doi","co2":"carbon","pw":"power","mw":"power","px":"price","qty":"quantity",
+              "wiatru":"wind","wiatr":"wind","predkosc":"speed","kierunek":"direction",
+              "opad":"precipitation","opadu":"precipitation","wilgotnosc":"humidity",
+              "cisnienie":"pressure","temperatura":"temperature","poziom":"level",
+              "rzeka":"river","rzeki":"river","woda":"water","wody":"water","snieg":"snow"}
+    # Tokens rendered UPPERCASE by titlecase (acronyms mangled by naive .capitalize()).
+    ACRONYMS = {"gpu","cpu","utc","api","url","id","npm","ovh","doi","io","iso","uuid","http",
+                "https","sql","json","xml","csv","ai","ml","hf","pse","imgw","dwd","gios","usd",
+                "eur","pln","gb","mb","kb","tb","co2","o3","no2","pm"}
     def split_tokens(name):
         # camelCase + snake + kebab + dots + digits boundaries
         s = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', name)
@@ -97,7 +113,9 @@ data:
                   "snapshots","readings","updates","prices","releases","results","positions",
                   "downloads","measurements","reports"}
     def titlecase(tokens):
-        return " ".join(t.capitalize() for t in tokens)
+        # Preserve known acronyms (UTC/GPU/CPU/...) instead of mangling them to
+        # "Utc"/"Gpu" via naive capitalize (jr-deblob-rebuild-221850).
+        return " ".join(t.upper() if t in ACRONYMS else t.capitalize() for t in tokens)
 
     # --- SOURCE concept (the ingest topic this family was discovered from) ------
     # The source is strong signal — a schema from events.registry.crates is about
