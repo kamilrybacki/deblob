@@ -15,6 +15,11 @@ data:
     transactional_id = "deblob-relay-1"
     max_batch_records = 500
     max_batch_linger_ms = 100
+    # Single-message ceiling; must match the Redpanda cluster kafka_batch_max_bytes
+    # (8 MiB, set in 30-redpanda.yaml). Sized so a full [limits].max_bytes payload's
+    # discovery record (payload embedded as a ~4x JSON byte-array) fits and FLOWS
+    # rather than being skipped/quarantined by the relay produce-size guard.
+    max_message_bytes = 8388608
     [limits]
     max_bytes = 1048576
     max_depth = 32

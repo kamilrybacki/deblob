@@ -23,7 +23,14 @@ spec:
         # NOTE: local-path PVC size (10Gi) is NOT a hard quota — the pod sees
         # lw-c2's full root fs; monitor node disk. High-volume topics get scoped
         # retention.bytes backstops (set via rpk on gdansk/wikidata).
-        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --set, redpanda.auto_create_topics_enabled=true, --set, redpanda.log_retention_ms=2592000000, --set, redpanda.log_segment_size=33554432, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
+        # kafka_batch_max_bytes=8388608 (8 MiB, up from the 1 MiB default): a
+        # provisional record's discovery evidence embeds the payload as a ~4x JSON
+        # byte-array, so a ~340 KB payload already produced a 1.36 MB discovery
+        # record that overflowed the 1 MiB default and was dropped/skipped by the
+        # relay. Must stay in lockstep with deblob's kafka.max_message_bytes
+        # (33-deblob-config.yaml). Also applied live+durably via
+        # `rpk cluster config set` (persists in the controller log on the PVC).
+        args: [redpanda, start, --overprovisioned, --smp=1, --memory=1500M, --reserve-memory=0M, --node-id=0, --check=false, --set, redpanda.auto_create_topics_enabled=true, --set, redpanda.log_retention_ms=2592000000, --set, redpanda.log_segment_size=33554432, --set, redpanda.kafka_batch_max_bytes=8388608, --advertise-kafka-addr=internal://redpanda.deblob.svc.cluster.local:9092, --kafka-addr=internal://0.0.0.0:9092]
         ports: [{name: kafka, containerPort: 9092}, {name: admin, containerPort: 9644}]
         resources: {requests: {cpu: 300m, memory: 1500Mi}, limits: {cpu: "2", memory: 2Gi}}
         readinessProbe: {tcpSocket: {port: 9092}, initialDelaySeconds: 10, periodSeconds: 5}
