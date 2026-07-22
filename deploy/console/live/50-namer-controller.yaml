@@ -25,8 +25,9 @@ data:
     OLLAMA_URL = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
     MODEL = "qwen2.5:0.5b"
     PROMPT_VERSION = "v2"          # v2 = source-aware naming (re-names v1 schemas)
-    NORMALIZER_VERSION = "v3"      # v3 = acronym preservation (UTC/GPU/CPU...) + temporal-plumbing
-                                   # (dtime/utc) + Polish IMGW token aliases (jr-deblob-rebuild-221850)
+    NORMALIZER_VERSION = "v4"      # v3 = acronym preservation (UTC/GPU/CPU...) + temporal-plumbing
+                                   # (dtime/utc) + Polish IMGW token aliases; v4 = common data-feed
+                                   # abbreviations (fcst/gen/agg/...) (jr-deblob-rebuild-221850)
     SEED = 211140
     H = {"Authorization": "Bearer " + os.environ["DEBLOB_API_TOKEN"], "Content-Type": "application/json"}
     FAIL = 0
@@ -62,7 +63,13 @@ data:
               "wiatru":"wind","wiatr":"wind","predkosc":"speed","kierunek":"direction",
               "opad":"precipitation","opadu":"precipitation","wilgotnosc":"humidity",
               "cisnienie":"pressure","temperatura":"temperature","poziom":"level",
-              "rzeka":"river","rzeki":"river","woda":"water","wody":"water","snieg":"snow"}
+              "rzeka":"river","rzeki":"river","woda":"water","wody":"water","snieg":"snow",
+              # common unambiguous data-feed abbreviations (jr-deblob-rebuild-221850).
+              "fcst":"forecast","gen":"generation","agg":"aggregate","avg":"average",
+              "tot":"total","freq":"frequency","elev":"elevation","alt":"altitude",
+              "hdg":"heading","spd":"speed","pkg":"package","repo":"repository",
+              "bal":"balance","amt":"amount","humid":"humidity","pres":"pressure",
+              "vol":"volume","pct":"percent","pop":"population","dl":"downloads"}
     # Tokens rendered UPPERCASE by titlecase (acronyms mangled by naive .capitalize()).
     ACRONYMS = {"gpu","cpu","utc","api","url","id","npm","ovh","doi","io","iso","uuid","http",
                 "https","sql","json","xml","csv","ai","ml","hf","pse","imgw","dwd","gios","usd",
