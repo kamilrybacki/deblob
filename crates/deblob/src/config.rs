@@ -676,6 +676,15 @@ pub struct SemanticConfig {
     /// An annotation naming any OTHER event type still `422`s.
     #[serde(default)]
     pub event_types: Vec<String>,
+    /// `[semantic].domain_gate_enforce` — when `true`, the source-domain
+    /// coherence gate (`jr-deblob-domain-gate-221052`) drops a semantic-neighbor
+    /// candidate whose ingest domain is proven-disjoint from the query's (e.g. a
+    /// compute/GPU schema vs an energy/carbon schema). When `false` (default) it
+    /// runs in SHADOW: every candidate is annotated with its domain + the gate
+    /// decision and a would-veto count is logged, but nothing is dropped — so the
+    /// veto set can be validated against the diagnostic response before enforcing.
+    #[serde(default)]
+    pub domain_gate_enforce: bool,
 }
 
 impl SemanticConfig {
@@ -1653,6 +1662,7 @@ mod tests {
         let semantic = SemanticConfig {
             canonical_field_ids: vec!["cfid_temperature_ambient".to_string()],
             event_types: vec!["order.created".to_string()],
+            domain_gate_enforce: false,
         };
         let registries = semantic.to_registries();
 

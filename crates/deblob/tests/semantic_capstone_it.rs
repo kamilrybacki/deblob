@@ -536,6 +536,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
         semantic: SemanticConfig {
             canonical_field_ids: vec![REGISTERED_CFID.to_string()],
             event_types: vec![REGISTERED_EVENT.to_string()],
+            domain_gate_enforce: false,
         },
         umbrella: Default::default(),
         samples: Default::default(),

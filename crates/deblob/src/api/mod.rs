@@ -80,6 +80,11 @@ pub struct ApiState {
     /// with any `CONTRADICTORY` field; when `false` (default) the guard runs in
     /// shadow (logged, never enforced).
     pub enforce_value_guard: bool,
+    /// `[semantic].domain_gate_enforce` — `true` enforces the source-domain
+    /// coherence gate on semantic-neighbor results (drop proven cross-domain
+    /// candidates); `false` (default) runs it in shadow (annotate + log, never
+    /// drop). See `api::semantic::get_semantic_neighbors`.
+    pub domain_gate_enforce: bool,
     /// `[umbrella].min_value_support` — minimum numeric observations before a
     /// leaf's bucket mask may drive a `CONTRADICTORY` guard verdict.
     pub umbrella_min_support: u64,

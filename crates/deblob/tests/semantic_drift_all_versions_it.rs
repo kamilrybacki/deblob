@@ -156,6 +156,7 @@ fn state(reg: RedisRegistry, sem: RedisRegistry, metrics: Arc<Metrics>) -> ApiSt
         sources: Arc::new(deblob_core::ports::InMemorySourceRegistry::default()),
         value_profiles: Arc::new(deblob_core::ports::InMemoryValueProfileStore::default()),
         enforce_value_guard: false,
+        domain_gate_enforce: false,
         samples: None,
         samples_read_token: None,
         umbrella_min_support: 30,

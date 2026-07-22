@@ -15,6 +15,7 @@ use axum::Json;
 use deblob_core::id::{FamilyVersion, RevisionId, SchemaId, SemanticId};
 use deblob_core::revision::{Etag, ReasonCode, Revision};
 use deblob_core::semantic::SemanticMetadata;
+use deblob_semantic::domain::{domain_gate, domain_of_source, Domain};
 use deblob_semantic::signature::{Score, Strength};
 use deblob_semantic::{
     canonical_field_paths_for, canonical_semantic_bytes, semantic_fingerprint, validate_metadata,
@@ -424,6 +425,13 @@ pub struct NeighborView {
     pub strength: &'static str,
     pub shared_anchor_count: usize,
     pub matched_feature_classes: Vec<&'static str>,
+    /// Source-domain coherence (`jr-deblob-domain-gate-221052`). `domain` is the
+    /// neighbor's coarse ingest domain (`None` = unknown source); `domain_gate`
+    /// is `"keep"` or `"veto_proven_disjoint"`. In shadow mode a `veto_*`
+    /// neighbor is still returned (annotated); under enforcement it is dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain: Option<&'static str>,
+    pub domain_gate: &'static str,
 }
 
 /// The full `GET .../semantic-neighbors` response envelope (spec §6).
@@ -442,6 +450,15 @@ pub struct SemanticNeighborsView {
     /// (`jr-deblob-similarity-idf-221040`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idf_population_n: Option<u64>,
+    /// The query schema's own ingest domain (`jr-deblob-domain-gate-221052`);
+    /// `None` if its source is unknown. Present only for a `Found` result.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub query_domain: Option<&'static str>,
+    /// `"shadow"` or `"enforced"` — how the source-domain gate treated this
+    /// result. In shadow, cross-domain candidates are annotated (`domain_gate =
+    /// veto_proven_disjoint`) but retained; enforced, they are dropped.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub domain_gate_mode: Option<&'static str>,
     pub neighbors: Vec<NeighborView>,
     pub authority: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -478,6 +495,25 @@ pub struct SemanticNeighborsView {
 /// `SemanticStore`/`Registry` is a READ; see `crate::semantic_neighbors`'s
 /// module docs and `crates/deblob/tests/semantic_neighbors_it.rs`'s
 /// before/after state-snapshot test.
+/// The coarse ingest [`Domain`] for a schema, read from the governed
+/// `provenance.name_meta.source` field that `Registry::get_schema` overlays
+/// (`jr-deblob-domain-gate-221052`). `None` when the schema is missing, its
+/// source is unrecorded, or the namespace is unrecognized — the domain gate then
+/// keeps the candidate (one-sided: uncertainty never vetoes). A best-effort READ
+/// (a registry error is treated as unknown, never failing the diagnostic query).
+async fn schema_domain(state: &ApiState, id: &SchemaId) -> Option<Domain> {
+    let rec = match state.registry.get_schema(id).await {
+        Ok(Some(r)) => r,
+        _ => return None,
+    };
+    let source = rec
+        .provenance
+        .get("name_meta")
+        .and_then(|m| m.get("source"))
+        .and_then(|s| s.as_str())?;
+    domain_of_source(source)
+}
+
 pub async fn get_semantic_neighbors(
     State(state): State<ApiState>,
     Path(sch_id): Path<String>,
@@ -501,31 +537,68 @@ pub async fn get_semantic_neighbors(
         NeighborOutcome::Found {
             neighbors,
             idf_population_n,
-        } => SemanticNeighborsView {
-            query_schema: id,
-            signature_version: deblob_semantic::signature::SIGNATURE_VERSION,
-            weights_version: deblob_semantic::signature::WEIGHTS_VERSION,
-            idf_population_n: Some(idf_population_n),
-            neighbors: neighbors
-                .into_iter()
-                .map(|n| NeighborView {
+        } => {
+            // Source-domain coherence gate (jr-deblob-domain-gate-221052): the
+            // structural ranking is blind to domain, so a compute/GPU schema and
+            // an energy/carbon schema that share cfid_price look close. Annotate
+            // each candidate with its ingest domain and veto the proven
+            // cross-domain ones. SHADOW by default (annotate + log, never drop);
+            // enforced only under `[semantic].domain_gate_enforce`.
+            let query_domain = schema_domain(&state, &id).await;
+            let mut views = Vec::with_capacity(neighbors.len());
+            let mut vetoed = 0usize;
+            for n in neighbors {
+                let nd = schema_domain(&state, &n.schema_id).await;
+                let gate = domain_gate(query_domain, nd);
+                if gate.is_veto() {
+                    vetoed += 1;
+                    if state.domain_gate_enforce {
+                        continue; // drop the proven cross-domain candidate
+                    }
+                }
+                views.push(NeighborView {
                     schema_id: n.schema_id,
                     semantic_revision_id: n.semantic_revision_id,
                     score: n.score.into(),
                     strength: strength_label(n.strength),
                     shared_anchor_count: n.shared_anchor_count,
                     matched_feature_classes: n.matched_feature_classes,
-                })
-                .collect(),
-            authority: "diagnostic_only",
-            strength: None,
-            reason: None,
-        },
+                    domain: nd.map(Domain::slug),
+                    domain_gate: gate.cause(),
+                });
+            }
+            if vetoed > 0 {
+                tracing::info!(
+                    query = %id.as_str(),
+                    vetoed,
+                    enforce = state.domain_gate_enforce,
+                    "domain-gate flagged cross-domain neighbor candidates"
+                );
+            }
+            SemanticNeighborsView {
+                query_schema: id,
+                signature_version: deblob_semantic::signature::SIGNATURE_VERSION,
+                weights_version: deblob_semantic::signature::WEIGHTS_VERSION,
+                idf_population_n: Some(idf_population_n),
+                query_domain: query_domain.map(Domain::slug),
+                domain_gate_mode: Some(if state.domain_gate_enforce {
+                    "enforced"
+                } else {
+                    "shadow"
+                }),
+                neighbors: views,
+                authority: "diagnostic_only",
+                strength: None,
+                reason: None,
+            }
+        }
         NeighborOutcome::NoAnchor => SemanticNeighborsView {
             query_schema: id,
             signature_version: deblob_semantic::signature::SIGNATURE_VERSION,
             weights_version: deblob_semantic::signature::WEIGHTS_VERSION,
             idf_population_n: None,
+            query_domain: None,
+            domain_gate_mode: None,
             neighbors: Vec::new(),
             authority: "diagnostic_only",
             strength: Some(strength_label(Strength::Insufficient)),

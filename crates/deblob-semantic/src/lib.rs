@@ -11,6 +11,7 @@
 
 pub mod canon;
 pub mod digest;
+pub mod domain;
 pub mod path;
 pub mod signature;
 pub mod vocab;
