@@ -40,6 +40,23 @@ spec:
         # beats a crash-loop). Raise back to 2 only alongside a higher memory limit.
         - {name: OLLAMA_NUM_PARALLEL, value: "1"}
         - {name: HOME, value: /home/ollama}
+        # LLAMA_ARG_CACHE_RAM=0 (Hermes' fix, DeblobContainerOOMKilled incident
+        # 2026-07-23 17:14): NUM_PARALLEL=1 alone was NOT enough — rev5 still OOMed
+        # at 3Gi and fired the alert. Disabling llama.cpp's RAM cache for the model
+        # (mmap-backed, page-reclaimable weights instead of an anonymous RAM copy)
+        # dropped idle RSS to ~0.5Gi. Persisted here because live was hand-patched
+        # via `kubectl set env` (not GitOps) and would revert on the next apply.
+        # Kept LAST to match the live append order so re-apply is a no-op (no roll).
+        # STILL UNVALIDATED under sustained naming load — the OOM happened under load,
+        # not idle. Re-check RSS during an SLM burst before calling this closed.
+        - {name: LLAMA_ARG_CACHE_RAM, value: "0"}
+        # OLLAMA_CONTEXT_LENGTH=4096 (Hermes consult, OLLAMA-OOM-CONSULT): pin the
+        # tested envelope so a future ollama default bump can't silently enlarge the
+        # KV cache. At 4K the KV is only ~48MiB (model 374MiB + KV 48 + compute 40 =
+        # ~461MiB runner, ≈ observed 507Mi RSS), so context was NOT the 3Gi cause —
+        # this is envelope-hardening, not the fix. Lower to 2048 only if measured
+        # production prompts fit (saves tens of MiB, not thousands).
+        - {name: OLLAMA_CONTEXT_LENGTH, value: "4096"}
         securityContext: {allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
         resources: {requests: {cpu: 500m, memory: 1Gi}, limits: {cpu: "4", memory: 3Gi}}
         # The models volume is an emptyDir (wiped on every pod restart), and Ollama
