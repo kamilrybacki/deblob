@@ -1,0 +1,37 @@
+# Demo dashboard — serves the UI + proxies producer/naive/aware (no pip needed).
+# Exposed via NodePort 30895 (self-contained; add a Caddy edge route later).
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: demo-dashboard, namespace: deblob-demo, labels: {app: demo-dashboard}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: demo-dashboard}}
+  template:
+    metadata: {labels: {app: demo-dashboard}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: dashboard
+        image: python:3.12-slim
+        command: ["python", "/app/dashboard.py"]
+        env:
+        - {name: HOME, value: /tmp}
+        - {name: PRODUCER_URL, value: "http://demo-producer.deblob-demo.svc.cluster.local:8080"}
+        - {name: NAIVE_URL, value: "http://demo-naive.deblob-demo.svc.cluster.local:8080"}
+        - {name: AWARE_URL, value: "http://demo-aware.deblob-demo.svc.cluster.local:8080"}
+        ports: [{name: http, containerPort: 8080}]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 100m, memory: 96Mi}}
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 3, periodSeconds: 5}
+        volumeMounts:
+        - {name: src, mountPath: /app, readOnly: true}
+      volumes:
+      - {name: src, configMap: {name: demo-dashboard-src}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: demo-dashboard, namespace: deblob-demo, labels: {app: demo-dashboard}}
+spec:
+  type: NodePort
+  selector: {app: demo-dashboard}
+  ports: [{name: http, port: 8080, targetPort: 8080, nodePort: 30895}]

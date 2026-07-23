@@ -1,0 +1,9 @@
+# Deblob demo — adjacent namespace showcasing the drift-sentinel story.
+# Consumes Deblob's tagged output (events.tagged) from the deblob namespace's
+# Redpanda; produces a scripted hero source (events.demo.orders) with a
+# triggerable v1->v2 drift. See docs/superpowers/specs/2026-07-24-...-design.md
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: deblob-demo
+  labels: {app.kubernetes.io/part-of: deblob-demo, purpose: demo}

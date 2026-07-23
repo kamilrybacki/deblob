@@ -1,0 +1,43 @@
+# Deblob-aware consumer — reads deblob-schema-id header; quarantines on drift.
+# DEBLOB_TOKEN (best-effort id->name resolution) from secret demo-deblob-token,
+# seeded by deploy.sh from the deblob-side API token. Detection works without it.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: demo-aware, namespace: deblob-demo, labels: {app: demo-aware}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: demo-aware}}
+  template:
+    metadata: {labels: {app: demo-aware}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: aware
+        image: python:3.12-slim
+        command: ["sh", "-c", "pip install --user --quiet --no-cache-dir confluent-kafka && exec python /app/aware_consumer.py"]
+        env:
+        - {name: HOME, value: /tmp}
+        - {name: BOOTSTRAP, value: "redpanda.deblob.svc.cluster.local:9092"}
+        - {name: TAGGED_TOPIC, value: "events.tagged"}
+        - {name: ORIGIN_PREFIX, value: "events.demo.orders"}
+        - {name: GROUP, value: "demo-aware-consumer"}
+        - {name: DEBLOB_API, value: "http://deblob-mgmt.deblob.svc.cluster.local:9615"}
+        - name: DEBLOB_TOKEN
+          valueFrom: {secretKeyRef: {name: demo-deblob-token, key: token, optional: true}}
+        ports: [{name: http, containerPort: 8080}]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: 250m, memory: 160Mi}}
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 5, failureThreshold: 30}
+        volumeMounts:
+        - {name: src, mountPath: /app, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - {name: src, configMap: {name: demo-aware-src}}
+      - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: demo-aware, namespace: deblob-demo, labels: {app: demo-aware}}
+spec:
+  selector: {app: demo-aware}
+  ports: [{name: http, port: 8080, targetPort: 8080}]

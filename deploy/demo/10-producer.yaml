@@ -1,0 +1,39 @@
+# Hero producer — emits events.demo.orders (v1), flips to v2 on /trigger.
+# Script mounted from configMap demo-producer-src (created from src/producer.py
+# by deploy.sh). Installs confluent-kafka at startup (--user into /tmp).
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: demo-producer, namespace: deblob-demo, labels: {app: demo-producer}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: demo-producer}}
+  template:
+    metadata: {labels: {app: demo-producer}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: producer
+        image: python:3.12-slim
+        command: ["sh", "-c", "pip install --user --quiet --no-cache-dir confluent-kafka && exec python /app/producer.py"]
+        env:
+        - {name: HOME, value: /tmp}
+        - {name: BOOTSTRAP, value: "redpanda.deblob.svc.cluster.local:9092"}
+        - {name: TOPIC, value: "events.demo.orders"}
+        - {name: RATE_HZ, value: "3"}
+        ports: [{name: http, containerPort: 8080}]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: 250m, memory: 160Mi}}
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 20, periodSeconds: 5, failureThreshold: 30}
+        volumeMounts:
+        - {name: src, mountPath: /app, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - {name: src, configMap: {name: demo-producer-src}}
+      - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: demo-producer, namespace: deblob-demo, labels: {app: demo-producer}}
+spec:
+  selector: {app: demo-producer}
+  ports: [{name: http, port: 8080, targetPort: 8080}]
