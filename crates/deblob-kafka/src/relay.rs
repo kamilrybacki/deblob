@@ -58,6 +58,163 @@ pub const DEFAULT_MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 /// (16 KiB) relative to the handful of small bounded relay headers.
 pub const RELAY_PRODUCE_MARGIN: usize = 16 * 1024;
 
+// ---- settle-and-sample (jr-deblob-stability-231518, user demand-side idea) ---
+//
+// Once a source has classified `settle_after` CONSECUTIVE records to the SAME
+// Known schema, it is SETTLED: the relay stops the expensive per-record analysis
+// (parse + fingerprint + registry classify) and FAST-PATHS — tagging with the
+// cached schema-id and producing to the tagged topic WITHOUT re-parsing — for
+// the next `sample_rate - 1` records, then re-classifies exactly ONE as a drift
+// check. A drift (the sampled record no longer resolves to the settled schema)
+// un-settles the source, resuming full learning. deblob load then scales with
+// NEW/drifting shapes, not raw volume (the firehose is ~1.1M/day).
+//
+// SAFETY is structural, not just the flag: only a HOMOGENEOUS source (one stable
+// shape) can reach `settle_after` consecutive SAME-id hits, so a heterogeneous
+// source (e.g. the Bluesky firehose, many post shapes) never settles even if
+// allow-listed. Feature-flagged (default off) + per-source allow-list on top.
+
+use std::collections::HashSet;
+
+/// Configuration for [`SettleState`]. `enabled=false` (the default) makes every
+/// decision a full classify — zero behavior change from before this feature.
+#[derive(Debug, Clone)]
+pub struct SettleCfg {
+    pub enabled: bool,
+    /// Consecutive same-`Known`-schema classifications before a source settles.
+    pub settle_after: u32,
+    /// While settled, classify 1-in-`sample_rate` records as a drift check; the
+    /// other `sample_rate - 1` fast-path. `<= 1` disables the fast path (every
+    /// record is a drift check — settlement is then a no-op).
+    pub sample_rate: u32,
+    /// Only these source topics may settle. Empty = none (opt-in per source).
+    pub sources: Vec<String>,
+}
+
+impl Default for SettleCfg {
+    fn default() -> Self {
+        SettleCfg {
+            enabled: false,
+            settle_after: 1000,
+            sample_rate: 1000,
+            sources: Vec::new(),
+        }
+    }
+}
+
+/// One source's settle-and-sample counters.
+#[derive(Debug, Default, Clone)]
+struct SourceSettle {
+    /// The schema-id the current consecutive run resolves to (`None` until the
+    /// first `Known`).
+    known: Option<deblob_core::id::SchemaId>,
+    consecutive: u32,
+    settled: bool,
+    since_sample: u32,
+}
+
+/// What the relay should do with one record for a source.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SettleDecision {
+    /// Settled + not the sampled record: tag with this schema-id and produce
+    /// WITHOUT classifying (no parse/fingerprint/discovery).
+    FastPath(deblob_core::id::SchemaId),
+    /// Classify fully. `drift_check` is true when this is the periodic sample of
+    /// a settled source — a `Known` mismatch un-settles it.
+    Classify { drift_check: bool },
+}
+
+/// The relay's per-source settle-and-sample state, owned by [`Relay::run`] and
+/// updated in place as records flow. Single-threaded (the relay loop processes
+/// one record at a time), so no locking.
+pub(crate) struct SettleState {
+    cfg: SettleCfg,
+    allow: HashSet<String>,
+    per_source: std::collections::HashMap<String, SourceSettle>,
+}
+
+impl SettleState {
+    pub(crate) fn new(cfg: &SettleCfg) -> Self {
+        SettleState {
+            cfg: cfg.clone(),
+            allow: cfg.sources.iter().cloned().collect(),
+            per_source: std::collections::HashMap::new(),
+        }
+    }
+
+    fn active(&self, source: &str) -> bool {
+        self.cfg.enabled && self.cfg.sample_rate > 1 && self.allow.contains(source)
+    }
+
+    /// Decide how to handle the next record for `source` (and advance the
+    /// sample counter for a settled source). Call [`Self::after`] with the
+    /// classification when the decision is `Classify`.
+    pub(crate) fn before(&mut self, source: &str) -> SettleDecision {
+        if !self.active(source) {
+            return SettleDecision::Classify { drift_check: false };
+        }
+        let s = self.per_source.entry(source.to_string()).or_default();
+        if s.settled {
+            s.since_sample += 1;
+            if s.since_sample >= self.cfg.sample_rate {
+                s.since_sample = 0;
+                SettleDecision::Classify { drift_check: true }
+            } else {
+                // known is Some once settled (settlement requires a Known run).
+                match &s.known {
+                    Some(id) => SettleDecision::FastPath(id.clone()),
+                    None => SettleDecision::Classify { drift_check: false },
+                }
+            }
+        } else {
+            SettleDecision::Classify { drift_check: false }
+        }
+    }
+
+    /// Feed the classification result back after a `Classify` decision.
+    /// `known` is `Some(schema_id)` iff the record classified `Known`.
+    /// `drift_check` is the flag from the matching `before` decision.
+    pub(crate) fn after(
+        &mut self,
+        source: &str,
+        known: Option<&deblob_core::id::SchemaId>,
+        drift_check: bool,
+    ) {
+        if !self.active(source) {
+            return;
+        }
+        let s = self.per_source.entry(source.to_string()).or_default();
+        match known {
+            Some(id) if s.known.as_ref() == Some(id) => {
+                // same schema as the current run.
+                if drift_check {
+                    // settled sample re-confirmed — stay settled.
+                    s.consecutive = s.consecutive.saturating_add(1);
+                } else {
+                    s.consecutive += 1;
+                    if s.consecutive >= self.cfg.settle_after {
+                        s.settled = true;
+                    }
+                }
+            }
+            Some(id) => {
+                // a DIFFERENT known schema — new run (or drift to another shape).
+                s.known = Some(id.clone());
+                s.consecutive = 1;
+                s.settled = false;
+                s.since_sample = 0;
+            }
+            None => {
+                // provisional / miss — drift or a new shape: un-settle, reset.
+                s.known = None;
+                s.consecutive = 0;
+                s.settled = false;
+                s.since_sample = 0;
+            }
+        }
+    }
+}
+
 /// Where to inject a simulated crash inside the per-batch
 /// produce→commit sequence (Task 17's chaos harness, extended for batching
 /// per `docs/superpowers/specs/2026-07-16-relay-batching.md` §4). `None`
@@ -154,6 +311,11 @@ pub struct RelayCfg {
     /// relay's correctness never depends on this channel having a
     /// receiver, room, or even existing (see `crate::stream` docs).
     pub stream_tx: Option<broadcast::Sender<StreamEvent>>,
+    /// Settle-and-sample (jr-deblob-stability-231518): once a source settles on
+    /// a stable Known schema, fast-path its records past the expensive classify.
+    /// `SettleCfg::default()` (`enabled=false`) is a total no-op — every record
+    /// classifies exactly as before.
+    pub settle: SettleCfg,
 }
 
 /// SASL credentials for the relay's Kafka clients (spec §9). Never
@@ -274,6 +436,9 @@ impl Relay {
         let max_batch_records = cfg.max_batch_records.max(1);
         let max_batch_bytes = cfg.max_batch_bytes.max(1);
         let linger = Duration::from_millis(cfg.max_batch_linger_ms);
+        // Per-source settle-and-sample state, owned by the (single-threaded) run
+        // loop and updated in place as records flow (jr-deblob-stability-231518).
+        let mut settle = SettleState::new(&cfg.settle);
 
         loop {
             let mut batch: Vec<PendingRecord> = Vec::new();
@@ -337,6 +502,7 @@ impl Relay {
                 &transaction_open,
                 &consumer,
                 batch,
+                &mut settle,
             )
             .await?
             {
@@ -419,6 +585,7 @@ async fn process_batch(
     transaction_open: &AtomicBool,
     consumer: &StreamConsumer<RelayConsumerContext>,
     batch: Vec<PendingRecord>,
+    settle: &mut SettleState,
 ) -> Result<ProcessOutcome, RelayError> {
     producer.begin_transaction()?;
     transaction_open.store(true, Ordering::SeqCst);
@@ -456,6 +623,7 @@ async fn process_batch(
             key,
             payload,
             inbound_headers,
+            settle,
         )
         .await;
 
@@ -573,6 +741,7 @@ async fn run_transaction_body(
     key: Option<Vec<u8>>,
     payload: Option<Vec<u8>>,
     inbound_headers: OwnedHeaders,
+    settle: &mut SettleState,
 ) -> Result<(TransactionBody, Vec<DeliveryFuture>), RelayError> {
     let Some(payload) = payload else {
         // Kafka tombstone: null value. NOT malformed — no parse attempted
@@ -649,6 +818,37 @@ async fn run_transaction_body(
         return Ok((TransactionBody::Produced, vec![delivery]));
     }
 
+    // Settle-and-sample fast path (jr-deblob-stability-231518): a SETTLED source
+    // that is not due for its periodic drift sample is tagged with its cached
+    // schema-id and produced WITHOUT parse/fingerprint/classify/discovery — the
+    // demand-side load cut. Placed after the produce-size guard so an oversized
+    // settled record still quarantines. A total no-op when settle is disabled or
+    // the source is not allow-listed (`Classify { drift_check: false }`).
+    let drift_check = match settle.before(&cursor.topic) {
+        SettleDecision::FastPath(known) => {
+            let schema_ref = SchemaRef::Known(known);
+            let out_headers = headers::with_tag(inbound_headers, &schema_ref, cursor);
+            let delivery = produce(
+                producer,
+                &cfg.tagged_topic,
+                Some(cursor.partition),
+                key.as_deref(),
+                Some(&payload),
+                out_headers,
+            )?;
+            emit_stream_event(
+                cfg,
+                cursor,
+                StreamOutcome::Tagged,
+                schema_ref.header_value(),
+                None,
+                0,
+            );
+            return Ok((TransactionBody::Produced, vec![delivery]));
+        }
+        SettleDecision::Classify { drift_check } => drift_check,
+    };
+
     let mut deliveries = Vec::with_capacity(2);
 
     // `cursor.topic` (Hermes lineage gap 3, spec §4/§9) is the ACTUAL
@@ -656,6 +856,17 @@ async fn run_transaction_body(
     // candidate id by `HotMatcher::classify` so two sources sharing the
     // exact same raw shape never collide on one candidate.
     let classification = matcher.classify(&cursor.topic, &payload, &cfg.limits).await;
+
+    // Feed the classification back into settle-and-sample: count consecutive
+    // Known hits toward settlement, and on a drift sample re-confirm or un-settle.
+    settle.after(
+        &cursor.topic,
+        match &classification.schema_ref {
+            SchemaRef::Known(id) => Some(id),
+            _ => None,
+        },
+        drift_check,
+    );
 
     // Live-stream tap (Stage L1): emitted immediately once the
     // classification is decided — the SAME timing `HotMatcher::classify`
@@ -948,6 +1159,7 @@ mod tests {
             metrics: Metrics::new(),
             sasl: None,
             stream_tx: None,
+            settle: SettleCfg::default(),
         }
     }
 
@@ -960,6 +1172,83 @@ mod tests {
         assert_eq!(
             c.get("partition.assignment.strategy"),
             Some("cooperative-sticky")
+        );
+    }
+
+    #[test]
+    fn settle_state_machine_settles_fast_paths_samples_and_unsettles() {
+        use deblob_core::id::SchemaId;
+        let a = SchemaId::from_digest(&[1u8; 32]);
+        let b = SchemaId::from_digest(&[2u8; 32]);
+        let scfg = SettleCfg {
+            enabled: true,
+            settle_after: 3,
+            sample_rate: 4,
+            sources: vec!["s".to_string()],
+        };
+        let mut st = SettleState::new(&scfg);
+
+        // A non-allow-listed source always fully classifies (feature-flag safe).
+        assert_eq!(
+            st.before("other"),
+            SettleDecision::Classify { drift_check: false }
+        );
+
+        // 3 consecutive Known(a) -> settles on the 3rd.
+        for _ in 0..3 {
+            assert_eq!(
+                st.before("s"),
+                SettleDecision::Classify { drift_check: false }
+            );
+            st.after("s", Some(&a), false);
+        }
+        // Settled: the next sample_rate-1 = 3 records fast-path, then 1 samples.
+        assert_eq!(st.before("s"), SettleDecision::FastPath(a.clone()));
+        assert_eq!(st.before("s"), SettleDecision::FastPath(a.clone()));
+        assert_eq!(st.before("s"), SettleDecision::FastPath(a.clone()));
+        assert_eq!(
+            st.before("s"),
+            SettleDecision::Classify { drift_check: true }
+        );
+        // Drift sample re-confirms a -> stays settled -> fast-paths again.
+        st.after("s", Some(&a), true);
+        assert_eq!(st.before("s"), SettleDecision::FastPath(a.clone()));
+
+        // Reach the next drift sample, then classify to a DIFFERENT schema (b):
+        // the source un-settles and resumes full learning. (The FastPath assert
+        // above already consumed one, so two more reach the sample.)
+        for _ in 0..2 {
+            st.before("s");
+        }
+        assert_eq!(
+            st.before("s"),
+            SettleDecision::Classify { drift_check: true }
+        );
+        st.after("s", Some(&b), true);
+        assert_eq!(
+            st.before("s"),
+            SettleDecision::Classify { drift_check: false }
+        );
+
+        // A miss (Provisional -> None) also un-settles.
+        let mut st2 = SettleState::new(&scfg);
+        for _ in 0..3 {
+            st2.before("s");
+            st2.after("s", Some(&a), false);
+        }
+        assert!(matches!(st2.before("s"), SettleDecision::FastPath(_)));
+        // consume to the sample, then miss:
+        for _ in 0..2 {
+            st2.before("s");
+        }
+        assert_eq!(
+            st2.before("s"),
+            SettleDecision::Classify { drift_check: true }
+        );
+        st2.after("s", None, true);
+        assert_eq!(
+            st2.before("s"),
+            SettleDecision::Classify { drift_check: false }
         );
     }
 

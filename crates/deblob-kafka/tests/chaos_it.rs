@@ -30,7 +30,7 @@ use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyVersion, SchemaId};
 use deblob_core::ports::{Registry, SchemaRecord};
 use deblob_fingerprint::Limits;
-use deblob_kafka::{FaultPoint, Relay, RelayCfg, RelayError};
+use deblob_kafka::{FaultPoint, Relay, RelayCfg, RelayError, SettleCfg};
 use deblob_match::matcher::HotMatcher;
 use deblob_match::metrics::Metrics;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
@@ -265,6 +265,7 @@ fn relay_cfg_with_batch(
         metrics: Metrics::new(),
         sasl: None,
         stream_tx: None,
+        settle: SettleCfg::default(),
     }
 }
 

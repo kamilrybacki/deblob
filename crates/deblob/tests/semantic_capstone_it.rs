@@ -524,6 +524,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
             // its existing produce/observe timing exact.
             max_batch_records: 1,
             max_batch_linger_ms: 100,
+            max_batch_bytes: 32 * 1024 * 1024,
             max_message_bytes: 1024 * 1024,
         },
         limits: LimitsConfig::default(),
@@ -541,6 +542,7 @@ async fn p2d_capstone_full_semantic_fingerprint_posture() {
         umbrella: Default::default(),
         samples: Default::default(),
         auto_promote: Default::default(),
+        settle: Default::default(),
     };
     let secrets = Secrets {
         api_token: TOKEN.to_string(),

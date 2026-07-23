@@ -15,7 +15,7 @@ use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyVersion, SchemaId};
 use deblob_core::ports::{CandidateRecord, CandidateState, Registry, SchemaRecord};
 use deblob_fingerprint::Limits;
-use deblob_kafka::{Relay, RelayCfg};
+use deblob_kafka::{Relay, RelayCfg, SettleCfg};
 use deblob_match::discovery::DiscoveryMsg;
 use deblob_match::matcher::HotMatcher;
 use deblob_match::metrics::Metrics;
@@ -210,6 +210,7 @@ fn relay_cfg(brokers: &str, t: &TestTopics, group_id: &str, txn_id: &str) -> Rel
         metrics: Metrics::new(),
         sasl: None,
         stream_tx: None,
+        settle: SettleCfg::default(),
     }
 }
 

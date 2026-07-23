@@ -73,6 +73,61 @@ pub struct Config {
     /// required-field backbone) to a NEW family with no human in the loop.
     #[serde(default)]
     pub auto_promote: AutoPromoteConfig,
+    /// `[settle]` — settle-and-sample (jr-deblob-stability-231518). Absent, or
+    /// `enabled` unset, defaults OFF: every record classifies exactly as before.
+    /// When enabled per allow-listed HOMOGENEOUS source, a source that settles on
+    /// a stable schema fast-paths its records past the expensive classify,
+    /// sampling 1-in-`sample_rate` for drift.
+    #[serde(default)]
+    pub settle: SettleConfig,
+}
+
+/// `[settle]` — settle-and-sample policy (jr-deblob-stability-231518). Maps to
+/// [`deblob_kafka::SettleCfg`] via [`SettleConfig::to_settle_cfg`].
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SettleConfig {
+    /// Master switch — OFF by default (every record classifies).
+    #[serde(default)]
+    pub enabled: bool,
+    /// Consecutive same-`Known`-schema hits before a source settles.
+    #[serde(default = "default_settle_after")]
+    pub settle_after: u32,
+    /// While settled, classify 1-in-this for drift; the rest fast-path.
+    #[serde(default = "default_settle_sample_rate")]
+    pub sample_rate: u32,
+    /// Source topics allowed to settle (opt-in; only homogeneous sources should
+    /// be listed — a heterogeneous source never settles anyway).
+    #[serde(default)]
+    pub sources: Vec<String>,
+}
+
+impl Default for SettleConfig {
+    fn default() -> Self {
+        SettleConfig {
+            enabled: false,
+            settle_after: default_settle_after(),
+            sample_rate: default_settle_sample_rate(),
+            sources: Vec::new(),
+        }
+    }
+}
+
+impl SettleConfig {
+    pub fn to_settle_cfg(&self) -> deblob_kafka::SettleCfg {
+        deblob_kafka::SettleCfg {
+            enabled: self.enabled,
+            settle_after: self.settle_after,
+            sample_rate: self.sample_rate,
+            sources: self.sources.clone(),
+        }
+    }
+}
+
+fn default_settle_after() -> u32 {
+    1000
+}
+fn default_settle_sample_rate() -> u32 {
+    1000
 }
 
 /// `[auto_promote]` automatic-promotion policy. Every field defaults so an

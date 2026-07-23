@@ -571,6 +571,7 @@ pub async fn serve(
         metrics: metrics.clone(),
         sasl: secrets.kafka_sasl.clone(),
         stream_tx: Some(stream_tx.clone()),
+        settle: app_config.settle.to_settle_cfg(),
     };
     let relay_shutdown = shutdown.clone();
     let relay_matcher = matcher.clone();
