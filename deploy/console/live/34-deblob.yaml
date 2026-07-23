@@ -33,7 +33,7 @@ spec:
         - {name: DEBLOB_SAMPLES_READ_TOKEN, valueFrom: {secretKeyRef: {name: deblob-secrets, key: samples_read_token}}}
         - {name: RUST_LOG, value: "info,deblob=info"}
         volumeMounts: [{name: config, mountPath: /app/deblob.toml, subPath: deblob.toml}]
-        resources: {requests: {cpu: 300m, memory: 256Mi}, limits: {cpu: "2", memory: 1Gi}}
+        resources: {requests: {cpu: 300m, memory: 512Mi}, limits: {cpu: "2", memory: 3Gi}}
         readinessProbe: {httpGet: {path: /readyz, port: 9615}, initialDelaySeconds: 10, periodSeconds: 5, failureThreshold: 12}
         livenessProbe: {httpGet: {path: /healthz, port: 9615}, initialDelaySeconds: 20, periodSeconds: 15}
       volumes: [{name: config, configMap: {name: deblob-config}}]
