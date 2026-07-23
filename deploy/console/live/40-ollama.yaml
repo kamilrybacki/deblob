@@ -33,6 +33,11 @@ spec:
         # piling up unbounded contexts and OOM-cycling. SLM naming is optional
         # enrichment — it should degrade to the heuristic, never cascade.
         - {name: OLLAMA_MAX_QUEUE, value: "64"}
+        # Ollama 0.30+ embeds llama.cpp's cross-request RAM prompt cache, whose
+        # default 8 GiB reservoir outgrows this pod's 3 GiB cgroup even with one
+        # parallel slot. Disable that secondary cache; the active 4K KV slot is
+        # still retained and the model remains resident via KEEP_ALIVE=-1.
+        - {name: LLAMA_ARG_CACHE_RAM, value: "0"}
         # NUM_PARALLEL=1 (was 2): 2 concurrent 0.5B contexts + keep_alive=-1 pushed
         # RSS past the 3Gi limit -> OOMKilled 7x/day (diagnosed 2026-07-23). One
         # context halves peak memory; naming/decision requests queue briefly rather
