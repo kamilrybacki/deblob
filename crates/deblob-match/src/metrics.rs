@@ -92,6 +92,24 @@ const REGISTRY_OPERATIONS: [&str; 1] = ["resolve_structural"];
 /// Never a `sem_`/`sch_` id, family id, or vocabulary code.
 const COLLISION_STRENGTHS: [&str; 3] = ["strong", "medium", "weak"];
 
+/// Bounded `operation` label values for `deblob_redis_write_refusals_total` —
+/// the fixed set of Redis WRITE sites (in `deblob-redis`) that classify a
+/// `noeviction`/`maxmemory` OOM refusal. Never a Redis key, id, or error
+/// message.
+const REDIS_WRITE_OPERATIONS: [&str; 7] = [
+    "schema_publish",
+    "set_name",
+    "evidence_append",
+    "candidate_state",
+    "state_index",
+    "sample",
+    "value_profile",
+];
+
+/// Bounded `outcome` label values for `deblob_ollama_requests_total` — the
+/// decision-lane SLM caller-boundary classification of one `classify` call.
+const OLLAMA_OUTCOMES: [&str; 3] = ["ok", "timeout", "error"];
+
 /// `fate` label for one classification outcome. Never derived from the
 /// carried id — only the discriminant.
 pub(crate) fn fate_label(schema_ref: &SchemaRef) -> &'static str {
@@ -146,6 +164,20 @@ pub struct Metrics {
     semantic_drift_total: Counter,
     /// P2-D Task 7: `deblob_semantic_collision_total{strength}`.
     semantic_collision_total: CounterVec,
+
+    /// `deblob_redis_write_refusals_total{operation}` — Redis write commands
+    /// refused by the `noeviction`/`maxmemory 1700mb` ceiling (an `OOM`-coded
+    /// `redis::RedisError`), by the write operation that hit it. Incremented
+    /// from `deblob-redis`'s write paths via [`Metrics::inc_redis_write_refusal`].
+    redis_write_refusals_total: CounterVec,
+
+    /// `deblob_ollama_inflight` — in-flight SLM inference requests on the
+    /// decision lane. Ollama exposes no usable `/metrics`, so this brackets
+    /// the caller-side `classify` call (`deblob::shadow`) instead.
+    ollama_inflight: Gauge,
+    /// `deblob_ollama_requests_total{outcome}` — decision-lane SLM inference
+    /// requests by `outcome` (`ok`/`timeout`/`error`).
+    ollama_requests_total: CounterVec,
 }
 
 impl Metrics {
@@ -260,6 +292,30 @@ impl Metrics {
         )
         .expect("valid metric opts");
 
+        let redis_write_refusals_total = CounterVec::new(
+            Opts::new(
+                "deblob_redis_write_refusals_total",
+                "Redis write commands refused (OOM/noeviction) by operation",
+            ),
+            &["operation"],
+        )
+        .expect("valid metric opts");
+
+        let ollama_inflight = Gauge::with_opts(Opts::new(
+            "deblob_ollama_inflight",
+            "In-flight SLM inference requests (decision lane)",
+        ))
+        .expect("valid metric opts");
+
+        let ollama_requests_total = CounterVec::new(
+            Opts::new(
+                "deblob_ollama_requests_total",
+                "Total SLM inference requests (decision lane), by outcome",
+            ),
+            &["outcome"],
+        )
+        .expect("valid metric opts");
+
         for metric in [
             Box::new(messages_total.clone()) as Box<dyn prometheus::core::Collector>,
             Box::new(schema_matches_total.clone()),
@@ -274,6 +330,9 @@ impl Metrics {
             Box::new(cold_lane_lag_records.clone()),
             Box::new(semantic_drift_total.clone()),
             Box::new(semantic_collision_total.clone()),
+            Box::new(redis_write_refusals_total.clone()),
+            Box::new(ollama_inflight.clone()),
+            Box::new(ollama_requests_total.clone()),
         ] {
             registry.register(metric).expect("unique metric name");
         }
@@ -295,6 +354,12 @@ impl Metrics {
         for strength in COLLISION_STRENGTHS {
             semantic_collision_total.with_label_values(&[strength]);
         }
+        for operation in REDIS_WRITE_OPERATIONS {
+            redis_write_refusals_total.with_label_values(&[operation]);
+        }
+        for outcome in OLLAMA_OUTCOMES {
+            ollama_requests_total.with_label_values(&[outcome]);
+        }
 
         Arc::new(Self {
             registry,
@@ -311,6 +376,9 @@ impl Metrics {
             cold_lane_lag_records,
             semantic_drift_total,
             semantic_collision_total,
+            redis_write_refusals_total,
+            ollama_inflight,
+            ollama_requests_total,
         })
     }
 
@@ -425,6 +493,40 @@ impl Metrics {
     pub fn record_semantic_collision(&self, strength: &str) {
         self.semantic_collision_total
             .with_label_values(&[strength])
+            .inc();
+    }
+
+    /// Increments `deblob_redis_write_refusals_total{operation}` — call once
+    /// per Redis WRITE command refused by the `noeviction`/`maxmemory`
+    /// ceiling (an `OOM`-coded `redis::RedisError`), `operation` one of the
+    /// fixed `REDIS_WRITE_OPERATIONS` write-site names. `pub`: cross-crate
+    /// caller (`deblob-redis`'s write paths).
+    pub fn inc_redis_write_refusal(&self, operation: &str) {
+        self.redis_write_refusals_total
+            .with_label_values(&[operation])
+            .inc();
+    }
+
+    /// Increments `deblob_ollama_inflight` — call once immediately BEFORE a
+    /// decision-lane SLM inference call. `pub`: cross-crate caller
+    /// (`deblob::shadow`).
+    pub fn inc_ollama_inflight(&self) {
+        self.ollama_inflight.inc();
+    }
+
+    /// Decrements `deblob_ollama_inflight` — call once immediately AFTER a
+    /// decision-lane SLM inference call returns, on every path.
+    pub fn dec_ollama_inflight(&self) {
+        self.ollama_inflight.dec();
+    }
+
+    /// Increments `deblob_ollama_requests_total{outcome}` — call once per
+    /// completed decision-lane SLM inference call, `outcome` one of
+    /// `"ok"`/`"timeout"`/`"error"`. `pub`: cross-crate caller
+    /// (`deblob::shadow`).
+    pub fn record_ollama_request(&self, outcome: &str) {
+        self.ollama_requests_total
+            .with_label_values(&[outcome])
             .inc();
     }
 }

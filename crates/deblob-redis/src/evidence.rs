@@ -22,11 +22,12 @@
 //! for candidates that predate this index.
 
 use crate::lua::SET_STATE_SCRIPT;
-use crate::registry::{redis_err, RedisOpts};
+use crate::registry::{note_write_refusal, redis_err, RedisOpts};
 use deblob_core::error::CoreError;
 use deblob_core::id::CandidateId;
 use deblob_core::ports::{CandidateRecord, CandidateState, EvidenceStore};
 use redis::{Client, Script};
+use std::sync::Arc;
 
 /// Default candidate TTL: 7 days, in seconds (spec §6).
 pub const DEFAULT_CANDIDATE_TTL_SECS: u64 = 7 * 24 * 60 * 60;
@@ -66,6 +67,11 @@ pub struct RedisEvidence {
     conn: redis::aio::ConnectionManager,
     candidate_ttl_secs: u64,
     set_state_script: Script,
+    /// Optional process-wide metrics surface — see `RedisRegistry::metrics`
+    /// / `with_metrics` for the same builder pattern and rationale. `None`
+    /// (the default, every existing caller/test) means the write paths behave
+    /// exactly as before, minus the OOM-refusal counter tick.
+    metrics: Option<Arc<deblob_match::metrics::Metrics>>,
 }
 
 impl std::fmt::Debug for RedisEvidence {
@@ -233,11 +239,23 @@ impl RedisEvidence {
             conn,
             candidate_ttl_secs: candidate_opts.candidate_ttl_secs,
             set_state_script: Script::new(SET_STATE_SCRIPT),
+            metrics: None,
         })
     }
 
     fn conn(&self) -> redis::aio::ConnectionManager {
         self.conn.clone()
+    }
+
+    /// Attaches the process-wide [`deblob_match::metrics::Metrics`] surface so
+    /// this store's WRITE paths can increment
+    /// `deblob_redis_write_refusals_total{operation}` on a `noeviction`/
+    /// `maxmemory` OOM refusal. Builder-style, mirroring
+    /// `RedisRegistry::with_metrics`: existing callers/tests that never call
+    /// this keep `metrics: None` and behave exactly as before.
+    pub fn with_metrics(mut self, metrics: Arc<deblob_match::metrics::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Rebuild the three per-state candidate-listing index SETs
@@ -503,7 +521,10 @@ impl EvidenceStore for RedisEvidence {
             .arg(&payload)
             .query_async(&mut conn)
             .await
-            .map_err(redis_err)?;
+            .map_err(|e| {
+                note_write_refusal(&self.metrics, "evidence_append", &e);
+                redis_err(e)
+            })?;
 
         Ok(())
     }
@@ -520,7 +541,10 @@ impl EvidenceStore for RedisEvidence {
             .invoke_async(&mut conn)
             .await;
 
-        result.map_err(map_set_state_error)?;
+        result.map_err(|e| {
+            note_write_refusal(&self.metrics, "candidate_state", &e);
+            map_set_state_error(e)
+        })?;
 
         // The guarded transition above succeeded — now mirror it onto the
         // per-state listing indexes (`RedisUmbrella::set_state`'s exact
@@ -543,7 +567,10 @@ impl EvidenceStore for RedisEvidence {
                     .ignore();
             }
         }
-        pipe.query_async::<()>(&mut conn).await.map_err(redis_err)?;
+        pipe.query_async::<()>(&mut conn).await.map_err(|e| {
+            note_write_refusal(&self.metrics, "state_index", &e);
+            redis_err(e)
+        })?;
 
         Ok(())
     }

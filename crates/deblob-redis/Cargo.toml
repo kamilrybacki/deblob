@@ -28,6 +28,12 @@ deblob-semantic = { path = "../deblob-semantic" }
 # never on `deblob-redis`), so it introduces no cycle with `deblob` (which
 # depends on both `deblob-redis` and `deblob-slm` already).
 deblob-slm = { path = "../deblob-slm" }
+# Redis write paths increment `deblob_redis_write_refusals_total{operation}`
+# on a `noeviction`/`maxmemory` OOM refusal — see `crate::registry::
+# note_write_refusal`. `deblob-match` owns the process-wide `Metrics` surface
+# and depends only on `deblob-core`/`deblob-fingerprint` (never on this
+# crate), so this introduces no dependency cycle.
+deblob-match = { path = "../deblob-match" }
 async-trait.workspace = true
 serde.workspace = true
 serde_json.workspace = true

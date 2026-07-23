@@ -12,8 +12,9 @@ use async_trait::async_trait;
 use deblob_core::error::CoreError;
 use deblob_core::id::ValueProfileId;
 use deblob_core::ports::{ValueProfileSnapshot, ValueProfileStore};
+use std::sync::Arc;
 
-use crate::registry::redis_err;
+use crate::registry::{note_write_refusal, redis_err};
 
 fn profile_key(id: &ValueProfileId) -> String {
     format!("deblob:value-profile:{}", id.as_str())
@@ -22,6 +23,10 @@ fn profile_key(id: &ValueProfileId) -> String {
 #[derive(Clone)]
 pub struct RedisValueProfile {
     conn: redis::aio::ConnectionManager,
+    /// Optional process-wide metrics surface — see `RedisRegistry::metrics`
+    /// / `with_metrics`. `None` (the default) means `put_value_profile`
+    /// behaves exactly as before, minus the OOM-refusal counter tick.
+    metrics: Option<Arc<deblob_match::metrics::Metrics>>,
 }
 
 impl std::fmt::Debug for RedisValueProfile {
@@ -32,7 +37,20 @@ impl std::fmt::Debug for RedisValueProfile {
 
 impl RedisValueProfile {
     pub fn new(conn: redis::aio::ConnectionManager) -> Self {
-        Self { conn }
+        Self {
+            conn,
+            metrics: None,
+        }
+    }
+
+    /// Attaches the process-wide [`deblob_match::metrics::Metrics`] surface so
+    /// `put_value_profile` can increment
+    /// `deblob_redis_write_refusals_total{operation}` (`operation =
+    /// "value_profile"`) on a `noeviction`/`maxmemory` OOM refusal.
+    /// Builder-style, mirroring `RedisRegistry::with_metrics`.
+    pub fn with_metrics(mut self, metrics: Arc<deblob_match::metrics::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 
     /// Opens its own `ConnectionManager` (transparent reconnect after a Redis
@@ -60,7 +78,10 @@ impl ValueProfileStore for RedisValueProfile {
             .arg(json)
             .query_async::<()>(&mut conn)
             .await
-            .map_err(redis_err)?;
+            .map_err(|e| {
+                note_write_refusal(&self.metrics, "value_profile", &e);
+                redis_err(e)
+            })?;
         Ok(())
     }
 

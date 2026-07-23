@@ -6,6 +6,7 @@ use deblob_core::error::CoreError;
 use deblob_core::id::{CandidateId, FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{FamilyRecord, FamilyRef, NameWriteOutcome, Registry, SchemaRecord};
 use redis::{AsyncCommands, Client, Script};
+use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Startup options for [`RedisRegistry::connect`].
@@ -54,6 +55,13 @@ pub struct RedisRegistry {
     /// `publish` the moment the background probe observes a degraded
     /// state, without a Redis round trip on the hot path.
     health_gate: Option<HealthGate>,
+    /// Optional process-wide metrics surface. `None` for registries built
+    /// without one (the default, and every existing caller/test) — the write
+    /// paths then behave exactly as before, minus the OOM-refusal counter
+    /// tick. `Some` (wired via `with_metrics` from `crate::serve`) lets the
+    /// WRITE sites increment `deblob_redis_write_refusals_total{operation}`
+    /// when Redis refuses a write under `noeviction`. See `note_write_refusal`.
+    metrics: Option<Arc<deblob_match::metrics::Metrics>>,
 }
 
 impl std::fmt::Debug for RedisRegistry {
@@ -101,6 +109,28 @@ pub(crate) const SCHEMA_INDEX_KEY: &str = "deblob:schemas";
 
 pub(crate) fn redis_err(e: redis::RedisError) -> CoreError {
     CoreError::RegistryUnavailable(e.to_string())
+}
+
+/// Increments `deblob_redis_write_refusals_total{operation}` on `metrics`
+/// IFF `e` is a `noeviction`/`maxmemory` OOM refusal — the bare `OOM` error
+/// code, OR the script-wrapped "OOM command not allowed..." message a
+/// server-side Lua write surfaces (a Lua script's write failure doesn't carry
+/// the bare `OOM` code). A no-op for every other error, and for a store built
+/// without a `Metrics` handle (the default — see `RedisRegistry::
+/// with_metrics`). Returns nothing: the caller still maps `e` onto
+/// `CoreError` via whichever mapper (`redis_err`, `map_script_error`,
+/// `map_set_state_error`) it already used, so error semantics are unchanged —
+/// this only ADDS a counter tick on the OOM-refusal branch of a WRITE site.
+pub(crate) fn note_write_refusal(
+    metrics: &Option<Arc<deblob_match::metrics::Metrics>>,
+    operation: &str,
+    e: &redis::RedisError,
+) {
+    if let Some(metrics) = metrics {
+        if e.code() == Some("OOM") || e.to_string().contains("OOM command not allowed") {
+            metrics.inc_redis_write_refusal(operation);
+        }
+    }
 }
 
 /// Maps the Lua script's `redis.error_reply` sentinels back onto the
@@ -211,6 +241,7 @@ impl RedisRegistry {
             set_name_script: Script::new(SET_NAME_SCRIPT),
             sem_idf_stats_script: Script::new(SEM_IDF_STATS_SCRIPT),
             health_gate: None,
+            metrics: None,
         })
     }
 
@@ -224,6 +255,20 @@ impl RedisRegistry {
     /// share that same instance.
     pub fn with_health_gate(mut self, gate: HealthGate) -> Self {
         self.health_gate = Some(gate);
+        self
+    }
+
+    /// Attaches the process-wide [`deblob_match::metrics::Metrics`] surface so
+    /// this registry's WRITE paths can increment
+    /// `deblob_redis_write_refusals_total{operation}` on a `noeviction`/
+    /// `maxmemory` OOM refusal. Builder-style, mirroring [`with_health_gate`]:
+    /// existing callers/tests that never call this keep `metrics: None` and
+    /// behave exactly as before (no counter tick). `crate::serve` passes the
+    /// same `Arc<Metrics>` it shares with the matcher/relay.
+    ///
+    /// [`with_health_gate`]: RedisRegistry::with_health_gate
+    pub fn with_metrics(mut self, metrics: Arc<deblob_match::metrics::Metrics>) -> Self {
+        self.metrics = Some(metrics);
         self
     }
 
@@ -313,7 +358,10 @@ impl Registry for RedisRegistry {
             .arg(now_ms)
             .invoke_async(&mut conn)
             .await
-            .map_err(redis_err)?;
+            .map_err(|e| {
+                note_write_refusal(&self.metrics, "set_name", &e);
+                redis_err(e)
+            })?;
         Ok(match outcome.as_str() {
             "applied" => NameWriteOutcome::Applied,
             "skipped_human" => NameWriteOutcome::SkippedHumanProtected,
@@ -435,7 +483,10 @@ impl Registry for RedisRegistry {
 
         result
             .map(|version| FamilyVersion(version as u32))
-            .map_err(map_script_error)
+            .map_err(|e| {
+                note_write_refusal(&self.metrics, "schema_publish", &e);
+                map_script_error(e)
+            })
     }
 
     async fn get_alias(&self, id: &CandidateId) -> Result<Option<SchemaId>, CoreError> {

@@ -323,6 +323,14 @@ pub async fn serve(
         "starting deblob"
     );
 
+    // Process-wide Prometheus surface. Built up front (before the Redis
+    // stores) so it can be threaded into each store via `.with_metrics(..)`
+    // — the Redis WRITE paths increment
+    // `deblob_redis_write_refusals_total{operation}` on a `noeviction` OOM
+    // refusal. Also shared, later, with the matcher/cold lane/relay/API and
+    // the SLM shadow classifier (the decision-lane ollama boundary gauge).
+    let metrics = Metrics::new();
+
     // --- Redis: registry (permanent schema vault) + evidence (candidate
     // lifecycle), both persistence-gated at connect time (spec §6). ---
     let health = HealthGate::new();
@@ -336,7 +344,8 @@ pub async fn serve(
         RedisRegistry::connect(&secrets.redis_url, redis_opts)
             .await
             .map_err(AppError::Redis)?
-            .with_health_gate(health.clone()),
+            .with_health_gate(health.clone())
+            .with_metrics(metrics.clone()),
     );
     let registry: Arc<dyn Registry> = redis_registry.clone();
     let semantic: Arc<dyn SemanticStore> = redis_registry.clone();
@@ -344,7 +353,8 @@ pub async fn serve(
     let evidence =
         RedisEvidence::connect(&secrets.redis_url, RedisEvidenceOpts::default(), redis_opts)
             .await
-            .map_err(AppError::Redis)?;
+            .map_err(AppError::Redis)?
+            .with_metrics(metrics.clone());
     let evidence: Arc<dyn EvidenceStore> = Arc::new(evidence);
 
     // Gold-tier umbrella-schema governance store (read + reject API surface
@@ -369,8 +379,11 @@ pub async fn serve(
     // Value-profile sidecar store (joint design dc-umbrella-signals-1907,
     // Stage 1): its own connection, connect-and-go. The promoter captures
     // into it at promotion; the API reads it back per schema.
-    let value_profiles: Arc<dyn deblob_core::ports::ValueProfileStore> =
-        Arc::new(deblob_redis::RedisValueProfile::connect(&secrets.redis_url).await?);
+    let value_profiles: Arc<dyn deblob_core::ports::ValueProfileStore> = Arc::new(
+        deblob_redis::RedisValueProfile::connect(&secrets.redis_url)
+            .await?
+            .with_metrics(metrics.clone()),
+    );
 
     // Redacted troubleshooting sample store (joint design dc-samples-dlp-1907):
     // capture is OFF unless `[samples].enabled` AND a DEDICATED volatile Redis
@@ -397,7 +410,8 @@ pub async fn serve(
                         key_ttl_secs: app_config.samples.key_ttl_secs,
                     },
                 )
-                .await?,
+                .await?
+                .with_metrics(metrics.clone()),
             )),
             None => {
                 tracing::warn!(
@@ -426,8 +440,8 @@ pub async fn serve(
         .map_err(|e| AppError::Redis(CoreError::RegistryUnavailable(e.to_string())))?;
     let probe_handle = health.spawn_probe(probe_conn, HEALTH_PROBE_INTERVAL);
 
-    // --- Hot path / cold lane / promotion / metrics. ---
-    let metrics = Metrics::new();
+    // --- Hot path / cold lane / promotion / metrics. `metrics` is built
+    // earlier (above the Redis stores) so it can be threaded into them. ---
     let matcher = Arc::new(HotMatcher::new(
         registry.clone(),
         HOT_MATCHER_LRU_CAPACITY,
@@ -617,6 +631,7 @@ pub async fn serve(
                 shadow_log,
                 wiring.model,
                 wiring.shadow_config,
+                metrics.clone(),
             ));
             let sweep_evidence = evidence.clone();
             let sweep_shutdown = shutdown.clone();

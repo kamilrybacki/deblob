@@ -22,8 +22,9 @@ use deblob_core::error::CoreError;
 use deblob_core::id::CandidateId;
 use deblob_core::ports::{SampleRecord, SampleStore};
 use redis::Script;
+use std::sync::Arc;
 
-use crate::registry::redis_err;
+use crate::registry::{note_write_refusal, redis_err};
 
 /// `KEYS[1]`=zset `KEYS[2]`=hash · `ARGV`: sample_id, record_json,
 /// retention_ms, max_count, ttl_secs. Returns 1 if newly inserted, 0 if replay.
@@ -72,6 +73,10 @@ pub struct RedisSampleStore {
     conn: redis::aio::ConnectionManager,
     put_script: Script,
     opts: SampleStoreOpts,
+    /// Optional process-wide metrics surface — see `RedisRegistry::metrics`
+    /// / `with_metrics`. `None` (the default) means `put_sample` behaves
+    /// exactly as before, minus the OOM-refusal counter tick.
+    metrics: Option<Arc<deblob_match::metrics::Metrics>>,
 }
 
 impl std::fmt::Debug for RedisSampleStore {
@@ -105,7 +110,17 @@ impl RedisSampleStore {
             conn,
             put_script: Script::new(PUT_SAMPLE_LUA),
             opts,
+            metrics: None,
         })
+    }
+
+    /// Attaches the process-wide [`deblob_match::metrics::Metrics`] surface so
+    /// `put_sample` can increment `deblob_redis_write_refusals_total{operation}`
+    /// (`operation = "sample"`) on a `noeviction`/`maxmemory` OOM refusal.
+    /// Builder-style, mirroring `RedisRegistry::with_metrics`.
+    pub fn with_metrics(mut self, metrics: Arc<deblob_match::metrics::Metrics>) -> Self {
+        self.metrics = Some(metrics);
+        self
     }
 }
 
@@ -126,7 +141,10 @@ impl SampleStore for RedisSampleStore {
             .arg(self.opts.key_ttl_secs as i64)
             .invoke_async(&mut conn)
             .await
-            .map_err(redis_err)?;
+            .map_err(|e| {
+                note_write_refusal(&self.metrics, "sample", &e);
+                redis_err(e)
+            })?;
         Ok(added == 1)
     }
 

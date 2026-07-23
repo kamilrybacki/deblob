@@ -61,6 +61,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
+use crate::metrics::Metrics;
 use crate::policy::PromotionPolicy;
 use crate::retrieval::{retrieve_topk, RetrievalResult, RETRIEVAL_VERSION};
 
@@ -482,6 +483,27 @@ impl Default for ShadowConfig {
     }
 }
 
+/// RAII guard for `deblob_ollama_inflight` (Metric 2, decision lane):
+/// increments the in-flight gauge on construction and decrements it on drop,
+/// so the gauge is balanced on EVERY exit path from the SLM `classify` call —
+/// a normal return, an early return, a panic, or the future being cancelled
+/// (dropped) mid-await. Ollama exposes no usable `/metrics`, so this
+/// caller-boundary instrumentation is the only in-flight signal available.
+struct OllamaInflightGuard<'a>(&'a Metrics);
+
+impl<'a> OllamaInflightGuard<'a> {
+    fn new(metrics: &'a Metrics) -> Self {
+        metrics.inc_ollama_inflight();
+        Self(metrics)
+    }
+}
+
+impl Drop for OllamaInflightGuard<'_> {
+    fn drop(&mut self) {
+        self.0.dec_ollama_inflight();
+    }
+}
+
 /// A shadow classification once per STABLE candidate cluster, debounced by
 /// candidate-set digest. SHADOW ONLY — see the module docs' zero-mutation
 /// invariant.
@@ -492,6 +514,11 @@ pub struct ShadowClassifier {
     log: Arc<dyn ShadowLog>,
     model: ModelMeta,
     config: ShadowConfig,
+    /// Process-wide metrics surface, for the decision-lane ollama
+    /// request-boundary gauge/counter (Metric 2). Never used to mutate
+    /// registry/candidate/schema state — the zero-mutation invariant is
+    /// unaffected (observability only).
+    metrics: Arc<Metrics>,
     /// Debounce cache: `(candidate_id, candidate_set_hash)` pairs already
     /// classified. Process-local, not registry/candidate/schema state — see
     /// module docs.
@@ -506,6 +533,7 @@ impl ShadowClassifier {
         log: Arc<dyn ShadowLog>,
         model: ModelMeta,
         config: ShadowConfig,
+        metrics: Arc<Metrics>,
     ) -> Self {
         Self {
             evidence,
@@ -514,6 +542,7 @@ impl ShadowClassifier {
             log,
             model,
             config,
+            metrics,
             classified: StdMutex::new(HashSet::new()),
         }
     }
@@ -582,8 +611,31 @@ impl ShadowClassifier {
         };
 
         let call_started = Instant::now();
-        let call_result = self.inferencer.classify(request).await;
+        // Metric 2 (decision lane): bracket the SLM call with the in-flight
+        // gauge (via the RAII guard, balanced on every exit path) and, once
+        // it returns, classify the outcome onto
+        // `deblob_ollama_requests_total{outcome}`.
+        let call_result = {
+            let _inflight = OllamaInflightGuard::new(&self.metrics);
+            self.inferencer.classify(request).await
+        };
         let total_latency_ms = call_started.elapsed().as_millis() as u64;
+
+        // `ok` = endpoint answered cleanly; `timeout` = a deadline-exceeded
+        // or unavailable transport condition (same collapse the shadow
+        // `EndpointStatus` mapping below applies); `error` = any other
+        // failure (transport/parse).
+        let ollama_outcome = match &call_result {
+            Ok(outcome) => match outcome.telemetry.endpoint_status {
+                InferenceEndpointStatus::Ok => "ok",
+                InferenceEndpointStatus::Timeout | InferenceEndpointStatus::Unavailable => {
+                    "timeout"
+                }
+            },
+            Err(deblob_slm::InferenceError::Timeout) => "timeout",
+            Err(_) => "error",
+        };
+        self.metrics.record_ollama_request(ollama_outcome);
 
         let (endpoint_status, provider_error, raw_model_response, telemetry) = match &call_result {
             Ok(outcome) => (
@@ -1274,6 +1326,7 @@ mod tests {
             log.clone(),
             model_meta(),
             lenient_config(),
+            crate::metrics::Metrics::new(),
         );
 
         let before = evidence.snapshot();
@@ -1353,6 +1406,7 @@ mod tests {
             log,
             model_meta(),
             lenient_config(),
+            crate::metrics::Metrics::new(),
         );
 
         let decision = classifier
@@ -1417,6 +1471,7 @@ mod tests {
             log.clone(),
             model_meta(),
             lenient_config(),
+            crate::metrics::Metrics::new(),
         );
 
         let before_writes = evidence.write_call_count();
@@ -1474,6 +1529,7 @@ mod tests {
             log.clone(),
             model_meta(),
             lenient_config(),
+            crate::metrics::Metrics::new(),
         );
 
         let first = classifier.maybe_classify(&cand_id, "src-a").await.unwrap();

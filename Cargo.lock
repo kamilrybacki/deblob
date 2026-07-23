@@ -813,6 +813,7 @@ dependencies = [
  "data-encoding",
  "deblob-core",
  "deblob-fingerprint",
+ "deblob-match",
  "deblob-semantic",
  "deblob-slm",
  "deblob-umbrella",
