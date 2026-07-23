@@ -332,6 +332,11 @@ pub struct KafkaConfig {
     /// [`default_max_batch_linger_ms`] (100ms).
     #[serde(default = "default_max_batch_linger_ms")]
     pub max_batch_linger_ms: u64,
+    /// Flush the relay batch once its buffered bytes reach this, bounding the
+    /// batch's resident memory independent of per-record size
+    /// (jr-deblob-stability-231518). Defaults to 32 MiB.
+    #[serde(default = "default_max_batch_bytes")]
+    pub max_batch_bytes: usize,
     /// Hard ceiling (bytes) on a single produced Kafka message; mirrored onto
     /// the relay producer's `message.max.bytes` and enforced BEFORE produce so
     /// one oversized record is quarantined (payload-free `size_exceeded`
@@ -372,6 +377,11 @@ fn default_max_batch_linger_ms() -> u64 {
 /// [`deblob_kafka::DEFAULT_MAX_MESSAGE_BYTES`].
 fn default_max_message_bytes() -> usize {
     1024 * 1024
+}
+
+/// Default relay batch byte-budget (32 MiB, jr-deblob-stability-231518).
+fn default_max_batch_bytes() -> usize {
+    32 * 1024 * 1024
 }
 
 /// Bounds enforced by the bounded parser (spec §4). Mirrors the subset of

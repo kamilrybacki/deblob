@@ -20,6 +20,7 @@
 //! cycle.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use deblob_core::error::CoreError;
 use deblob_core::id::CandidateId;
@@ -125,13 +126,49 @@ pub async fn run(
         if let Some(payload) = payload {
             match serde_json::from_slice::<DiscoveryMsg>(&payload) {
                 Ok(discovery) => {
-                    let capture = cfg.sample_store.as_ref().map(|s| (&cfg.sample_capture, s));
-                    if let Err(err) =
-                        handle_discovery_msg(discovery, &cold_lane, &cfg.limits, capture).await
-                    {
-                        // Never log the payload itself — only the error
-                        // variant, which carries no message contents.
-                        tracing::debug!(error = %err, "discovery consumer: skipping message");
+                    // Ingest with bounded-backoff RETRY on a TRANSIENT store
+                    // failure (e.g. Redis down): NEVER advance the offset past a
+                    // record we failed to ingest, so Kafka holds the durable
+                    // backlog and redelivers it rather than silently dropping it
+                    // (the offset-past-failed-write bug, jr-deblob-stability-231518).
+                    // A PERMANENT error (malformed payload / bad cand_id) can never
+                    // succeed, so it is skipped and the offset advances.
+                    let mut attempt: u32 = 0;
+                    loop {
+                        let capture = cfg.sample_store.as_ref().map(|s| (&cfg.sample_capture, s));
+                        match handle_discovery_msg(
+                            discovery.clone(),
+                            &cold_lane,
+                            &cfg.limits,
+                            capture,
+                        )
+                        .await
+                        {
+                            Ok(_) => break,
+                            Err(DiscoveryHandleError::Ingest(err)) => {
+                                attempt += 1;
+                                let backoff = Duration::from_millis(
+                                    (250u64.saturating_mul(1u64 << attempt.min(6))).min(10_000),
+                                );
+                                // Never log the payload — only the error variant.
+                                tracing::warn!(
+                                    error = %err,
+                                    attempt,
+                                    "discovery consumer: store ingest failed — retrying, offset held (Kafka backlog preserved)"
+                                );
+                                tokio::select! {
+                                    _ = shutdown.cancelled() => {
+                                        commit_offsets(&consumer, &pending_offsets);
+                                        return Ok(());
+                                    }
+                                    _ = tokio::time::sleep(backoff) => {}
+                                }
+                            }
+                            Err(err) => {
+                                tracing::debug!(error = %err, "discovery consumer: skipping malformed message");
+                                break;
+                            }
+                        }
                     }
                 }
                 Err(err) => {

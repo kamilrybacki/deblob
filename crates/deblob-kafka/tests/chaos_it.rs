@@ -259,6 +259,7 @@ fn relay_cfg_with_batch(
         limits: Limits::default(),
         max_batch_records,
         max_batch_linger_ms,
+        max_batch_bytes: 32 * 1024 * 1024,
         max_message_bytes: deblob_kafka::DEFAULT_MAX_MESSAGE_BYTES,
         fault,
         metrics: Metrics::new(),

@@ -204,6 +204,7 @@ fn relay_cfg(brokers: &str, t: &TestTopics, group_id: &str, txn_id: &str) -> Rel
         // faithful re-validation that batching didn't change any of that.
         max_batch_records: 500,
         max_batch_linger_ms: 100,
+        max_batch_bytes: 32 * 1024 * 1024,
         max_message_bytes: deblob_kafka::DEFAULT_MAX_MESSAGE_BYTES,
         fault: None,
         metrics: Metrics::new(),

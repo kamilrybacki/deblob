@@ -111,6 +111,12 @@ pub struct RelayCfg {
     /// not start until the batch holds at least one record: [`Relay::run`]
     /// blocks indefinitely for the first record of a new batch.
     pub max_batch_linger_ms: u64,
+    /// Flush the accumulated batch once its buffered payload+key bytes reach
+    /// this many, EVEN if `max_batch_records` hasn't — so the in-memory batch is
+    /// a fixed memory reservoir regardless of per-record size (a batch of 500
+    /// near-`max_message_bytes` records would otherwise hold hundreds of MiB;
+    /// jr-deblob-stability-231518). Clamped to at least 1 by [`Relay::run`].
+    pub max_batch_bytes: usize,
     /// Hard ceiling on a single produced Kafka message (value + key +
     /// headers + framing), mirrored onto the producer's `message.max.bytes`
     /// and enforced BEFORE produce so one oversized record can never abort a
@@ -266,10 +272,12 @@ impl Relay {
         // exact pre-batching per-record-transaction behaviour (batching
         // spec §3's documented escape hatch).
         let max_batch_records = cfg.max_batch_records.max(1);
+        let max_batch_bytes = cfg.max_batch_bytes.max(1);
         let linger = Duration::from_millis(cfg.max_batch_linger_ms);
 
         loop {
             let mut batch: Vec<PendingRecord> = Vec::new();
+            let mut batch_bytes: usize = 0;
             // `None` until the first record lands — the linger timer must
             // not start (and must not fire) before there is anything to
             // flush (batching spec §1: "Block for the first record").
@@ -296,12 +304,20 @@ impl Relay {
                         if deadline.is_none() {
                             deadline = Some(TokioInstant::now() + linger);
                         }
+                        let rec_bytes = payload.as_ref().map_or(0, |p| p.len())
+                            + key.as_ref().map_or(0, |k| k.len());
                         batch.push(PendingRecord {
                             cursor: SourceCursor { topic, partition, offset },
                             key,
                             payload,
                             headers: inbound_headers,
                         });
+                        batch_bytes += rec_bytes;
+                        // Byte-bound flush: cap the batch's resident memory
+                        // independent of per-record size (jr-deblob-stability-231518).
+                        if batch_bytes >= max_batch_bytes {
+                            break;
+                        }
                     }
                 }
             }
@@ -881,7 +897,14 @@ fn producer_client_config(cfg: &RelayCfg) -> ClientConfig {
         // Mirror the relay's own produce-size guard onto the client so the two
         // agree on the ceiling (the guard routes anything larger to quarantine
         // BEFORE it ever reaches this limit).
-        .set("message.max.bytes", cfg.max_message_bytes.to_string());
+        .set("message.max.bytes", cfg.max_message_bytes.to_string())
+        // Bound the producer send queue so it is another fixed memory reservoir,
+        // not a ~1 GiB one (librdkafka `queue.buffering.max.kbytes` default,
+        // jr-deblob-stability-231518). 64 MiB is ample for the batched
+        // transactional relay; if the queue fills, produce back-pressures (a
+        // bounded wait) rather than growing RSS.
+        .set("queue.buffering.max.kbytes", "65536")
+        .set("queue.buffering.max.messages", "200000");
     apply_sasl(&mut c, &cfg.sasl);
     c
 }
@@ -919,6 +942,7 @@ mod tests {
             limits: Limits::default(),
             max_batch_records: 500,
             max_batch_linger_ms: 100,
+            max_batch_bytes: 32 * 1024 * 1024,
             max_message_bytes: DEFAULT_MAX_MESSAGE_BYTES,
             fault: None,
             metrics: Metrics::new(),
