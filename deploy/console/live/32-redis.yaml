@@ -1,7 +1,12 @@
 apiVersion: v1
 kind: ConfigMap
 metadata: {name: redis-vault-conf, namespace: deblob}
-data: {redis.conf: "appendonly yes\nappendfsync everysec\nmaxmemory-policy noeviction\nsave \"\"\ndir /data\n"}
+# maxmemory 1700mb (below the 2Gi container limit, leaving ~350Mi for AOF
+# rewrite COW + allocator/OS overhead): with noeviction, redis REFUSES writes
+# (returns OOM, which deblob surfaces as StoreUnavailable + freezes via its
+# health-gate) at the ceiling rather than being OOMKilled by the cgroup — a
+# graceful, observable capacity signal, never data loss (jr-deblob-stability-231518).
+data: {redis.conf: "appendonly yes\nappendfsync everysec\nmaxmemory 1700mb\nmaxmemory-policy noeviction\nsave \"\"\ndir /data\n"}
 ---
 apiVersion: apps/v1
 kind: Deployment

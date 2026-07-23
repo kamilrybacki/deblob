@@ -28,6 +28,11 @@ spec:
         - {name: OLLAMA_HOST, value: "0.0.0.0:11434"}
         - {name: OLLAMA_KEEP_ALIVE, value: "-1"}          # keep the 0.5B model resident
         - {name: OLLAMA_MAX_LOADED_MODELS, value: "1"}
+        # Admission cap (jr-deblob-stability-231518): bound the pending-request
+        # queue so an SLM burst (namer + decision lane) queues/rejects rather than
+        # piling up unbounded contexts and OOM-cycling. SLM naming is optional
+        # enrichment — it should degrade to the heuristic, never cascade.
+        - {name: OLLAMA_MAX_QUEUE, value: "64"}
         # NUM_PARALLEL=1 (was 2): 2 concurrent 0.5B contexts + keep_alive=-1 pushed
         # RSS past the 3Gi limit -> OOMKilled 7x/day (diagnosed 2026-07-23). One
         # context halves peak memory; naming/decision requests queue briefly rather
