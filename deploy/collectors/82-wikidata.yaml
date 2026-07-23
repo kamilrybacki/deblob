@@ -44,6 +44,12 @@ kind: CronJob
 metadata: {name: collector-wikidata, namespace: deblob, labels: {app: greenwindow-collector, source: wikidata}}
 spec:
   schedule: "*/5 * * * *"           # every 5 min (sampler, not a mirror)
+  # SUSPENDED 2026-07-23: `claims` is a dynamic-key map (property IDs) and deblob
+  # has no merged-profile size cap, so one candidate's profile bloated to 22MB
+  # (evidence 171MB) -> redis HMGET 14-41ms -> 989ms latency -> discovery stall.
+  # Re-enable once deblob bounds map-shaped/dynamic-key profiles (deblob-monoid
+  # leaf-count cap). (jr-deblob-stability-231518)
+  suspend: true
   concurrencyPolicy: Forbid
   successfulJobsHistoryLimit: 2
   failedJobsHistoryLimit: 2
