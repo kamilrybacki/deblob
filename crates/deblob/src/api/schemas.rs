@@ -5,7 +5,8 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use deblob_core::id::{FamilyId, FamilyVersion, SchemaId};
 use deblob_core::ports::{FamilyRecord, SchemaRecord};
-use serde::Deserialize;
+use deblob_semantic::domain::{domain_of_source, Domain};
+use serde::{Deserialize, Serialize};
 
 use super::{cursor, ApiError, ApiState, DataEnvelope, ListResponse};
 
@@ -18,13 +19,48 @@ pub struct ListQuery {
     limit: Option<usize>,
 }
 
+/// A schema record with its ingest source surfaced as FIRST-CLASS fields. The
+/// source topic is stamped onto `provenance.source` at promote (b23), but was
+/// only reachable by digging into the nested `provenance` blob — this view
+/// flattens the full record and adds a top-level `source` (the ingest topic,
+/// e.g. `events.compute.runpod`) plus its coarse `domain` (e.g. `compute`), so
+/// every schema-read surface names where the schema came from. Additive: all
+/// existing `SchemaRecord` fields (including `provenance`) still serialize.
+#[derive(Debug, Serialize)]
+pub struct SchemaView {
+    #[serde(flatten)]
+    record: SchemaRecord,
+    /// Ingest source topic (`provenance.source`); `None` for a pre-b23 record.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
+    /// Coarse subject domain derived from `source`; `None` if source unknown.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    domain: Option<&'static str>,
+}
+
+impl SchemaView {
+    fn of(record: SchemaRecord) -> Self {
+        let source =
+            crate::api::semantic::provenance_source(&record.provenance).map(str::to_string);
+        let domain = source
+            .as_deref()
+            .and_then(domain_of_source)
+            .map(Domain::slug);
+        SchemaView {
+            record,
+            source,
+            domain,
+        }
+    }
+}
+
 /// `GET /api/v1/schemas?cursor=&limit=` — cursor pagination over the
 /// registry's own `list_schemas`, spec §8. The `cursor` query parameter is
 /// opaque base64; `next_cursor` in the response is encoded the same way.
 pub async fn list_schemas(
     State(state): State<ApiState>,
     Query(q): Query<ListQuery>,
-) -> Result<Json<ListResponse<SchemaRecord>>, ApiError> {
+) -> Result<Json<ListResponse<SchemaView>>, ApiError> {
     let cursor_in = q.cursor.as_deref().map(cursor::decode).transpose()?;
     let limit = q.limit.unwrap_or(DEFAULT_LIMIT);
 
@@ -35,7 +71,7 @@ pub async fn list_schemas(
         .map_err(ApiError::from_core)?;
 
     Ok(Json(ListResponse {
-        data,
+        data: data.into_iter().map(SchemaView::of).collect(),
         next_cursor: next.map(|c| cursor::encode(&c)),
     }))
 }
@@ -44,7 +80,7 @@ pub async fn list_schemas(
 pub async fn get_schema(
     State(state): State<ApiState>,
     Path(sch_id): Path<String>,
-) -> Result<Json<DataEnvelope<SchemaRecord>>, ApiError> {
+) -> Result<Json<DataEnvelope<SchemaView>>, ApiError> {
     let id = SchemaId::parse(&sch_id).map_err(|e| ApiError::unprocessable(e.to_string()))?;
 
     let record = state
@@ -54,7 +90,9 @@ pub async fn get_schema(
         .map_err(ApiError::from_core)?
         .ok_or_else(|| ApiError::not_found("schema not found"))?;
 
-    Ok(Json(DataEnvelope { data: record }))
+    Ok(Json(DataEnvelope {
+        data: SchemaView::of(record),
+    }))
 }
 
 /// `GET /api/v1/schemas/{sch_id}/value-profile` — the durable value-profile

@@ -342,6 +342,11 @@ async function loadData(){
         // Governed display-name provenance (jr-schema-naming-211140): human > slm >
         // heuristic. null = unnamed (still showing the fam-<tail> fallback above).
         name_source:(r.provenance&&r.provenance.name_source)||null,
+        // Ingest source (jr-deblob-rebuild-221850): the topic this schema was
+        // discovered from, now a first-class API field (falls back to the nested
+        // provenance.source), plus its coarse domain.
+        source:r.source||(r.provenance&&r.provenance.source)||null,
+        domain:r.domain||null,
         observation_count:(r.provenance&&r.provenance.observation_count)||0,
         fields:canonToFields(r.canonical),semantic_fingerprint:r.semantic_fingerprint||null,
         privacy_class:r.privacy_class||'internal',canonicalizer:r.canonicalizer}));
@@ -496,7 +501,9 @@ V.schemas=()=>{const list=state.data.families;
     <div id="schdetail">${schemaDetail(list.find(f=>f.schema_id===state.sel.schema))}</div>
   </div>`;
 };
-function schemaRows(list){return list.map(f=>`<div class="row ${f.schema_id===state.sel.schema?'on':''}" data-sch="${f.schema_id}"><div><div class="lab">${esc(f.label)}</div><div class="meta">${shortId(f.schema_id)}</div></div><span class="cnt">${f.observation_count} obs</span></div>`).join('')||'<div class="empty">No schemas</div>';}
+// Short ingest source: drop the "events." prefix (events.compute.runpod -> compute.runpod).
+function srcShort(s){return s?String(s).replace(/^events\./,''):'';}
+function schemaRows(list){return list.map(f=>`<div class="row ${f.schema_id===state.sel.schema?'on':''}" data-sch="${f.schema_id}"><div><div class="lab">${esc(f.label)}</div><div class="meta">${shortId(f.schema_id)}${f.source?' · <span title="ingest source">◎ '+esc(srcShort(f.source))+'</span>':''}</div></div><span class="cnt">${f.observation_count} obs</span></div>`).join('')||'<div class="empty">No schemas</div>';}
 // Display-name source badge (jr-schema-naming-211140). human=operator edit (wins),
 // slm=accepted model proposal, heuristic=deterministic fallback. Absent = unnamed.
 function nameBadge(f){if(!f.name_source)return '';
@@ -506,7 +513,7 @@ function nameBadge(f){if(!f.name_source)return '';
 function schemaDetail(f){if(!f)return '<div class="card empty">Select a schema</div>';
   const fields=f.fields.map(x=>`<div class="field"><span class="fp">${x.path.split('.').map((p,i)=>i?'<span class="dot">.</span>'+esc(p):esc(p)).join('')}</span><span class="ty ${x.type}">${x.type}</span><span class="muted" style="font-size:11px">${x.nullable?'nullable':'required'}</span></div>`).join('');
   return `<div class="card"><button class="btn schback" data-schback>← Schemas</button><div class="schdhead" style="display:flex;justify-content:space-between;align-items:start;gap:12px;margin:0 0 4px;flex-wrap:wrap"><div style="min-width:0"><div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><h2 style="margin:0;font-size:18px">${esc(f.label)}</h2>${nameBadge(f)}</div><div class="muted num" style="font-size:11px;margin-top:3px;overflow-wrap:anywhere">${esc(f.schema_id)}</div></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><button class="btn" data-rename="${esc(f.schema_id)}" ${canMutate()?'':'disabled'} title="${canMutate()?'Edit this schema&#39;s display name — a human edit always wins over the model':'connect with a token to rename'}">✎ Rename</button><button class="btn" data-act="export-oapi" data-id="${esc(f.schema_id)}" title="Download this schema as OpenAPI 3.1">⬇ OpenAPI</button><span class="tag ${f.privacy_class}">${f.privacy_class}</span></div></div>
-    <dl class="kv"><dt>family</dt><dd>${esc(f.family_id)}</dd><dt>version</dt><dd>v${f.version}</dd><dt>observations</dt><dd>${f.observation_count}</dd><dt>semantic sem_</dt><dd>${f.semantic_fingerprint?esc(f.semantic_fingerprint):'<span class="muted">not annotated</span>'}</dd><dt>canonicalizer</dt><dd>${esc(f.canonicalizer)}</dd></dl>
+    <dl class="kv"><dt>source</dt><dd>${f.source?'◎ '+esc(f.source):'<span class="muted">unknown</span>'}${f.domain?' <span class="tag" style="text-transform:none">'+esc(f.domain)+'</span>':''}</dd><dt>family</dt><dd>${esc(f.family_id)}</dd><dt>version</dt><dd>v${f.version}</dd><dt>observations</dt><dd>${f.observation_count}</dd><dt>semantic sem_</dt><dd>${f.semantic_fingerprint?esc(f.semantic_fingerprint):'<span class="muted">not annotated</span>'}</dd><dt>canonicalizer</dt><dd>${esc(f.canonicalizer)}</dd></dl>
     <h2 class="sec" style="margin:16px 0 10px">Canonical shape · ${f.fields.length} fields</h2>${fields}
   </div>`;}
 
