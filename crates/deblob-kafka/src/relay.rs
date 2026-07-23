@@ -852,7 +852,19 @@ pub(crate) fn consumer_client_config(cfg: &RelayCfg) -> ClientConfig {
         // relay is a non-issue here since nothing upstream of the raw
         // topic is transactional either. `read_committed` is what
         // DOWNSTREAM consumers of tagged/discovery/quarantine must set.
-        .set("isolation.level", "read_uncommitted");
+        .set("isolation.level", "read_uncommitted")
+        // BOUND THE PREFETCH so the relay's memory is independent of backlog
+        // size and partition count (diagnosed 2026-07-23: 35 OOM restarts while
+        // draining a 9388-message lag). librdkafka's default per-partition fetch
+        // queue (`queued.max.messages.kbytes` ~1 GiB) times the multi-topic
+        // subscribe (~40 raw topics x 4 partitions = ~160 partitions) can buffer
+        // many GiB under a lag backlog and OOM the process. Cap it to ~2 MiB per
+        // partition (~320 MiB total worst-case) — still ample in-flight for the
+        // batched relay loop, but a lag spike can no longer balloon RSS.
+        .set("queued.max.messages.kbytes", "2048")
+        .set("queued.min.messages", "2000")
+        .set("fetch.message.max.bytes", "1048576")
+        .set("fetch.max.bytes", "8388608");
     apply_sasl(&mut c, &cfg.sasl);
     c
 }
