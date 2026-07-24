@@ -19,6 +19,7 @@ spec:
         - {name: PRODUCER_URL, value: "http://demo-producer.deblob-demo.svc.cluster.local:8080"}
         - {name: NORMALIZER_URL, value: "http://demo-normalizer.deblob-demo.svc.cluster.local:8080"}
         - {name: ETL_URL, value: "http://demo-etl.deblob-demo.svc.cluster.local:8080"}
+        - {name: CODEGEN_URL, value: "http://demo-codegen.deblob-demo.svc.cluster.local:8080"}
         ports: [{name: http, containerPort: 8080}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 100m, memory: 96Mi}}

@@ -1,0 +1,39 @@
+# Contract codegen — canonical superset → JSON Schema → Pydantic v2 (real
+# datamodel-code-generator) + additive SQL migrations. Polls the normalizer.
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: demo-codegen, namespace: deblob-demo, labels: {app: demo-codegen}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: demo-codegen}}
+  template:
+    metadata: {labels: {app: demo-codegen}}
+    spec:
+      securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
+      containers:
+      - name: codegen
+        image: python:3.12-slim
+        command: ["sh", "-c", "pip install --user --quiet datamodel-code-generator && exec python /app/codegen.py"]
+        env:
+        - {name: HOME, value: /tmp}
+        - {name: PATH, value: "/tmp/.local/bin:/usr/local/bin:/usr/bin:/bin"}
+        - {name: NORMALIZER_URL, value: "http://demo-normalizer.deblob-demo.svc.cluster.local:8080"}
+        - {name: TABLE, value: "orders"}
+        - {name: MODEL, value: "Order"}
+        ports: [{name: http, containerPort: 8080}]
+        securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: [ALL]}}
+        resources: {requests: {cpu: 25m, memory: 96Mi}, limits: {cpu: 500m, memory: 320Mi}}
+        readinessProbe: {httpGet: {path: /healthz, port: 8080}, initialDelaySeconds: 30, periodSeconds: 5, failureThreshold: 40}
+        volumeMounts:
+        - {name: src, mountPath: /app, readOnly: true}
+        - {name: tmp, mountPath: /tmp}
+      volumes:
+      - {name: src, configMap: {name: demo-codegen-src}}
+      - {name: tmp, emptyDir: {}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: demo-codegen, namespace: deblob-demo, labels: {app: demo-codegen}}
+spec:
+  selector: {app: demo-codegen}
+  ports: [{name: http, port: 8080, targetPort: 8080}]

@@ -15,6 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 PRODUCER = os.environ.get("PRODUCER_URL", "http://demo-producer.deblob-demo.svc.cluster.local:8080")
 NORMALIZER = os.environ.get("NORMALIZER_URL", "http://demo-normalizer.deblob-demo.svc.cluster.local:8080")
 ETL = os.environ.get("ETL_URL", "http://demo-etl.deblob-demo.svc.cluster.local:8080")
+CODEGEN = os.environ.get("CODEGEN_URL", "http://demo-codegen.deblob-demo.svc.cluster.local:8080")
 
 
 def _get(url):
@@ -72,6 +73,12 @@ button:disabled{opacity:.45;cursor:default}button:hover:not(:disabled){filter:br
 .approve{margin-top:10px;padding:10px 16px;font-size:14px;width:auto;flex:0}
 .controls{display:flex;gap:10px;margin-top:16px}
 .reset{background:#2a3340;color:var(--ink)}
+.cg{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:640px){.cg{grid-template-columns:1fr}}
+.cgh{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);margin-bottom:5px}
+.code{background:#0b0e13;border:1px solid var(--line);border-radius:8px;padding:11px;margin:0;
+font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;color:var(--ink);
+overflow:auto;max-height:280px;white-space:pre}
 </style></head><body><div class=wrap>
 <h1>Deblob — Schema Normalization <span class=badge id=state>—</span></h1>
 <p class=sub>The producer can drift its shape <b>both ways</b> (<span class=mono>v1&nbsp;⇄&nbsp;v2</span>). Deblob's normalizer reshapes every record into one <b>stable, accreting canonical contract</b>, so the downstream ETL never breaks. <span class=mono>events.demo.orders → events.demo.orders.normalized</span></p>
@@ -112,6 +119,17 @@ button:disabled{opacity:.45;cursor:default}button:hover:not(:disabled){filter:br
   <button class=reset id=reset onclick=reset()>↺ Reset (v2 → v1)</button>
 </div>
 <div class=note style=margin-top:8px>Go either direction as many times as you like — the ETL stays green both ways, because the normalizer only ever emits complete canonical records (and holds the rest).</div>
+
+<div class=card style=margin-top:18px>
+  <h2>4 · The contract as code <span class="badge b-norm" id=cggen>—</span></h2>
+  <div class=note style=margin-bottom:12px>Generated live from the canonical superset: a standard <b>JSON Schema</b> → a real <b>Pydantic v2</b> model → <b>additive SQL migrations</b>. Trigger drift and watch a new nullable column + field appear — evolves without breaking old consumers.</div>
+  <div class=cg>
+    <div><div class=cgh>JSON Schema · draft 2020-12</div><pre class=code id=cgschema>…</pre></div>
+    <div><div class=cgh>Pydantic v2 model · models.py</div><pre class=code id=cgpy>…</pre></div>
+  </div>
+  <div class=cgh style=margin-top:12px>SQL migrations · additive, backwards-compatible</div>
+  <pre class=code id=cgsql>…</pre>
+</div>
 </div>
 <script>
 function esc(s){return (s+'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
@@ -122,6 +140,11 @@ function rows(items){return items.map(x=>'<div class="f '+(x.cls||'')+'"><span>'
 
 async function tick(){
  const p=await j('/api/producer'), n=await j('/api/normalizer'), e=await j('/api/etl');
+ const cg=await j('/api/codegen');
+ document.getElementById('cggen').textContent=cg.generator?('via '+cg.generator):'—';
+ document.getElementById('cgschema').textContent=cg.json_schema?JSON.stringify(cg.json_schema,null,2):(cg.error||'generating…');
+ document.getElementById('cgpy').textContent=cg.pydantic||'generating…';
+ document.getElementById('cgsql').textContent=(cg.migrations&&cg.migrations.length)?cg.migrations.map(m=>'-- '+m.note+'\n'+m.sql).join('\n\n'):'generating…';
  const v=p.version||'v1';
  // header badge
  const sb=document.getElementById('state');
@@ -220,6 +243,8 @@ class Handler(BaseHTTPRequestHandler):
             d, c = _get(NORMALIZER + "/status"); return self._json(c, d)
         if self.path == "/api/etl":
             d, c = _get(ETL + "/status"); return self._json(c, d)
+        if self.path == "/api/codegen":
+            d, c = _get(CODEGEN + "/status"); return self._json(c, d)
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):

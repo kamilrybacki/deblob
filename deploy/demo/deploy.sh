@@ -24,6 +24,7 @@ echo "== 3. configmaps from src/ =="
 kubectl -n deblob-demo create configmap demo-producer-src   --from-file=producer.py=src/producer.py     --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n deblob-demo create configmap demo-normalizer-src --from-file=normalizer.py=src/normalizer.py --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n deblob-demo create configmap demo-etl-src        --from-file=etl.py=src/etl.py               --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n deblob-demo create configmap demo-codegen-src   --from-file=codegen.py=src/codegen.py         --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n deblob-demo create configmap demo-dashboard-src  --from-file=dashboard.py=src/dashboard.py   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "== 4. deblob API token secret (best-effort id->name resolution) =="
@@ -32,10 +33,10 @@ kubectl -n deblob-demo create secret generic demo-deblob-token --from-literal=to
   --dry-run=client -o yaml | kubectl apply -f -
 
 echo "== 5. services =="
-kubectl apply -f 10-producer.yaml -f 30-normalizer.yaml -f 35-etl.yaml -f 40-dashboard.yaml
+kubectl apply -f 10-producer.yaml -f 30-normalizer.yaml -f 35-etl.yaml -f 37-codegen.yaml -f 40-dashboard.yaml
 
 echo "== 6. wait for rollouts =="
-for d in demo-producer demo-normalizer demo-etl demo-dashboard; do
+for d in demo-producer demo-normalizer demo-etl demo-codegen demo-dashboard; do
   kubectl -n deblob-demo rollout status deploy/$d --timeout=180s
 done
 
