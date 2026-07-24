@@ -1,4 +1,4 @@
-# Deblob demo — Schema Normalization
+# Deblob demo — Live Data Contracts
 
 A live, ~60-second showcase of Deblob's value: a producer changes its payload
 shape without warning → Deblob tags every record with a schema id on

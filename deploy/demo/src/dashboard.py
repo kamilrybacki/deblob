@@ -36,7 +36,7 @@ def _post(url):
 
 HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Deblob — Schema Normalization</title>
+<title>Deblob — Live Data Contracts</title>
 <style>
 :root{--bg:#0e1116;--card:#171b22;--ink:#e6e9ef;--muted:#8b94a3;--line:#232833;
 --red:#ff5c5c;--green:#35d0b2;--greenbg:#0f2622;--amber:#ffc857;--amberbg:#2a2410;--teal:#6fd3e6;--tealbg:#12303a}
@@ -80,26 +80,25 @@ button:disabled{opacity:.45;cursor:default}button:hover:not(:disabled){filter:br
 font-family:ui-monospace,Menlo,monospace;font-size:12px;line-height:1.5;color:var(--ink);
 overflow:auto;max-height:280px;white-space:pre}
 </style></head><body><div class=wrap>
-<h1>Deblob — Schema Normalization <span class=badge id=state>—</span></h1>
-<p class=sub>The producer can drift its shape <b>both ways</b> (<span class=mono>v1&nbsp;⇄&nbsp;v2</span>). Deblob's normalizer reshapes every record into one <b>stable, accreting canonical contract</b>, so the downstream ETL never breaks. <span class=mono>events.demo.orders → events.demo.orders.normalized</span></p>
+<h1>Deblob — Live Data Contracts <span class=badge id=state>—</span></h1>
+<p class=sub>Point Deblob at a drifting source and it hands your downstream systems a <b>stable, backwards-compatible data contract</b> — as <b>JSON Schema</b>, a <b>Pydantic v2 model</b>, and <b>SQL migrations</b> — generated live. Change the payload shape (either way) and watch the model + migration update <b>without breaking old consumers</b>. <span class=mono>events.demo.orders</span></p>
 
-<div class=flow>
-  <div class=card>
-    <h2>1 · Incoming shape <span class=badge id=inbadge></span></h2>
-    <div class=note id=innote style=margin-bottom:8px>…</div>
-    <div id=infields></div>
+<div class=card>
+  <h2>Your data model — generated live <span class="badge b-norm" id=cggen>—</span></h2>
+  <div class=note style=margin-bottom:12px>Deblob discovers the shape, normalizes it to a canonical superset, and emits a standard <b>JSON Schema</b> → a real <b>Pydantic v2</b> model (<span class=mono>datamodel-code-generator</span>) → <b>additive SQL migrations</b>. Trigger drift → a new <span class=mono>Optional</span> field + nullable column appear. Old code keeps working.</div>
+  <div class=cg>
+    <div><div class=cgh>JSON Schema · draft 2020-12</div><pre class=code id=cgschema>…</pre></div>
+    <div><div class=cgh>Pydantic v2 · models.py</div><pre class=code id=cgpy>…</pre></div>
   </div>
-  <div class=card>
-    <h2>2 · Transform applied</h2>
-    <div class=note id=trnote style=margin-bottom:8px>…</div>
-    <div id=trfields></div>
-  </div>
-  <div class=card>
-    <h2>3 · Normalized output <span class="badge b-norm">canonical</span></h2>
-    <div class=note style=margin-bottom:8px>The stable superset every downstream consumer sees.</div>
-    <div id=canonfields></div>
-  </div>
+  <div class=cgh style=margin-top:12px>SQL migrations · additive, backwards-compatible</div>
+  <pre class=code id=cgsql>…</pre>
 </div>
+
+<div class=controls>
+  <button id=trig onclick=trigger()>⚡ Trigger drift (v1 → v2)</button>
+  <button class=reset id=reset onclick=reset()>↺ Reset (v2 → v1)</button>
+</div>
+<div class=note style=margin-top:8px>Drift either way, any number of times — the contract only ever grows (additive), so every generated migration is non-breaking and old consumers keep working.</div>
 
 <div class="pa" id=pa>
   <b>⏸ Needs your approval</b> — Deblob won't guess a unit change on a core field.
@@ -108,27 +107,29 @@ overflow:auto;max-height:280px;white-space:pre}
 </div>
 
 <div class=etl>
-  <div class="stat ok" id=st-proc><div class=n id=proc>0</div><div class=l>ETL processed</div></div>
+  <div class="stat ok" id=st-proc><div class=n id=proc>0</div><div class=l>ETL rows processed</div></div>
   <div class="stat ok on" id=st-err><div class=n id=err>0</div><div class=l>ETL errors · pipeline unbroken</div></div>
-  <div class="stat held" id=st-held><div class=n id=held>0</div><div class=l>held (incomplete, not emitted)</div></div>
+  <div class="stat held" id=st-held><div class=n id=held>0</div><div class=l>held (pending approval)</div></div>
 </div>
 <div class=note id=etlnote style=margin-top:8px></div>
 
-<div class=controls>
-  <button id=trig onclick=trigger()>⚡ Trigger drift (v1 → v2)</button>
-  <button class=reset id=reset onclick=reset()>↺ Reset (v2 → v1)</button>
-</div>
-<div class=note style=margin-top:8px>Go either direction as many times as you like — the ETL stays green both ways, because the normalizer only ever emits complete canonical records (and holds the rest).</div>
-
-<div class=card style=margin-top:18px>
-  <h2>4 · The contract as code <span class="badge b-norm" id=cggen>—</span></h2>
-  <div class=note style=margin-bottom:12px>Generated live from the canonical superset: a standard <b>JSON Schema</b> → a real <b>Pydantic v2</b> model → <b>additive SQL migrations</b>. Trigger drift and watch a new nullable column + field appear — evolves without breaking old consumers.</div>
-  <div class=cg>
-    <div><div class=cgh>JSON Schema · draft 2020-12</div><pre class=code id=cgschema>…</pre></div>
-    <div><div class=cgh>Pydantic v2 model · models.py</div><pre class=code id=cgpy>…</pre></div>
+<div class=cgh style="margin:24px 0 10px;font-size:12px">Under the hood · how the contract stays stable</div>
+<div class=flow>
+  <div class=card>
+    <h2>Incoming shape <span class=badge id=inbadge></span></h2>
+    <div class=note id=innote style=margin-bottom:8px>…</div>
+    <div id=infields></div>
   </div>
-  <div class=cgh style=margin-top:12px>SQL migrations · additive, backwards-compatible</div>
-  <pre class=code id=cgsql>…</pre>
+  <div class=card>
+    <h2>Transform applied</h2>
+    <div class=note id=trnote style=margin-bottom:8px>…</div>
+    <div id=trfields></div>
+  </div>
+  <div class=card>
+    <h2>Normalized → canonical <span class="badge b-norm">the contract</span></h2>
+    <div class=note style=margin-bottom:8px>The stable superset every downstream consumer + the codegen build against.</div>
+    <div id=canonfields></div>
+  </div>
 </div>
 </div>
 <script>
@@ -148,7 +149,7 @@ async function tick(){
  const v=p.version||'v1';
  // header badge
  const sb=document.getElementById('state');
- sb.textContent=(v==='v2'?'v2 · NORMALIZING':'v1 · NORMALIZING');
+ sb.textContent=(v==='v2'?'v2 · EVOLVING':'v1 · LIVE');
  sb.className='badge '+(v==='v2'?'b-v2':'b-v1');
 
  // 1 · Incoming shape (from producer sample)
