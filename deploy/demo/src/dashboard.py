@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Deblob demo — dashboard.
+"""Deblob demo — dashboard (simplified: saved schema vs incoming + auto-update).
 
-Pure-stdlib service: serves the single-page demo UI and server-side proxies to
-the producer / naive / aware services + Deblob API (avoids CORS). The page polls
-~1s and renders the drift story; the TRIGGER DRIFT button POSTs to the producer.
-
-HTTP (:8080):  GET /  GET /api/{producer,naive,aware}  POST /api/trigger  GET /healthz
+Pure-stdlib BFF: serves the single-page UI and server-side proxies the producer
+and the aware amender (avoids CORS). The page shows the SAVED (registered) schema
+next to the INCOMING (just-read) shape, and — when the producer drifts — how
+Deblob auto-updates the fields it can prove while flagging the ambiguous one.
 """
 import json
 import os
@@ -13,7 +12,6 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PRODUCER = os.environ.get("PRODUCER_URL", "http://demo-producer.deblob-demo.svc.cluster.local:8080")
-NAIVE = os.environ.get("NAIVE_URL", "http://demo-naive.deblob-demo.svc.cluster.local:8080")
 AWARE = os.environ.get("AWARE_URL", "http://demo-aware.deblob-demo.svc.cluster.local:8080")
 
 
@@ -27,8 +25,7 @@ def _get(url):
 
 def _post(url):
     try:
-        req = urllib.request.Request(url, data=b"", method="POST")
-        with urllib.request.urlopen(req, timeout=3) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, data=b"", method="POST"), timeout=3) as r:
             return json.loads(r.read()), 200
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}, 502
@@ -36,114 +33,132 @@ def _post(url):
 
 HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Deblob — Drift Sentinel</title>
+<title>Deblob — Schema Auto-Amend</title>
 <style>
 :root{--bg:#0e1116;--card:#171b22;--ink:#e6e9ef;--muted:#8b94a3;--line:#232833;
---red:#ff5c5c;--redbg:#2a1414;--green:#35d0b2;--greenbg:#0f2622;--amber:#ffc857}
+--red:#ff5c5c;--green:#35d0b2;--greenbg:#0f2622;--amber:#ffc857;--amberbg:#2a2410;--teal:#6fd3e6}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);
-font:15px/1.5 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
-.wrap{max-width:1080px;margin:0 auto;padding:24px}
-h1{font-size:22px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 20px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:18px}
-.card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 12px;color:var(--muted)}
-.big{font-size:40px;font-weight:700;line-height:1}
-.row{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--line)}
-.row:last-child{border:0}.k{color:var(--muted)}.mono{font-family:ui-monospace,Menlo,monospace;font-size:13px}
-.badge{display:inline-block;padding:2px 10px;border-radius:999px;font-weight:600;font-size:13px}
-.v1{background:#12303a;color:#6fd3e6}.v2{background:#3a2410;color:var(--amber)}
-.naive{border-color:#3a2020}.naive .big{color:var(--red)}
-.aware{border-color:#1c3a34}.aware .big{color:var(--green)}
-.drift{background:var(--greenbg);border:1px solid var(--green);border-radius:8px;padding:10px 12px;margin-top:10px;display:none}
-.drift.on{display:block}.broke{background:var(--redbg);border:1px solid var(--red);border-radius:8px;padding:10px 12px;margin-top:10px;display:none}
-.broke.on{display:block}
-button{margin-top:18px;width:100%;padding:16px;font-size:17px;font-weight:700;color:#0e1116;
-background:var(--amber);border:0;border-radius:10px;cursor:pointer}
-button:disabled{opacity:.5;cursor:default}button:hover:not(:disabled){filter:brightness(1.08)}
-.diff{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px}
-.diff div{background:#10141a;border:1px solid var(--line);border-radius:8px;padding:8px}
-.diff .t{color:var(--muted);font-size:11px;text-transform:uppercase;margin-bottom:4px}
-.chg{color:var(--amber)}.full{grid-column:1/3}.note{color:var(--muted);font-size:13px;margin-top:6px}
+font:15px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
+.wrap{max-width:960px;margin:0 auto;padding:22px}
+h1{font-size:21px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 18px;font-size:14px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+@media(max-width:640px){.grid{grid-template-columns:1fr}}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
+.card h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 10px;color:var(--muted)}
+.badge{display:inline-block;padding:2px 9px;border-radius:999px;font-weight:600;font-size:12px;vertical-align:middle}
+.b-sync{background:#12303a;color:var(--teal)}.b-drift{background:#3a2410;color:var(--amber)}
+.b-v{background:#1c3a34;color:var(--green)}
+.f{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:13px}
+.f:last-child{border:0}.f .t{color:var(--muted)}
+.f.id{color:var(--green)}.f.rn{color:var(--green)}.f.amb{color:var(--amber)}.f.new{color:var(--teal)}.f.gone{color:var(--muted);text-decoration:line-through;opacity:.6}
+.tag{font-size:11px;color:var(--muted);margin-left:6px}
+.upd{margin-top:16px}
+.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:13px;font-weight:600;margin-right:8px}
+.pill.ok{background:var(--greenbg);color:var(--green)}.pill.wait{background:var(--amberbg);color:var(--amber)}
+.needs{background:var(--amberbg);border:1px solid var(--amber);border-radius:8px;padding:11px 13px;margin-top:10px;display:none}
+.needs.on{display:block}
+button{padding:14px;font-size:16px;font-weight:700;color:#0e1116;background:var(--amber);border:0;border-radius:10px;cursor:pointer;flex:1}
+button:disabled{opacity:.45;cursor:default}button:hover:not(:disabled){filter:brightness(1.08)}
+.approve{margin-top:9px;padding:9px 14px;font-size:13px;width:auto;flex:0}
+.note{color:var(--muted);font-size:13px}
 </style></head><body><div class=wrap>
-<h1>Deblob — Drift Sentinel <span class=badge id=verbadge>—</span></h1>
-<p class=sub>A producer changes its payload shape without warning. Watch the naive loader break while the Deblob-aware loader catches it. <span class=mono>events.demo.orders → events.tagged</span></p>
+<h1>Deblob — Schema Auto-Amend <span class=badge id=state>—</span></h1>
+<p class=sub>Deblob keeps the <b>saved schema</b> in sync with what's actually arriving. On a shape change it <b>auto-updates the fields it can prove</b> and asks you only about the ambiguous one. <span class=mono>events.demo.orders</span></p>
+
 <div class=grid>
-  <div class="card full"><h2>Hero producer · events.demo.orders</h2>
-    <div class=row><span class=k>produced</span><span class=mono id=produced>0</span></div>
-    <div class=row><span class=k>current shape</span><span class=mono id=shape>v1</span></div>
-    <div class=diff>
-      <div><div class=t>v1 (baseline)</div><div class=mono>order_id · customer_name:str · amount:float · currency · item_count · placed_at</div></div>
-      <div><div class=t>v2 (on drift)</div><div class=mono>order_id · <span class=chg>customer{id,name}</span> · <span class=chg>total_cents:int</span> · currency · item_count · placed_at · <span class=chg>shipping{method,eta_days}</span></div></div>
-    </div>
-    <div style="display:flex;gap:10px">
-      <button id=trig onclick=trigger()>⚡ TRIGGER DRIFT (v1 → v2)</button>
-      <button id=rb onclick=rollback() style="background:#2a3340;color:var(--ink);flex:0 0 200px">↺ Rollback to v1</button>
-    </div>
-    <div class=note id=trignote></div>
+  <div class=card>
+    <h2>Saved schema <span class="badge b-v" id=savedver></span></h2>
+    <div class=note id=savedname style=margin-bottom:8px>…</div>
+    <div id=savedfields></div>
   </div>
-  <div class="card naive"><h2>Naive loader · assumes v1</h2>
-    <div class=big id=nerr>0</div><div class=k>parse errors (silent data loss)</div>
-    <div class=row><span class=k>processed ok</span><span class=mono id=nok>0</span></div>
-    <div class=broke id=nbroke><b>BROKEN.</b> Reading <span class=mono>customer_name</span>/<span class=mono>amount</span> — gone in v2. <span class=mono id=nlast></span></div>
-  </div>
-  <div class="card aware"><h2>Deblob-aware loader · reads the tag</h2>
-    <div class=big id=aq>0</div><div class=k>quarantined & rerouted (zero loss)</div>
-    <div class=row><span class=k>forwarded</span><span class=mono id=afwd>0</span></div>
-    <div class=row><span class=k>blessed schema</span><span class="mono" id=abless>learning…</span></div>
-    <div class=drift id=adrift><b>DRIFT DETECTED.</b> <span id=adtxt></span></div>
+  <div class=card>
+    <h2>Incoming — just read <span class=badge id=inbadge></span></h2>
+    <div class=note id=innote style=margin-bottom:8px>…</div>
+    <div id=infields></div>
   </div>
 </div>
-<div class=card style="margin-top:16px"><h2>Scorecard</h2>
-  <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:10px;text-align:center">
-    <div><div class=mono id=sc_drift style="font-size:22px;font-weight:700">—</div><div class=k>drift detected</div></div>
-    <div><div class=mono id=sc_bad style="font-size:22px;font-weight:700;color:var(--red)">0</div><div class=k>naive bad writes</div></div>
-    <div><div class=mono id=sc_held style="font-size:22px;font-weight:700;color:var(--green)">0</div><div class=k>aware contained</div></div>
-    <div><div class=mono style="font-size:22px;font-weight:700;color:var(--green)">0</div><div class=k>aware crashes</div></div>
-    <div><div class=mono style="font-size:22px;font-weight:700">never</div><div class=k>raw payload stored</div></div>
-  </div></div>
-<p class=note>Honest claim: Deblob does <b>not</b> guess that <span class=mono>amount</span> became <span class=mono>total_cents</span> — structural similarity isn't semantic equivalence. What it guarantees is <b>containment</b>: the aware loader makes <b>zero bad warehouse writes</b>, stays healthy, and hands the operator the exact structural change. Deblob tags every record on <span class=mono>events.tagged</span> with <span class=mono>deblob-schema-id</span> and never stores the raw payload.</p>
+
+<div class="card upd">
+  <h2>Auto-update</h2>
+  <div id=updsummary class=note>Producer is emitting the saved shape — nothing to amend.</div>
+  <div id=updauto style=margin-top:6px></div>
+  <div class=needs id=needs>
+    <b>⏸ Needs your approval — Deblob won't guess a unit change:</b>
+    <div class=mono id=needstext style=margin-top:6px></div>
+    <button class="approve" onclick=approve()>✔ Approve this update</button>
+  </div>
+</div>
+
+<div style="display:flex;gap:10px;margin-top:16px">
+  <button id=trig onclick=trigger()>⚡ Trigger drift (v1 → v2)</button>
+  <button onclick=rollback() style="background:#2a3340;color:var(--ink);flex:0 0 150px;font-weight:600">↺ Reset</button>
+</div>
+<div class=note id=trignote style=margin-top:8px></div>
 </div>
 <script>
-async function j(u){try{return await (await fetch(u)).json()}catch(e){return{}}}
-function fmt(id){return id&&id.length>18?id.slice(0,18)+'…':(id||'—')}
-async function tick(){
- const p=await j('/api/producer'),n=await j('/api/naive'),a=await j('/api/aware');
- const v=p.version||'v1';
- const vb=document.getElementById('verbadge');vb.textContent=v.toUpperCase();vb.className='badge '+v;
- document.getElementById('produced').textContent=p.produced??0;
- document.getElementById('shape').textContent=v==='v2'?'v2 (drifted)':'v1 (baseline)';
- document.getElementById('nerr').textContent=n.errors??0;
- document.getElementById('nok').textContent=n.processed??0;
- const nb=document.getElementById('nbroke');
- if((n.errors??0)>0){nb.classList.add('on');document.getElementById('nlast').textContent=n.last_error||''}else nb.classList.remove('on');
- document.getElementById('aq').textContent=a.quarantined??0;
- document.getElementById('afwd').textContent=a.forwarded??0;
- document.getElementById('abless').textContent=a.blessed_schema_name?a.blessed_schema_name+' ('+fmt(a.blessed_schema_id)+')':fmt(a.blessed_schema_id);
- const ad=document.getElementById('adrift');
- if(a.drift_detected_at){ad.classList.add('on');
-   let t='New schema id '+fmt(a.new_schema_id);
-   if(a.new_schema_name)t='Deblob discovered → “'+a.new_schema_name+'”'+(a.new_family_version?' v'+a.new_family_version:'')+' ('+fmt(a.new_schema_id)+')';
-   document.getElementById('adtxt').textContent=t;
- }else ad.classList.remove('on');
- document.getElementById('trig').disabled=(v==='v2');
- const sd=document.getElementById('sc_drift');
- if(a.drift_detected_at){sd.textContent='YES';sd.style.color='var(--green)'}else{sd.textContent='no';sd.style.color=''}
- document.getElementById('sc_bad').textContent=n.errors??0;
- document.getElementById('sc_held').textContent=a.quarantined??0;
+function esc(s){return (s+'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
+function short(p){return (p||'').replace('$.','')}
+function fieldsHTML(leaves, statusMap){ // leaves={path:type}, statusMap path->{cls,tag}
+  if(!leaves) return '<div class=note>—</div>';
+  return Object.keys(leaves).sort().map(p=>{
+    const st=(statusMap&&statusMap[p])||{};
+    return '<div class="f '+(st.cls||'')+'"><span>'+esc(short(p))+(st.tag?'<span class=tag>'+st.tag+'</span>':'')+'</span><span class=t>'+esc(leaves[p])+'</span></div>';
+  }).join('');
 }
-async function trigger(){document.getElementById('trignote').textContent='triggering…';
- await fetch('/api/trigger',{method:'POST'});
- document.getElementById('trignote').textContent='drift injected — watch both loaders diverge.';}
-async function rollback(){document.getElementById('trignote').textContent='rolling back…';
- await fetch('/api/reset',{method:'POST'});
- document.getElementById('trignote').textContent='producer back on v1. (aware stays latched on the observed drift for the scorecard.)';}
+async function j(u){try{return await (await fetch(u)).json()}catch(e){return{}}}
+async function tick(){
+ const p=await j('/api/producer'), a=await j('/api/aware');
+ const drift=!!a.drift_detected_at, v=p.version||'v1';
+ const sb=document.getElementById('state');
+ if(drift){sb.textContent='DRIFT → AUTO-AMENDED';sb.className='badge b-drift'}
+ else{sb.textContent='IN SYNC';sb.className='badge b-sync'}
+ // saved schema
+ document.getElementById('savedver').textContent='v'+(a.blessed_family_version||1);
+ document.getElementById('savedname').textContent=a.blessed_schema_name||'(learning the baseline…)';
+ const saved=a.blessed_leaves;
+ // build status maps from data_amend
+ const da=a.data_amend||{}, inMap={}, savedMap={};
+ (da.auto||[]).forEach(m=>{ if(m.kind==='identity'){inMap[m.to]={cls:'id',tag:'unchanged'};savedMap[m.from]={cls:'id'}}
+   else {inMap[m.to]={cls:'rn',tag:'← renamed from '+short(m.from)};savedMap[m.from]={cls:'rn',tag:'→ '+short(m.to)}} });
+ (da.approved||[]).forEach(m=>{ inMap[m.to]={cls:'rn',tag:'← '+short(m.from)+' ✔approved'};savedMap[m.from]={cls:'rn',tag:'✔ updated'} });
+ (da.additive||[]).forEach(m=>{ inMap[m.path]={cls:'new',tag:'new · additive'} });
+ (da.needs_approval||[]).forEach(m=>{ if(m.to)inMap[m.to]={cls:'amb',tag:'← was '+short(m.from)+' ⏸'}; if(m.from)savedMap[m.from]={cls:'amb',tag:'⏸ pending'} });
+ document.getElementById('savedfields').innerHTML=fieldsHTML(saved,savedMap);
+ // incoming
+ const inb=document.getElementById('inbadge');
+ if(drift && a.new_leaves){
+   inb.textContent='v2 · DRIFTED';inb.className='badge b-drift';
+   document.getElementById('innote').textContent='Shape changed — Deblob is reconciling it into the saved schema.';
+   document.getElementById('infields').innerHTML=fieldsHTML(a.new_leaves,inMap);
+ } else {
+   inb.textContent='matches saved';inb.className='badge b-sync';
+   document.getElementById('innote').textContent='Every record matches the saved schema. Nothing to amend.';
+   document.getElementById('infields').innerHTML=fieldsHTML(saved,{});
+ }
+ // auto-update summary
+ const autoN=(da.auto||[]).length+(da.additive||[]).length+(da.approved||[]).length;
+ const needs=da.needs_approval||[];
+ const us=document.getElementById('updsummary'), ua=document.getElementById('updauto'), nd=document.getElementById('needs');
+ if(drift && (autoN||needs.length)){
+   us.innerHTML='<span class="pill ok">✅ '+autoN+' fields auto-updated</span>'+(needs.length?'<span class="pill wait">⏸ '+needs.length+' needs you</span>':'<span class="pill ok">✔ fully in sync</span>');
+   ua.innerHTML='<div class=note style=margin-top:6px>Auto-applied (provable): '+
+     (da.auto||[]).map(m=>short(m.from)+(m.to&&m.to!==m.from?'→'+short(m.to):'')).concat((da.approved||[]).map(m=>short(m.from)+'→'+short(m.to)+'✔')).concat((da.additive||[]).map(m=>'+'+short(m.path))).join(' · ')+'</div>';
+   if(needs.length){nd.classList.add('on');
+     document.getElementById('needstext').innerHTML=needs.map(m=>'<b>'+short(m.from)+' → '+short(m.to||'?')+'</b> — '+m.reason).join('<br>');
+   } else nd.classList.remove('on');
+ } else {
+   us.textContent='Producer is emitting the saved shape — nothing to amend.';ua.innerHTML='';nd.classList.remove('on');
+ }
+ document.getElementById('trig').disabled=(v==='v2');
+}
+async function trigger(){document.getElementById('trignote').textContent='drift injected — watch the saved schema auto-update…';await fetch('/api/trigger',{method:'POST'});}
+async function approve(){await fetch('/api/approve',{method:'POST'});document.getElementById('trignote').textContent='approved — the saved schema now includes that field.';}
+async function rollback(){await fetch('/api/reset',{method:'POST'});document.getElementById('trignote').textContent='producer back on v1.';}
 setInterval(tick,1000);tick();
 </script></body></html>"""
 
 
 class Handler(BaseHTTPRequestHandler):
-    # HTTP/1.1 so Caddy's reverse_proxy gets clean Content-Length framing (the
-    # stdlib default HTTP/1.0 made Caddy deliver an empty body through the edge).
     protocol_version = "HTTP/1.1"
 
     def _json(self, code, obj):
@@ -167,8 +182,6 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         if self.path == "/api/producer":
             d, c = _get(PRODUCER + "/state"); return self._json(c, d)
-        if self.path == "/api/naive":
-            d, c = _get(NAIVE + "/status"); return self._json(c, d)
         if self.path == "/api/aware":
             d, c = _get(AWARE + "/status"); return self._json(c, d)
         return self._json(404, {"error": "not found"})
@@ -178,6 +191,8 @@ class Handler(BaseHTTPRequestHandler):
             d, c = _post(PRODUCER + "/trigger"); return self._json(c, d)
         if self.path == "/api/reset":
             d, c = _post(PRODUCER + "/reset"); return self._json(c, d)
+        if self.path == "/api/approve":
+            d, c = _post(AWARE + "/approve"); return self._json(c, d)
         return self._json(404, {"error": "not found"})
 
     def log_message(self, *a):
