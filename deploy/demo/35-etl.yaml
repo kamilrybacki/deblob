@@ -1,24 +1,25 @@
-# Naive consumer — parses events.tagged assuming v1; breaks on v2 drift.
+# Mock downstream ETL — consumes ONLY events.demo.orders.normalized and validates
+# the original v1 contract. Stays green (errors=0) through drift both ways because
+# the normalizer only ever emits complete canonical records.
 apiVersion: apps/v1
 kind: Deployment
-metadata: {name: demo-naive, namespace: deblob-demo, labels: {app: demo-naive}}
+metadata: {name: demo-etl, namespace: deblob-demo, labels: {app: demo-etl}}
 spec:
   replicas: 1
-  selector: {matchLabels: {app: demo-naive}}
+  selector: {matchLabels: {app: demo-etl}}
   template:
-    metadata: {labels: {app: demo-naive}}
+    metadata: {labels: {app: demo-etl}}
     spec:
       securityContext: {runAsNonRoot: true, runAsUser: 65532, fsGroup: 65532, seccompProfile: {type: RuntimeDefault}}
       containers:
-      - name: naive
+      - name: etl
         image: python:3.12-slim
-        command: ["sh", "-c", "pip install --user --quiet --no-cache-dir confluent-kafka && exec python /app/naive_consumer.py"]
+        command: ["sh", "-c", "pip install --user --quiet --no-cache-dir confluent-kafka && exec python /app/etl.py"]
         env:
         - {name: HOME, value: /tmp}
         - {name: BOOTSTRAP, value: "redpanda.deblob.svc.cluster.local:9092"}
-        - {name: TAGGED_TOPIC, value: "events.tagged"}
-        - {name: ORIGIN_PREFIX, value: "events.demo.orders"}
-        - {name: GROUP, value: "demo-naive-consumer"}
+        - {name: NORMALIZED_TOPIC, value: "events.demo.orders.normalized"}
+        - {name: GROUP, value: "demo-etl"}
         ports: [{name: http, containerPort: 8080}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: false, capabilities: {drop: [ALL]}}
         resources: {requests: {cpu: 25m, memory: 64Mi}, limits: {cpu: 250m, memory: 160Mi}}
@@ -27,12 +28,12 @@ spec:
         - {name: src, mountPath: /app, readOnly: true}
         - {name: tmp, mountPath: /tmp}
       volumes:
-      - {name: src, configMap: {name: demo-naive-src}}
+      - {name: src, configMap: {name: demo-etl-src}}
       - {name: tmp, emptyDir: {}}
 ---
 apiVersion: v1
 kind: Service
-metadata: {name: demo-naive, namespace: deblob-demo, labels: {app: demo-naive}}
+metadata: {name: demo-etl, namespace: deblob-demo, labels: {app: demo-etl}}
 spec:
-  selector: {app: demo-naive}
+  selector: {app: demo-etl}
   ports: [{name: http, port: 8080, targetPort: 8080}]

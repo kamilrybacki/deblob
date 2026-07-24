@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Deblob demo — dashboard (simplified: saved schema vs incoming + auto-update).
+"""Deblob demo — dashboard (schema-evolution NORMALIZATION story).
 
-Pure-stdlib BFF: serves the single-page UI and server-side proxies the producer
-and the aware amender (avoids CORS). The page shows the SAVED (registered) schema
-next to the INCOMING (just-read) shape, and — when the producer drifts — how
-Deblob auto-updates the fields it can prove while flagging the ambiguous one.
+Pure-stdlib BFF: serves the single-page UI and server-side proxies the producer,
+the normalizer, and the mock ETL (avoids CORS). The page tells one story: the
+upstream producer can drift its shape BOTH ways (v1 <-> v2) and the downstream
+ETL never breaks, because Deblob's normalizer reshapes every incoming record into
+one stable, accreting canonical contract.
 """
 import json
 import os
@@ -12,7 +13,8 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PRODUCER = os.environ.get("PRODUCER_URL", "http://demo-producer.deblob-demo.svc.cluster.local:8080")
-AWARE = os.environ.get("AWARE_URL", "http://demo-aware.deblob-demo.svc.cluster.local:8080")
+NORMALIZER = os.environ.get("NORMALIZER_URL", "http://demo-normalizer.deblob-demo.svc.cluster.local:8080")
+ETL = os.environ.get("ETL_URL", "http://demo-etl.deblob-demo.svc.cluster.local:8080")
 
 
 def _get(url):
@@ -25,7 +27,7 @@ def _get(url):
 
 def _post(url):
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, data=b"", method="POST"), timeout=3) as r:
+        with urllib.request.urlopen(urllib.request.Request(url, data=b"", method="POST"), timeout=6) as r:
             return json.loads(r.read()), 200
     except Exception as e:  # noqa: BLE001
         return {"error": str(e)}, 502
@@ -33,127 +35,159 @@ def _post(url):
 
 HTML = r"""<!doctype html><html lang=en><head><meta charset=utf-8>
 <meta name=viewport content="width=device-width,initial-scale=1">
-<title>Deblob — Schema Auto-Amend</title>
+<title>Deblob — Schema Normalization</title>
 <style>
 :root{--bg:#0e1116;--card:#171b22;--ink:#e6e9ef;--muted:#8b94a3;--line:#232833;
---red:#ff5c5c;--green:#35d0b2;--greenbg:#0f2622;--amber:#ffc857;--amberbg:#2a2410;--teal:#6fd3e6}
+--red:#ff5c5c;--green:#35d0b2;--greenbg:#0f2622;--amber:#ffc857;--amberbg:#2a2410;--teal:#6fd3e6;--tealbg:#12303a}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);
 font:15px/1.55 ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto}
-.wrap{max-width:960px;margin:0 auto;padding:22px}
+.wrap{max-width:1040px;margin:0 auto;padding:22px}
 h1{font-size:21px;margin:0 0 2px}.sub{color:var(--muted);margin:0 0 18px;font-size:14px}
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
-@media(max-width:640px){.grid{grid-template-columns:1fr}}
+.mono{font-family:ui-monospace,Menlo,monospace}
+.flow{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}
+@media(max-width:640px){.flow{grid-template-columns:1fr}}
 .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px}
 .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.06em;margin:0 0 10px;color:var(--muted)}
 .badge{display:inline-block;padding:2px 9px;border-radius:999px;font-weight:600;font-size:12px;vertical-align:middle}
-.b-sync{background:#12303a;color:var(--teal)}.b-drift{background:#3a2410;color:var(--amber)}
-.b-v{background:#1c3a34;color:var(--green)}
-.f{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:13px}
+.b-v1{background:var(--tealbg);color:var(--teal)}.b-v2{background:#3a2410;color:var(--amber)}
+.b-norm{background:var(--greenbg);color:var(--green)}
+.f{display:flex;justify-content:space-between;gap:10px;padding:5px 0;border-bottom:1px solid var(--line);font-family:ui-monospace,Menlo,monospace;font-size:12.5px}
 .f:last-child{border:0}.f .t{color:var(--muted)}
-.f.id{color:var(--green)}.f.rn{color:var(--green)}.f.amb{color:var(--amber)}.f.new{color:var(--teal)}.f.gone{color:var(--muted);text-decoration:line-through;opacity:.6}
-.tag{font-size:11px;color:var(--muted);margin-left:6px}
-.upd{margin-top:16px}
-.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:13px;font-weight:600;margin-right:8px}
-.pill.ok{background:var(--greenbg);color:var(--green)}.pill.wait{background:var(--amberbg);color:var(--amber)}
-.needs{background:var(--amberbg);border:1px solid var(--amber);border-radius:8px;padding:11px 13px;margin-top:10px;display:none}
-.needs.on{display:block}
+.f.id{color:var(--ink)}.f.rn{color:var(--green)}.f.amb{color:var(--amber)}.f.new{color:var(--teal)}.f.core{color:var(--green)}.f.add{color:var(--teal)}
+.tag{font-size:10.5px;color:var(--muted);margin-left:6px}
+.note{color:var(--muted);font-size:13px}
+.arrow{text-align:center;color:var(--muted);font-size:13px;margin:2px 0 6px}
+.etl{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:14px}
+@media(max-width:640px){.etl{grid-template-columns:1fr}}
+.stat{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px;text-align:center}
+.stat .n{font-size:34px;font-weight:800;line-height:1.1}
+.stat .l{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin-top:4px}
+.stat.ok .n{color:var(--green)}.stat.err .n{color:var(--red)}.stat.held .n{color:var(--amber)}
+.stat.ok.on{border-color:var(--green);box-shadow:0 0 0 1px var(--green) inset}
+.pa{background:var(--amberbg);border:1px solid var(--amber);border-radius:12px;padding:14px 16px;margin-top:14px;display:none}
+.pa.on{display:block}
+.pa b{color:var(--amber)}
 button{padding:14px;font-size:16px;font-weight:700;color:#0e1116;background:var(--amber);border:0;border-radius:10px;cursor:pointer;flex:1}
 button:disabled{opacity:.45;cursor:default}button:hover:not(:disabled){filter:brightness(1.08)}
-.approve{margin-top:9px;padding:9px 14px;font-size:13px;width:auto;flex:0}
-.note{color:var(--muted);font-size:13px}
+.approve{margin-top:10px;padding:10px 16px;font-size:14px;width:auto;flex:0}
+.controls{display:flex;gap:10px;margin-top:16px}
+.reset{background:#2a3340;color:var(--ink)}
 </style></head><body><div class=wrap>
-<h1>Deblob — Schema Auto-Amend <span class=badge id=state>—</span></h1>
-<p class=sub>Deblob keeps the <b>saved schema</b> in sync with what's actually arriving. On a shape change it <b>auto-updates the fields it can prove</b> and asks you only about the ambiguous one. <span class=mono>events.demo.orders</span></p>
+<h1>Deblob — Schema Normalization <span class=badge id=state>—</span></h1>
+<p class=sub>The producer can drift its shape <b>both ways</b> (<span class=mono>v1&nbsp;⇄&nbsp;v2</span>). Deblob's normalizer reshapes every record into one <b>stable, accreting canonical contract</b>, so the downstream ETL never breaks. <span class=mono>events.demo.orders → events.demo.orders.normalized</span></p>
 
-<div class=grid>
+<div class=flow>
   <div class=card>
-    <h2>Saved schema <span class="badge b-v" id=savedver></span></h2>
-    <div class=note id=savedname style=margin-bottom:8px>…</div>
-    <div id=savedfields></div>
-  </div>
-  <div class=card>
-    <h2>Incoming — just read <span class=badge id=inbadge></span></h2>
+    <h2>1 · Incoming shape <span class=badge id=inbadge></span></h2>
     <div class=note id=innote style=margin-bottom:8px>…</div>
     <div id=infields></div>
   </div>
-</div>
-
-<div class="card upd">
-  <h2>Auto-update</h2>
-  <div id=updsummary class=note>Producer is emitting the saved shape — nothing to amend.</div>
-  <div id=updauto style=margin-top:6px></div>
-  <div class=needs id=needs>
-    <b>⏸ Needs your approval — Deblob won't guess a unit change:</b>
-    <div class=mono id=needstext style=margin-top:6px></div>
-    <button class="approve" onclick=approve()>✔ Approve this update</button>
+  <div class=card>
+    <h2>2 · Transform applied</h2>
+    <div class=note id=trnote style=margin-bottom:8px>…</div>
+    <div id=trfields></div>
+  </div>
+  <div class=card>
+    <h2>3 · Normalized output <span class="badge b-norm">canonical</span></h2>
+    <div class=note style=margin-bottom:8px>The stable superset every downstream consumer sees.</div>
+    <div id=canonfields></div>
   </div>
 </div>
 
-<div style="display:flex;gap:10px;margin-top:16px">
-  <button id=trig onclick=trigger()>⚡ Trigger drift (v1 → v2)</button>
-  <button onclick=rollback() style="background:#2a3340;color:var(--ink);flex:0 0 150px;font-weight:600">↺ Reset</button>
+<div class="pa" id=pa>
+  <b>⏸ Needs your approval</b> — Deblob won't guess a unit change on a core field.
+  <div class=mono id=patext style=margin-top:8px></div>
+  <button class=approve onclick=approve()>✔ Approve conversion &amp; flush held</button>
 </div>
-<div class=note id=trignote style=margin-top:8px></div>
+
+<div class=etl>
+  <div class="stat ok" id=st-proc><div class=n id=proc>0</div><div class=l>ETL processed</div></div>
+  <div class="stat ok on" id=st-err><div class=n id=err>0</div><div class=l>ETL errors · pipeline unbroken</div></div>
+  <div class="stat held" id=st-held><div class=n id=held>0</div><div class=l>held (incomplete, not emitted)</div></div>
+</div>
+<div class=note id=etlnote style=margin-top:8px></div>
+
+<div class=controls>
+  <button id=trig onclick=trigger()>⚡ Trigger drift (v1 → v2)</button>
+  <button class=reset id=reset onclick=reset()>↺ Reset (v2 → v1)</button>
+</div>
+<div class=note style=margin-top:8px>Go either direction as many times as you like — the ETL stays green both ways, because the normalizer only ever emits complete canonical records (and holds the rest).</div>
 </div>
 <script>
 function esc(s){return (s+'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]))}
 function short(p){return (p||'').replace('$.','')}
-function fieldsHTML(leaves, statusMap){ // leaves={path:type}, statusMap path->{cls,tag}
-  if(!leaves) return '<div class=note>—</div>';
-  return Object.keys(leaves).sort().map(p=>{
-    const st=(statusMap&&statusMap[p])||{};
-    return '<div class="f '+(st.cls||'')+'"><span>'+esc(short(p))+(st.tag?'<span class=tag>'+st.tag+'</span>':'')+'</span><span class=t>'+esc(leaves[p])+'</span></div>';
-  }).join('');
-}
-async function j(u){try{return await (await fetch(u)).json()}catch(e){return{}}}
+async function j(u,o){try{return await (await fetch(u,o)).json()}catch(e){return{}}}
+
+function rows(items){return items.map(x=>'<div class="f '+(x.cls||'')+'"><span>'+esc(x.k)+(x.tag?'<span class=tag>'+x.tag+'</span>':'')+'</span><span class=t>'+esc(x.v==null?'':x.v)+'</span></div>').join('')||'<div class=note>—</div>'}
+
 async function tick(){
- const p=await j('/api/producer'), a=await j('/api/aware');
- const drift=!!a.drift_detected_at, v=p.version||'v1';
+ const p=await j('/api/producer'), n=await j('/api/normalizer'), e=await j('/api/etl');
+ const v=p.version||'v1';
+ // header badge
  const sb=document.getElementById('state');
- if(drift){sb.textContent='DRIFT → AUTO-AMENDED';sb.className='badge b-drift'}
- else{sb.textContent='IN SYNC';sb.className='badge b-sync'}
- // saved schema
- document.getElementById('savedver').textContent='v'+(a.blessed_family_version||1);
- document.getElementById('savedname').textContent=a.blessed_schema_name||'(learning the baseline…)';
- const saved=a.blessed_leaves;
- // build status maps from data_amend
- const da=a.data_amend||{}, inMap={}, savedMap={};
- (da.auto||[]).forEach(m=>{ if(m.kind==='identity'){inMap[m.to]={cls:'id',tag:'unchanged'};savedMap[m.from]={cls:'id'}}
-   else {inMap[m.to]={cls:'rn',tag:'← renamed from '+short(m.from)};savedMap[m.from]={cls:'rn',tag:'→ '+short(m.to)}} });
- (da.approved||[]).forEach(m=>{ inMap[m.to]={cls:'rn',tag:'← '+short(m.from)+' ✔approved'};savedMap[m.from]={cls:'rn',tag:'✔ updated'} });
- (da.additive||[]).forEach(m=>{ inMap[m.path]={cls:'new',tag:'new · additive'} });
- (da.needs_approval||[]).forEach(m=>{ if(m.to)inMap[m.to]={cls:'amb',tag:'← was '+short(m.from)+' ⏸'}; if(m.from)savedMap[m.from]={cls:'amb',tag:'⏸ pending'} });
- document.getElementById('savedfields').innerHTML=fieldsHTML(saved,savedMap);
- // incoming
+ sb.textContent=(v==='v2'?'v2 · NORMALIZING':'v1 · NORMALIZING');
+ sb.className='badge '+(v==='v2'?'b-v2':'b-v1');
+
+ // 1 · Incoming shape (from producer sample)
  const inb=document.getElementById('inbadge');
- if(drift && a.new_leaves){
-   inb.textContent='v2 · DRIFTED';inb.className='badge b-drift';
-   document.getElementById('innote').textContent='Shape changed — Deblob is reconciling it into the saved schema.';
-   document.getElementById('infields').innerHTML=fieldsHTML(a.new_leaves,inMap);
- } else {
-   inb.textContent='matches saved';inb.className='badge b-sync';
-   document.getElementById('innote').textContent='Every record matches the saved schema. Nothing to amend.';
-   document.getElementById('infields').innerHTML=fieldsHTML(saved,{});
- }
- // auto-update summary
- const autoN=(da.auto||[]).length+(da.additive||[]).length+(da.approved||[]).length;
- const needs=da.needs_approval||[];
- const us=document.getElementById('updsummary'), ua=document.getElementById('updauto'), nd=document.getElementById('needs');
- if(drift && (autoN||needs.length)){
-   us.innerHTML='<span class="pill ok">✅ '+autoN+' fields auto-updated</span>'+(needs.length?'<span class="pill wait">⏸ '+needs.length+' needs you</span>':'<span class="pill ok">✔ fully in sync</span>');
-   ua.innerHTML='<div class=note style=margin-top:6px>Auto-applied (provable): '+
-     (da.auto||[]).map(m=>short(m.from)+(m.to&&m.to!==m.from?'→'+short(m.to):'')).concat((da.approved||[]).map(m=>short(m.from)+'→'+short(m.to)+'✔')).concat((da.additive||[]).map(m=>'+'+short(m.path))).join(' · ')+'</div>';
-   if(needs.length){nd.classList.add('on');
-     document.getElementById('needstext').innerHTML=needs.map(m=>'<b>'+short(m.from)+' → '+short(m.to||'?')+'</b> — '+m.reason).join('<br>');
-   } else nd.classList.remove('on');
- } else {
-   us.textContent='Producer is emitting the saved shape — nothing to amend.';ua.innerHTML='';nd.classList.remove('on');
- }
+ inb.textContent=v.toUpperCase(); inb.className='badge '+(v==='v2'?'b-v2':'b-v1');
+ document.getElementById('innote').textContent=(v==='v2'
+   ?'Producer drifted: amount→total_cents (×100), customer_name→customer{}, +shipping{}.'
+   :'Producer is on the baseline v1 shape.');
+ const fields=(v==='v2'?p.v2_fields:p.v1_fields)||[];
+ const sample=p.sample||{};
+ document.getElementById('infields').innerHTML=rows(fields.map(f=>({k:f,v:''})));
+
+ // find the transform for the CURRENT incoming shape (the one whose held/rename
+ // matches this version). Pick the shape whose transform mentions total_cents for v2.
+ const tx=n.transforms||{}; let cur=null;
+ for(const sid in tx){const t=tx[sid];
+   const hasCents=Object.values(t).some(m=>m.src&&/cents/.test(m.src));
+   if(v==='v2'&&hasCents){cur=t;break} if(v==='v1'&&!hasCents){cur=t}}
+ // 2 · Transform applied
+ const trn=document.getElementById('trnote');
+ if(cur){
+   trn.textContent='Per-field mapping from this shape into the canonical contract.';
+   const order=Object.keys(n.canonical||{});
+   document.getElementById('trfields').innerHTML=rows(order.filter(f=>cur[f]).map(f=>{
+     const m=cur[f]; let cls='id',tag=m.kind;
+     if(m.kind==='rename'){cls='rn';tag='← '+short(m.src)}
+     else if(m.kind==='additive'){cls='add';tag='additive'}
+     else if(m.kind==='held'){cls='amb';tag=(m.pending?'⏸ held ':'✔ ')+'← '+short(m.src)+(m.conversion?' '+m.conversion.desc:'')}
+     else {cls='id';tag='identity'}
+     return {k:f,v:'',cls:cls,tag:tag};
+   }));
+ } else {trn.textContent='Learning the incoming shape…';document.getElementById('trfields').innerHTML='<div class=note>—</div>'}
+
+ // 3 · Normalized output = canonical superset
+ const canon=n.canonical||{};
+ document.getElementById('canonfields').innerHTML=rows(Object.keys(canon).map(f=>({
+   k:f,v:canon[f].ty,cls:(canon[f].kind==='core'?'core':'add'),
+   tag:(canon[f].kind==='core'?'core':'additive')})));
+
+ // ETL stats
+ document.getElementById('proc').textContent=e.processed||0;
+ const errs=e.errors||0; document.getElementById('err').textContent=errs;
+ const es=document.getElementById('st-err');
+ es.className='stat '+(errs>0?'err':'ok on');
+ es.querySelector('.l').textContent=(errs>0?'ETL errors':'ETL errors · pipeline unbroken');
+ document.getElementById('held').textContent=n.held||0;
+ document.getElementById('etlnote').textContent=(errs>0
+   ?'⚠ contract violation — should never happen; normalizer emitted an incomplete record.'
+   :'✅ backwards-compatible: '+(e.processed||0)+' records validated against the original v1 contract, 0 errors.');
+
+ // pending approval box
+ const pa=document.getElementById('pa'), pend=(n.pending_approvals||[]);
+ if(pend.length){pa.classList.add('on');
+   document.getElementById('patext').innerHTML=pend.map(m=>'<b>'+m.canonical_field+' ← '+m.from_shape_field+(m.conversion?' · '+m.conversion.desc:'')+'</b> &nbsp;<span class=note>'+esc(m.reason||'')+'</span>').join('<br>');
+ } else pa.classList.remove('on');
+
  document.getElementById('trig').disabled=(v==='v2');
+ document.getElementById('reset').disabled=(v==='v1');
 }
-async function trigger(){document.getElementById('trignote').textContent='drift injected — watch the saved schema auto-update…';await fetch('/api/trigger',{method:'POST'});}
-async function approve(){await fetch('/api/approve',{method:'POST'});document.getElementById('trignote').textContent='approved — the saved schema now includes that field.';}
-async function rollback(){await fetch('/api/reset',{method:'POST'});document.getElementById('trignote').textContent='producer back on v1.';}
+async function trigger(){document.getElementById('etlnote').textContent='drift injected → watch the normalizer reshape it…';await fetch('/api/trigger',{method:'POST'});}
+async function reset(){document.getElementById('etlnote').textContent='producer back on v1 — ETL stays green.';await fetch('/api/reset',{method:'POST'});}
+async function approve(){document.getElementById('etlnote').textContent='approved — flushing held records into the pipeline…';await fetch('/api/approve',{method:'POST'});}
 setInterval(tick,1000);tick();
 </script></body></html>"""
 
@@ -182,8 +216,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, {"ok": True})
         if self.path == "/api/producer":
             d, c = _get(PRODUCER + "/state"); return self._json(c, d)
-        if self.path == "/api/aware":
-            d, c = _get(AWARE + "/status"); return self._json(c, d)
+        if self.path == "/api/normalizer":
+            d, c = _get(NORMALIZER + "/status"); return self._json(c, d)
+        if self.path == "/api/etl":
+            d, c = _get(ETL + "/status"); return self._json(c, d)
         return self._json(404, {"error": "not found"})
 
     def do_POST(self):
@@ -192,7 +228,7 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/api/reset":
             d, c = _post(PRODUCER + "/reset"); return self._json(c, d)
         if self.path == "/api/approve":
-            d, c = _post(AWARE + "/approve"); return self._json(c, d)
+            d, c = _post(NORMALIZER + "/approve"); return self._json(c, d)
         return self._json(404, {"error": "not found"})
 
     def log_message(self, *a):

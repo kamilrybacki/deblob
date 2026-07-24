@@ -4,7 +4,8 @@
 Emits synthetic e-commerce "order" events to events.demo.orders on Deblob's
 Redpanda. Holds a schema VERSION (v1 by default); a control endpoint flips it to
 v2, injecting a breaking drift (field rename + type change + new nesting) that
-Deblob discovers as a new schema and a naive consumer chokes on.
+Deblob discovers as a new schema and the normalizer reshapes back to the canonical
+contract (so the downstream ETL never breaks).
 
 HTTP (:8080):  GET /state  POST /trigger  POST /reset  GET /healthz
 Messaging:     confluent-kafka Producer -> BOOTSTRAP / TOPIC

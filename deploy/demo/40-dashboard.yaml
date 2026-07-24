@@ -1,4 +1,4 @@
-# Demo dashboard — serves the UI + proxies producer/naive/aware (no pip needed).
+# Demo dashboard — serves the UI + proxies producer/normalizer/etl (no pip needed).
 # Exposed via NodePort 30895 (self-contained; add a Caddy edge route later).
 apiVersion: apps/v1
 kind: Deployment
@@ -17,8 +17,8 @@ spec:
         env:
         - {name: HOME, value: /tmp}
         - {name: PRODUCER_URL, value: "http://demo-producer.deblob-demo.svc.cluster.local:8080"}
-        - {name: NAIVE_URL, value: "http://demo-naive.deblob-demo.svc.cluster.local:8080"}
-        - {name: AWARE_URL, value: "http://demo-aware.deblob-demo.svc.cluster.local:8080"}
+        - {name: NORMALIZER_URL, value: "http://demo-normalizer.deblob-demo.svc.cluster.local:8080"}
+        - {name: ETL_URL, value: "http://demo-etl.deblob-demo.svc.cluster.local:8080"}
         ports: [{name: http, containerPort: 8080}]
         securityContext: {allowPrivilegeEscalation: false, readOnlyRootFilesystem: true, capabilities: {drop: [ALL]}}
         resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {cpu: 100m, memory: 96Mi}}
