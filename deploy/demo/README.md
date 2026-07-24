@@ -9,7 +9,13 @@ Design: `../../docs/superpowers/specs/2026-07-24-deblob-demo-drift-sentinel-desi
 
 ## Access
 
-Dashboard (NodePort 30895 on any node): **http://192.168.0.107:30895**
+- **Public (Authelia-gated):** https://deblob-demo.kamilandrzejrybacki.dpdns.org —
+  TLS at Caddy, Authelia one-factor login in front, routed to the NodePort. Wired
+  in the ansible caddy role (`Caddyfile.j2` block + `subdomain_deblob_demo`); no
+  DNS/Authelia change needed (wildcard `*.domain` + wildcard `one_factor` cover it).
+  Gotcha: Caddy's Caddyfile is a **single-file bind mount** — edits need
+  `docker restart caddy` (not `caddy reload`; reload re-reads the stale inode).
+- **LAN direct:** http://192.168.0.107:30895 (NodePort 30895 on any node, no auth).
 
 ## The demo (what to click)
 

@@ -142,6 +142,10 @@ setInterval(tick,1000);tick();
 
 
 class Handler(BaseHTTPRequestHandler):
+    # HTTP/1.1 so Caddy's reverse_proxy gets clean Content-Length framing (the
+    # stdlib default HTTP/1.0 made Caddy deliver an empty body through the edge).
+    protocol_version = "HTTP/1.1"
+
     def _json(self, code, obj):
         body = json.dumps(obj).encode()
         self.send_response(code)
