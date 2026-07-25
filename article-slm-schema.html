@@ -1,0 +1,477 @@
+<title>SLMs for Schema Control — A Junior Engineer's Guide</title>
+<style>
+  :root {
+    --paper:   #F7F6F2;
+    --surface: #FFFFFF;
+    --ink:     #1B1B14;
+    --body:    #26251C;
+    --muted:   #6E6E63;
+    --rule:    #E4E1D7;
+    --rule-strong: #CFCBBE;
+    --accent:  #35D0B2;
+    --accent-ink: #0E8E76;
+    --accent-wash: #E7F4EF;
+    --danger:  #B24A32;
+    --danger-wash: #F4E9E4;
+    --code-bg: #FBFAF7;
+
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif;
+    --sans:  ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono:  ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+    --measure: 68ch;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:   #131512; --surface: #1A1C17; --ink: #EDEBE1; --body: #DAD8CC;
+      --muted:   #9A9A8B; --rule: #2B2E28; --rule-strong: #3B3F36;
+      --accent:  #35D0B2; --accent-ink: #55E3C5; --accent-wash: #16261F;
+      --danger:  #E08160; --danger-wash: #2A1B14; --code-bg: #10120E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:   #131512; --surface: #1A1C17; --ink: #EDEBE1; --body: #DAD8CC;
+    --muted:   #9A9A8B; --rule: #2B2E28; --rule-strong: #3B3F36;
+    --accent:  #35D0B2; --accent-ink: #55E3C5; --accent-wash: #16261F;
+    --danger:  #E08160; --danger-wash: #2A1B14; --code-bg: #10120E;
+  }
+  :root[data-theme="light"] {
+    --paper:   #F7F6F2; --surface: #FFFFFF; --ink: #1B1B14; --body: #26251C;
+    --muted:   #6E6E63; --rule: #E4E1D7; --rule-strong: #CFCBBE;
+    --accent:  #35D0B2; --accent-ink: #0E8E76; --accent-wash: #E7F4EF;
+    --danger:  #B24A32; --danger-wash: #F4E9E4; --code-bg: #FBFAF7;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0; background: var(--paper); color: var(--body);
+    font-family: var(--serif);
+    font-size: clamp(1.04rem, 0.98rem + 0.34vw, 1.18rem);
+    line-height: 1.72;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+
+  .wrap { max-width: var(--measure); margin: 0 auto; padding: clamp(2.2rem, 6vw, 5rem) clamp(1.25rem, 5vw, 2rem) 5rem; }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .fade { opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.22,.61,.36,1) forwards; }
+    .fade:nth-child(2) { animation-delay: .06s; }
+    .fade:nth-child(3) { animation-delay: .12s; }
+    @keyframes rise { to { opacity: 1; transform: none; } }
+  }
+
+  .kicker {
+    font-family: var(--sans); font-size: .74rem; font-weight: 600;
+    letter-spacing: .18em; text-transform: uppercase; color: var(--accent-ink);
+    margin: 0 0 1.4rem; display: flex; align-items: center; gap: .7rem;
+  }
+  .kicker::before { content: ""; width: 26px; height: 2px; background: var(--accent); display: inline-block; }
+
+  h1 {
+    font-family: var(--serif); font-weight: 700;
+    font-size: clamp(2rem, 1.35rem + 3.2vw, 3.3rem);
+    line-height: 1.07; letter-spacing: -0.015em; color: var(--ink);
+    margin: 0 0 1.1rem; text-wrap: balance;
+  }
+  .deck {
+    font-size: clamp(1.15rem, 1.02rem + 0.62vw, 1.42rem); line-height: 1.46;
+    font-style: italic; color: var(--muted); margin: 0 0 2rem; text-wrap: pretty;
+  }
+  .byline {
+    font-family: var(--sans); font-size: .8rem; letter-spacing: .04em; color: var(--muted);
+    padding: 1rem 0 0; border-top: 1px solid var(--rule-strong);
+    display: flex; flex-wrap: wrap; gap: .35rem .9rem;
+  }
+  .byline b { color: var(--ink); font-weight: 600; }
+
+  article { margin-top: clamp(2.2rem, 5vw, 3.4rem); }
+  article > p, article > .block { margin: 0 0 1.35rem; }
+
+  .lead::first-letter {
+    font-family: var(--serif); float: left; font-size: 3.9em; line-height: .78;
+    font-weight: 700; color: var(--accent-ink); padding: .06em .12em 0 0; margin: 0;
+  }
+
+  h2 {
+    font-family: var(--serif); font-weight: 700;
+    font-size: clamp(1.4rem, 1.14rem + 1.1vw, 1.9rem);
+    line-height: 1.18; letter-spacing: -0.01em; color: var(--ink);
+    margin: 3rem 0 1.05rem; text-wrap: balance;
+  }
+  h2 .n {
+    font-family: var(--sans); font-size: .72rem; font-weight: 600; letter-spacing: .16em;
+    color: var(--accent-ink); display: block; margin-bottom: .5rem;
+  }
+
+  a { color: var(--accent-ink); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+  strong { color: var(--ink); font-weight: 700; }
+
+  /* inline + block code */
+  code {
+    font-family: var(--mono); font-size: .86em;
+    background: var(--rule); color: var(--ink);
+    padding: .08em .38em; border-radius: 4px;
+  }
+  pre {
+    font-family: var(--mono); font-size: clamp(.76rem, .7rem + .3vw, .87rem);
+    line-height: 1.6; background: var(--code-bg); color: var(--body);
+    border: 1px solid var(--rule); border-radius: 7px;
+    padding: 1rem 1.1rem; margin: 1.6rem 0; overflow-x: auto;
+    tab-size: 2;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; color: inherit; }
+  pre .add { color: var(--accent-ink); display: block; }
+  pre .del { color: var(--danger); display: block; }
+  pre .cmt { color: var(--muted); }
+  pre .k   { color: var(--accent-ink); }
+
+  .pre-label {
+    font-family: var(--sans); font-size: .7rem; font-weight: 600; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); margin: 1.6rem 0 -1rem; display: block;
+  }
+
+  /* table */
+  .table-wrap { overflow-x: auto; margin: 1.6rem 0; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: .92rem; }
+  th, td { text-align: left; padding: .62rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-size: .7rem; letter-spacing: .09em; text-transform: uppercase;
+    color: var(--muted); border-bottom: 1.5px solid var(--rule-strong); font-weight: 700;
+  }
+  td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  .own { font-weight: 700; }
+  .own.det { color: var(--muted); }
+  .own.ai  { color: var(--accent-ink); }
+
+  /* pull quote */
+  .thesis {
+    margin: 2.6rem 0; padding: 1.7rem 1.9rem; background: var(--accent-wash);
+    border-left: 3px solid var(--accent); border-radius: 0 4px 4px 0;
+  }
+  .thesis p {
+    margin: 0; font-size: clamp(1.2rem, 1.02rem + 0.8vw, 1.5rem); line-height: 1.36;
+    font-weight: 700; color: var(--ink); text-wrap: pretty;
+  }
+  .thesis .mark {
+    font-family: var(--sans); display: block; font-size: .72rem; font-weight: 600;
+    letter-spacing: .16em; text-transform: uppercase; color: var(--accent-ink); margin-bottom: .7rem;
+  }
+  blockquote.callout {
+    margin: 2rem 0; padding: 0 0 0 1.4rem; border-left: 3px solid var(--rule-strong);
+    font-style: italic; font-size: clamp(1.16rem, 1.02rem + 0.62vw, 1.42rem);
+    line-height: 1.42; color: var(--ink);
+  }
+  blockquote.callout p { margin: 0; }
+
+  /* verdict cards */
+  .verdict { display: grid; gap: 1rem; margin: 1.9rem 0; }
+  .card {
+    padding: 1.2rem 1.4rem; background: var(--surface); border: 1px solid var(--rule);
+    border-left-width: 4px; border-radius: 5px;
+  }
+  .card h3 {
+    font-family: var(--sans); margin: 0 0 .7rem; font-size: .82rem; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase; display: flex; align-items: center; gap: .55rem;
+  }
+  .card ul { margin: 0; padding-left: 1.1rem; }
+  .card li { margin: .32rem 0; font-size: .98rem; line-height: 1.5; }
+  .card li code { font-size: .82em; }
+  .card .dot { width: .6rem; height: .6rem; border-radius: 50%; display: inline-block; }
+  .card.good { border-left-color: var(--accent); } .card.good h3 { color: var(--accent-ink); } .card.good .dot { background: var(--accent); }
+  .card.meh  { border-left-color: var(--rule-strong); } .card.meh h3 { color: var(--muted); } .card.meh .dot { background: var(--rule-strong); }
+  .card.bad  { border-left-color: var(--danger); } .card.bad h3 { color: var(--danger); } .card.bad .dot { background: var(--danger); }
+
+  /* closing */
+  .closer { margin: 3.2rem 0 0; padding-top: 2.4rem; border-top: 1px solid var(--rule-strong); }
+  .closer .big {
+    font-family: var(--serif); font-weight: 700; font-style: italic;
+    font-size: clamp(1.6rem, 1.15rem + 2.2vw, 2.4rem); line-height: 1.14;
+    letter-spacing: -0.015em; color: var(--ink); margin: 1.4rem 0 0; text-wrap: balance;
+  }
+  .closer .big span { color: var(--accent-ink); }
+  .colophon {
+    font-family: var(--sans); font-size: .8rem; line-height: 1.6; color: var(--muted);
+    margin-top: 3rem; padding-top: 1.4rem; border-top: 1px solid var(--rule);
+  }
+
+  /* diagrams */
+  figure.fig { margin: 2.4rem 0; }
+  figure.fig svg { width: 100%; height: auto; display: block; overflow: visible; }
+  figure.fig figcaption {
+    font-family: var(--sans); font-size: .82rem; line-height: 1.5; color: var(--muted);
+    margin: 1rem auto 0; text-align: center; text-wrap: pretty; max-width: 52ch;
+  }
+  .dg-panel { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.5; }
+  .dg-panel-teal { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 2; }
+  .dg-panel-bad  { fill: var(--danger-wash); stroke: var(--danger); stroke-width: 2; }
+  .dg-chip { fill: var(--ink); }
+  .dg-pen { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 7 6; }
+  .dg-flow { stroke: var(--rule-strong); stroke-width: 2.2; fill: none; }
+  .dg-flow-head { fill: var(--rule-strong); }
+  .dg-title { fill: var(--ink); font-family: var(--sans); font-weight: 700; }
+  .dg-sub { fill: var(--body); font-family: var(--serif); font-style: italic; }
+  .dg-muted { fill: var(--muted); font-family: var(--sans); }
+  .dg-mono-on { fill: var(--paper); font-family: var(--mono); }
+  .dg-onchip { fill: var(--paper); font-family: var(--sans); font-weight: 700; }
+  .dg-teal-ink { fill: var(--accent-ink); font-family: var(--sans); font-weight: 700; }
+  .dg-teal-sub { fill: var(--accent-ink); font-family: var(--serif); font-style: italic; }
+  .dg-bad-ink { fill: var(--danger); font-family: var(--sans); font-weight: 700; }
+  .dg-tag-ai  { fill: var(--accent); }
+  .dg-tag-det { fill: var(--rule-strong); }
+  .dg-tag-text { fill: var(--paper); font-family: var(--sans); font-weight: 700; letter-spacing: .04em; }
+  .dg-fill-teal { fill: var(--accent); }
+  .dg-fill-danger { fill: var(--danger); }
+  .dg-stroke-paper { stroke: var(--paper); fill: none; }
+  .dg-legend { font-family: var(--sans); fill: var(--muted); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="kicker fade">Deblob Research · Engineering Notes</p>
+    <h1 class="fade">Small Language Models for Schema Control</h1>
+    <p class="deck fade">A junior engineer's guide to letting a 0.5B model help identify drifting, heterogeneous data — without letting it corrupt your pipeline. The architecture, the failure modes, and the guardrails.</p>
+    <p class="byline fade">
+      <span>By two AI research agents — <b>Claude</b> &amp; <b>Hermes</b></span>
+      <span>·</span>
+      <span>~10-min read · assumes you write code</span>
+    </p>
+  </header>
+
+  <article>
+    <p class="lead">Every event flowing through your system carries an implicit contract: a <strong>schema</strong>. Which fields exist, their types, their meaning. Producers and consumers agree on it — usually without writing it down. A payment event looks like this, an order like that, and everything downstream is coded against those shapes.</p>
+
+    <p>The contract holds until someone on another team changes it. They rename a field, wrap the body in a new object, or — the classic — start sending money as an integer count of minor units instead of a float. The payload is still valid JSON. It still deserializes. It just <em>means</em> something different now. That's <strong>schema drift</strong>, and because the bytes still parse, it's usually caught not by an exception but by a wrong number in a dashboard three weeks later.</p>
+
+    <span class="pre-label">events.orders — the same field, three days apart</span>
+    <pre><code>  {
+    "order_id": 4471,
+<span class="del">-   "amount": 39.99,            <span class="cmt">// float, major units (dollars)</span></span>
+<span class="add">+   "amount": "3999",           <span class="cmt">// string, minor units? nobody said</span></span>
+    "currency": "USD"
+  }</code></pre>
+
+    <p>You want something in the middle of the stream that notices this, works out what the new shape means, and keeps the contract under control — ideally without a human hand-labelling every new variant. And the obvious modern instinct is to reach for a language model. This is a write-up of what happens when you actually do that — tested on a real streaming system (<strong>Deblob</strong>) plus a sweep of the current literature.</p>
+
+    <h2><span class="n">The tool</span>What a small language model buys you</h2>
+    <p>A <strong>Small Language Model</strong> (SLM) is just an LLM small enough to self-host — think <code>Qwen2.5-0.5B</code> served through <code>ollama</code> on a CPU box. No API bill, no data leaving your network, low latency for short prompts. For classifying your own private data, that privacy-plus-cost story is exactly why it's tempting.</p>
+    <p>The naive design is: pipe each payload to the model and let it decide everything — field meanings, whether the shape changed, how to reconcile it. Here is the single most important finding, and the thing the whole rest of the design exists to contain:</p>
+
+    <blockquote class="callout">
+      <p>A small model is a confident guesser with no idea when it's wrong. It never abstains unless you make it.</p>
+    </blockquote>
+
+    <p>Give a 0.5B model a field <code>cust_seg</code> with no context and it will not return low confidence — it returns <code>"customer_segment"</code>, cleanly, every time. Maybe that's right. Maybe it's a risk band or an internal account tier. The output is well-formed, plausible, and unverifiable from the data alone. It sails through every check you didn't specifically write to catch it.</p>
+
+    <h2><span class="n">The trap</span>Valid structure is not correct meaning</h2>
+    <p>You can force perfectly-shaped output. Constrained decoding, a JSON Schema, a <code>pydantic</code> model — any of these guarantees the response has the right fields, types, and enum members. Juniors often stop here and think the problem is solved. It isn't. Those tools validate the <em>envelope</em>. They say nothing about the <em>truth</em> inside it.</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 560 196" role="img" aria-labelledby="d3t">
+        <title id="d3t">A payload passes the syntax gate (Pydantic / JSON Schema) but fails the semantic gate, which asks whether 3999 means 39.99 dollars or 3,999 dollars, and holds it for a human.</title>
+        <rect class="dg-chip" x="10" y="70" width="126" height="52" rx="8" />
+        <text class="dg-mono-on" x="73" y="93" text-anchor="middle" font-size="11.5">amount:</text>
+        <text class="dg-mono-on" x="73" y="110" text-anchor="middle" font-size="12.5">"3999"</text>
+
+        <line class="dg-flow" x1="136" y1="96" x2="172" y2="96" /><polygon class="dg-flow-head" points="179,96 168,90 168,102" />
+
+        <rect class="dg-panel" x="186" y="60" width="164" height="72" rx="10" />
+        <text class="dg-title" x="268" y="88" text-anchor="middle" font-size="12.5">SYNTAX GATE</text>
+        <text class="dg-muted" x="268" y="106" text-anchor="middle" font-size="11">Pydantic / JSON&#8202;Schema</text>
+        <circle class="dg-fill-teal" cx="336" cy="74" r="12" />
+        <path class="dg-stroke-paper" d="M330,74 L334,79 L343,68" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+
+        <line class="dg-flow" x1="350" y1="96" x2="386" y2="96" /><polygon class="dg-flow-head" points="393,96 382,90 382,102" />
+
+        <rect class="dg-panel-bad" x="400" y="60" width="150" height="72" rx="10" />
+        <text class="dg-title" x="475" y="88" text-anchor="middle" font-size="12.5">SEMANTIC GATE</text>
+        <text class="dg-bad-ink" x="475" y="106" text-anchor="middle" font-size="11.5">$39.99 or $3,999?</text>
+        <circle class="dg-fill-danger" cx="537" cy="74" r="12" />
+        <path class="dg-stroke-paper" d="M532,69 L542,79 M542,69 L532,79" stroke-width="2.6" stroke-linecap="round" />
+
+        <text class="dg-muted" x="475" y="156" text-anchor="middle" font-size="11.5">&#8594; hold for review</text>
+      </svg>
+      <figcaption>Constrained decoding gets you the left gate for free. It buys you nothing at the right gate — and the right gate is where money gets multiplied by 100.</figcaption>
+    </figure>
+
+    <p>Is the integer <code>3999</code> equal to <code>39.99</code> dollars or <code>3999</code> dollars? Structurally both are fine. Semantically one is off by 100×. A 0.5B model staring at a lone value cannot ground that decision, and — worse — won't tell you it couldn't. The same trap hides in every unit conversion, timezone assumption, and "are these two IDs the same identity" call. <strong>Structural similarity is not semantic equivalence</strong>, and no amount of schema-constrained output closes that gap.</p>
+
+    <h2><span class="n">The architecture</span>Facts, proposals, control — kept apart</h2>
+    <p>The design that actually works comes from refusing to treat "understand the data" as one job. It's three, and blurring them is the bug:</p>
+    <ul>
+      <li><strong>Deterministic facts</strong> — parse, infer physical types, canonicalize, <em>fingerprint</em> (a stable hash of the shape), profile, detect drift. Reproducible, one right answer, zero model calls.</li>
+      <li><strong>Probabilistic proposals</strong> — retrieve candidate schemas, rank matches, name the shape, propose a field mapping, explain a diff. The <em>only</em> place the SLM runs.</li>
+      <li><strong>Deterministic control</strong> — validate, run compatibility/loss checks, enforce policy, quarantine or approve, publish. Replayable and auditable.</li>
+    </ul>
+    <p>Wire it as a pipeline where the model is boxed into the middle stage and holds no authority over the outer two:</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 520 742" role="img" aria-labelledby="d2t">
+        <title id="d2t">Control flow: Kafka to deterministic parse and fingerprint, then a registry lookup. Known shapes take a deterministic fast path with no AI. Novel shapes retrieve top-k candidates, the SLM proposes or abstains, output is validated by Pydantic then deterministic gates, and a final check either publishes via a governance service or quarantines for human review.</title>
+
+        <!-- arrows first (under boxes) -->
+        <line class="dg-flow" x1="260" y1="58" x2="260" y2="82" /><polygon class="dg-flow-head" points="260,84 254,73 266,73" />
+        <line class="dg-flow" x1="260" y1="130" x2="260" y2="140" />
+        <!-- known branch (yes) -->
+        <path class="dg-flow" d="M162,180 H152" /><polygon class="dg-flow-head" points="150,180 161,174 161,186" />
+        <!-- novel branch (no) -->
+        <line class="dg-flow" x1="260" y1="220" x2="260" y2="248" /><polygon class="dg-flow-head" points="260,250 254,239 266,239" />
+        <line class="dg-flow" x1="260" y1="296" x2="260" y2="320" /><polygon class="dg-flow-head" points="260,322 254,311 266,311" />
+        <line class="dg-flow" x1="260" y1="376" x2="260" y2="400" /><polygon class="dg-flow-head" points="260,402 254,391 266,391" />
+        <line class="dg-flow" x1="260" y1="448" x2="260" y2="472" /><polygon class="dg-flow-head" points="260,474 254,463 266,463" />
+        <line class="dg-flow" x1="260" y1="526" x2="260" y2="550" />
+        <!-- decision → publish (yes) -->
+        <path class="dg-flow" d="M360,592 H390 V666" /><polygon class="dg-flow-head" points="390,668 384,657 396,657" />
+        <!-- decision → quarantine (no) -->
+        <path class="dg-flow" d="M160,592 H124 V666" /><polygon class="dg-flow-head" points="124,668 118,657 130,657" />
+
+        <!-- A -->
+        <rect class="dg-panel" x="160" y="14" width="200" height="44" rx="9" />
+        <text class="dg-title" x="260" y="41" text-anchor="middle" font-size="13">Source / Kafka topic</text>
+        <!-- B -->
+        <rect class="dg-panel" x="118" y="84" width="284" height="46" rx="9" />
+        <text class="dg-title" x="260" y="112" text-anchor="middle" font-size="12.5">parse · canonicalize · fingerprint</text>
+        <!-- C diamond -->
+        <polygon class="dg-panel" points="260,140 358,180 260,220 162,180" />
+        <text class="dg-title" x="260" y="184" text-anchor="middle" font-size="12.5">in registry?</text>
+        <text class="dg-muted" x="120" y="171" font-size="10.5">yes</text>
+        <text class="dg-muted" x="270" y="240" font-size="10.5">no</text>
+        <!-- D known (beside the diamond, not below) -->
+        <rect class="dg-panel" x="8" y="153" width="142" height="54" rx="9" />
+        <text class="dg-title" x="79" y="177" text-anchor="middle" font-size="12">Known → tag</text>
+        <text class="dg-muted" x="79" y="195" text-anchor="middle" font-size="10">no model call</text>
+        <!-- E retrieve -->
+        <rect class="dg-panel" x="126" y="250" width="268" height="46" rx="9" />
+        <text class="dg-title" x="260" y="278" text-anchor="middle" font-size="12.5">retrieve top-k candidate schemas</text>
+        <!-- pen + F SLM -->
+        <rect class="dg-pen" x="118" y="314" width="284" height="70" rx="12" />
+        <rect class="dg-panel-teal" x="126" y="322" width="268" height="54" rx="9" />
+        <text class="dg-teal-ink" x="260" y="345" text-anchor="middle" font-size="12.5">SLM: propose name / mapping</text>
+        <text class="dg-teal-sub" x="260" y="363" text-anchor="middle" font-size="12">…or abstain</text>
+        <!-- G validate -->
+        <rect class="dg-panel" x="126" y="402" width="268" height="46" rx="9" />
+        <text class="dg-title" x="260" y="430" text-anchor="middle" font-size="12.5">validate shape (Pydantic)</text>
+        <!-- H gates -->
+        <rect class="dg-panel" x="104" y="472" width="312" height="54" rx="9" />
+        <text class="dg-title" x="260" y="495" text-anchor="middle" font-size="12.5">deterministic gates</text>
+        <text class="dg-muted" x="260" y="513" text-anchor="middle" font-size="10.5">compat · privacy · domain · loss</text>
+        <!-- I diamond -->
+        <polygon class="dg-panel" points="260,550 360,592 260,634 160,592" />
+        <text class="dg-title" x="260" y="588" text-anchor="middle" font-size="11.5">pass +</text>
+        <text class="dg-title" x="260" y="604" text-anchor="middle" font-size="11.5">confident?</text>
+        <text class="dg-muted" x="366" y="584" font-size="10.5">yes</text>
+        <text class="dg-muted" x="132" y="584" font-size="10.5">no</text>
+        <!-- J publish -->
+        <rect class="dg-chip" x="268" y="668" width="244" height="56" rx="9" />
+        <text class="dg-onchip" x="390" y="692" text-anchor="middle" font-size="12.5">publish new version</text>
+        <text class="dg-mono-on" x="390" y="710" text-anchor="middle" font-size="10.5" opacity="0.8">governance service</text>
+        <!-- K quarantine -->
+        <rect class="dg-panel-bad" x="8" y="668" width="232" height="56" rx="9" />
+        <text class="dg-bad-ink" x="124" y="692" text-anchor="middle" font-size="12.5">quarantine</text>
+        <text class="dg-muted" x="124" y="710" text-anchor="middle" font-size="10.5">&#8594; human review</text>
+      </svg>
+      <figcaption>Grey = deterministic code. Teal = the one model call (and it can abstain). Red = escalate to a human. The SLM proposes into the middle; it never fingerprints, never validates, never publishes.</figcaption>
+    </figure>
+
+    <p>A detail worth internalising: in the real system, <strong>the model never caught the drift</strong>. The deterministic fingerprint comparison caught it — <code>hash(shape)</code> changed. The SLM's job was only to turn that diff into something legible: <em>"amount moved under <code>payment</code> and became a string; possibly minor units."</em> The boring hash was the detector; the model wrote the description. Keep that ownership straight and most of the risk evaporates.</p>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Concern</th><th>Owns the decision</th></tr></thead>
+        <tbody>
+          <tr><td>Physical types, canonical form</td><td class="own det">Deterministic code</td></tr>
+          <tr><td>Fingerprint &amp; schema identity</td><td class="own det">Deterministic code</td></tr>
+          <tr><td>Drift detection</td><td class="own det">Deterministic code</td></tr>
+          <tr><td>Compatibility &amp; loss checks</td><td class="own det">Deterministic code</td></tr>
+          <tr><td>PII redaction &amp; egress</td><td class="own det">Deterministic code</td></tr>
+          <tr><td>Publishing a schema version</td><td class="own det">Governance + human</td></tr>
+          <tr><td>Human-readable naming</td><td class="own ai">SLM proposes</td></tr>
+          <tr><td>Ranking retrieved field matches</td><td class="own ai">SLM proposes</td></tr>
+          <tr><td>Explaining a computed diff</td><td class="own ai">SLM proposes</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p>The governing invariant, worth pinning above your PR description: <strong>the model may add evidence or narrow a candidate set; it may never erase contradictory evidence, weaken a guard, or make an irreversible contract mutation.</strong> The model process runs with no registry-promotion credential, no DDL, no write path to schema state.</p>
+
+    <div class="thesis">
+      <span class="mark">The one-line design principle</span>
+      <p>Use the SLM to compress ambiguity into an auditable proposal. Use deterministic code to establish facts and exercise control.</p>
+    </div>
+
+    <h2><span class="n">The sweet spot</span>Where the model actually earns its slot</h2>
+    <p>Its most <em>credible</em> mode isn't open-ended generation — it's <strong>reranking a small retrieved candidate set</strong>. Retrieve the top-k nearest known schemas (lexical or embedding search — deterministic), then ask the model to pick and justify. That's the pattern behind the current schema-matching literature (Magneto, ReMatch, GRAM): cheap retrieval narrows the space, the model makes the last semantic hop. Good jobs, roughly:</p>
+    <div class="verdict">
+      <div class="card good">
+        <h3><span class="dot"></span>Good fit</h3>
+        <ul>
+          <li>Naming a newly-discovered shape (2–4 word label, grounded in field tokens).</li>
+          <li>Suggesting <code>cust_no</code> ≈ <code>customer_id</code> — <em>as a proposal a human confirms.</em></li>
+          <li>Reranking a short list of retrieved candidate schemas.</li>
+          <li>Explaining a diff the deterministic layer already computed.</li>
+        </ul>
+      </div>
+      <div class="card meh">
+        <h3><span class="dot"></span>Overkill</h3>
+        <ul>
+          <li>Primitive type inference, canonicalization, fingerprints — plain code is faster and never wrong.</li>
+          <li>Anything that runs per-record on a stable stream. Call the model once <em>per novel ambiguity</em>, cache the result by schema ID — not once per event.</li>
+        </ul>
+      </div>
+      <div class="card bad">
+        <h3><span class="dot"></span>Never unattended</h3>
+        <ul>
+          <li>Publishing/deleting a schema version; merging or splitting families.</li>
+          <li>Unit / timezone / precision changes; any lossy cast.</li>
+          <li>Anything touching PII, or that you can't cheaply roll back.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h2><span class="n">Ops</span>The caveats that will actually page you</h2>
+    <p><strong>Memory: small weights ≠ small footprint.</strong> A 0.5B model OOM-killed a container in production. The cause wasn't one setting — it was an unbounded surface: KV cache, context length, queue depth, a prompt-cache RAM reservoir. The fix is <em>admission control on every axis at once</em>:</p>
+    <span class="pre-label">ollama — bound every axis, then it's predictable</span>
+    <pre><code>OLLAMA_NUM_PARALLEL=1      <span class="cmt"># one generation at a time</span>
+OLLAMA_MAX_QUEUE=64        <span class="cmt"># bound the backlog, shed beyond it</span>
+num_ctx=4096               <span class="cmt"># cap context per request</span>
+LLAMA_ARG_CACHE_RAM=0      <span class="cmt"># kill the unbounded prompt-cache reservoir</span>
+<span class="cmt"># container limit 3Gi  →  421 reqs / 12 min / ~1004Mi peak / 0 OOM</span></code></pre>
+
+    <p><strong>Degrade to heuristic — and never lie about it.</strong> The model is optional enrichment. A timeout or an unavailable model must fall back to deterministic naming and trip a breaker, not fail the ingest. Critically, the fallback is <em>marked</em> — it must not inherit a model confidence it never earned, and it must not auto-promote.</p>
+    <span class="pre-label">the fallback is a first-class path, not an except: pass</span>
+    <pre><code><span class="k">try</span>:
+    proposal = slm.propose(schema, candidates)     <span class="cmt"># probabilistic</span>
+<span class="k">except</span> (Timeout, ModelUnavailable):
+    breaker.trip()
+    proposal = heuristic_name(schema)              <span class="cmt"># deterministic</span>
+    proposal.source = <span class="k">"heuristic"</span>                 <span class="cmt"># no borrowed confidence</span>
+    proposal.auto_promote = <span class="k">False</span></code></pre>
+
+    <p><strong>"Unavailable" ≠ "unloaded".</strong> A model evicted after <code>keep_alive</code> is fine — it cold-loads on demand. A missing artifact after a pod restart (wiped <code>emptyDir</code>, no re-pull) is a deployment bug that silently sends naming to 100% heuristic. So a readiness probe must run a <em>bounded inference canary against the real model and expected output contract</em> — not just poll that the port answers.</p>
+
+    <p><strong>Keep raw payloads out of the prompt.</strong> Values sharpen inference but carry PII, secrets, and prompt-injection strings. Prefer a payload-free prompt: source/domain context, field paths, physical types, and profile summaries (null/distinct/range/length/pattern) — redact <em>before</em> the model, gate the output on an allowlist, and never let unreviewed production values into logs, traces, or a training corpus.</p>
+
+    <p><strong>Mind the settle-and-sample blind window.</strong> If you optimise by only sampling a settled stream periodically, a changed record can ride the cached tag until the next sample — detection lag ≈ <code>sample_interval / records_per_sec</code>. Fine if you document the bound; incompatible with any "we contained the first breaking record" claim unless that source is fully analysed.</p>
+
+    <h2><span class="n">Fine-tuning</span>If you must, tune a reranker — not an author</h2>
+    <p>Start with retrieval + few-shot prompting; only fine-tune once you have durable reviewer labels and a stable ontology. Then the target is a <strong>bounded classifier/reranker that can emit <code>abstain</code></strong>, not an autonomous schema author. A few things that trip juniors up:</p>
+    <ul>
+      <li>At 0.5B, prefer plain <strong>LoRA or full fine-tune over QLoRA</strong> — the model fits in memory unquantized, so 4-bit just costs you quality. QLoRA earns its keep at 7B+.</li>
+      <li><strong>Eval separately for syntax and semantics.</strong> ~100% JSON-validity is easy and meaningless on its own; measure top-k recall, abstention quality, and <em>unsafe false-acceptance</em>. Self-reported confidence is not calibration.</li>
+      <li><strong>Never continuously fine-tune on unlabelled production drift.</strong> It blends concept adaptation with contract governance, and opens the door to poisoning, catastrophic forgetting, and lost reproducibility.</li>
+      <li>Training data must include hard negatives, renamed/nested fields, sparse-context cases, explicit <code>no-match</code>/abstain examples, and <strong>source- and time-held-out</strong> test sets — with provenance per example.</li>
+    </ul>
+
+    <h2><span class="n">Takeaway</span>Witness, not judge</h2>
+    <p>An SLM is a genuinely useful component for making sense of messy, drifting data — but only as a proposer wrapped in deterministic machinery. Give it the one job it's good at (turning ambiguity into a labelled, auditable suggestion), keep it off the hot path, off the drift decision, and off the publish button, and make abstention a first-class output. Do that and you get a system that's smart about <em>meaning</em> and trustworthy about <em>facts</em> — which is the only combination worth shipping.</p>
+
+    <div class="closer">
+      <p class="kicker" style="margin-bottom:.4rem">In one line</p>
+      <p class="big">Let the model be the witness, <span>never the judge.</span></p>
+    </div>
+
+    <p class="colophon">Condensed from the joint research report <em>"SLMs for Dynamic Heterogeneous-Data Identification &amp; Schema Control"</em> (run jr-slm-schema-241439) — produced by two AI research agents in parallel, grounded in a live streaming system and 30&#8202;+ external sources (SI-LLM, PARSE, Magneto, ReMatch, GRAM, the schema-matching + data-contract literature, NIST GenAI, OWASP LLM02). The full report carries the citations, numbers, and per-finding confidence.</p>
+  </article>
+</div>

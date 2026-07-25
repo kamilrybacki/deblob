@@ -1,0 +1,539 @@
+<title>Deblob: kod deterministyczny, SLM i dostrajanie — jak i po co powstał</title>
+<style>
+  :root {
+    --paper:   #F7F6F2; --surface: #FFFFFF; --ink: #1B1B14; --body: #26251C;
+    --muted:   #6E6E63; --rule: #E4E1D7; --rule-strong: #CFCBBE;
+    --accent:  #35D0B2; --accent-ink: #0E8E76; --accent-wash: #E7F4EF;
+    --danger:  #B24A32; --danger-wash: #F4E9E4; --code-bg: #FBFAF7;
+    --serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, "Times New Roman", serif;
+    --sans:  ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --mono:  ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --measure: 68ch;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --paper:#131512; --surface:#1A1C17; --ink:#EDEBE1; --body:#DAD8CC;
+      --muted:#9A9A8B; --rule:#2B2E28; --rule-strong:#3B3F36;
+      --accent:#35D0B2; --accent-ink:#55E3C5; --accent-wash:#16261F;
+      --danger:#E08160; --danger-wash:#2A1B14; --code-bg:#10120E;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:#131512; --surface:#1A1C17; --ink:#EDEBE1; --body:#DAD8CC;
+    --muted:#9A9A8B; --rule:#2B2E28; --rule-strong:#3B3F36;
+    --accent:#35D0B2; --accent-ink:#55E3C5; --accent-wash:#16261F;
+    --danger:#E08160; --danger-wash:#2A1B14; --code-bg:#10120E;
+  }
+  :root[data-theme="light"] {
+    --paper:#F7F6F2; --surface:#FFFFFF; --ink:#1B1B14; --body:#26251C;
+    --muted:#6E6E63; --rule:#E4E1D7; --rule-strong:#CFCBBE;
+    --accent:#35D0B2; --accent-ink:#0E8E76; --accent-wash:#E7F4EF;
+    --danger:#B24A32; --danger-wash:#F4E9E4; --code-bg:#FBFAF7;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--paper); color: var(--body); font-family: var(--serif);
+    font-size: clamp(1.04rem, 0.98rem + 0.34vw, 1.18rem); line-height: 1.72;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  .wrap { max-width: var(--measure); margin: 0 auto; padding: clamp(2.2rem, 6vw, 5rem) clamp(1.25rem, 5vw, 2rem) 5rem; }
+  @media (prefers-reduced-motion: no-preference) {
+    .fade { opacity: 0; transform: translateY(14px); animation: rise .7s cubic-bezier(.22,.61,.36,1) forwards; }
+    .fade:nth-child(2) { animation-delay: .06s; } .fade:nth-child(3) { animation-delay: .12s; }
+    @keyframes rise { to { opacity: 1; transform: none; } }
+  }
+  .kicker {
+    font-family: var(--sans); font-size: .74rem; font-weight: 600; letter-spacing: .18em;
+    text-transform: uppercase; color: var(--accent-ink); margin: 0 0 1.4rem;
+    display: flex; align-items: center; gap: .7rem;
+  }
+  .kicker::before { content: ""; width: 26px; height: 2px; background: var(--accent); display: inline-block; }
+  h1 {
+    font-family: var(--serif); font-weight: 700; font-size: clamp(2rem, 1.35rem + 3.2vw, 3.3rem);
+    line-height: 1.07; letter-spacing: -0.015em; color: var(--ink); margin: 0 0 1.1rem; text-wrap: balance;
+  }
+  .deck {
+    font-size: clamp(1.15rem, 1.02rem + 0.62vw, 1.42rem); line-height: 1.46;
+    font-style: italic; color: var(--muted); margin: 0 0 2rem; text-wrap: pretty;
+  }
+  .byline {
+    font-family: var(--sans); font-size: .8rem; letter-spacing: .04em; color: var(--muted);
+    padding: 1rem 0 0; border-top: 1px solid var(--rule-strong); display: flex; flex-wrap: wrap; gap: .35rem .9rem;
+  }
+  .byline b { color: var(--ink); font-weight: 600; }
+
+  article { margin-top: clamp(2rem, 5vw, 3rem); }
+  article > p, article > .block { margin: 0 0 1.35rem; }
+  .lead::first-letter {
+    font-family: var(--serif); float: left; font-size: 3.9em; line-height: .78;
+    font-weight: 700; color: var(--accent-ink); padding: .06em .12em 0 0; margin: 0;
+  }
+  h2 {
+    font-family: var(--serif); font-weight: 700; font-size: clamp(1.4rem, 1.14rem + 1.1vw, 1.9rem);
+    line-height: 1.18; letter-spacing: -0.01em; color: var(--ink); margin: 3rem 0 1.05rem;
+    text-wrap: balance; scroll-margin-top: 1rem;
+  }
+  h2 .n {
+    font-family: var(--sans); font-size: .72rem; font-weight: 600; letter-spacing: .16em;
+    color: var(--accent-ink); display: block; margin-bottom: .5rem;
+  }
+  a { color: var(--accent-ink); text-underline-offset: 2px; text-decoration-thickness: 1px; }
+  a:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 2px; }
+  strong { color: var(--ink); font-weight: 700; }
+
+  code {
+    font-family: var(--mono); font-size: .86em; background: var(--rule); color: var(--ink);
+    padding: .08em .38em; border-radius: 4px;
+  }
+  pre {
+    font-family: var(--mono); font-size: clamp(.76rem, .7rem + .3vw, .87rem); line-height: 1.6;
+    background: var(--code-bg); color: var(--body); border: 1px solid var(--rule); border-radius: 7px;
+    padding: 1rem 1.1rem; margin: 1.6rem 0; overflow-x: auto; tab-size: 2;
+  }
+  pre code { background: none; padding: 0; font-size: 1em; color: inherit; }
+  pre .add { color: var(--accent-ink); display: block; }
+  pre .del { color: var(--danger); display: block; }
+  pre .cmt { color: var(--muted); }
+  pre .k   { color: var(--accent-ink); }
+  .pre-label {
+    font-family: var(--sans); font-size: .7rem; font-weight: 600; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--muted); margin: 1.6rem 0 -1rem; display: block;
+  }
+
+  .toc {
+    font-family: var(--sans); font-size: .92rem; background: var(--surface);
+    border: 1px solid var(--rule); border-radius: 9px; padding: 1.1rem 1.4rem; margin: 2.2rem 0;
+  }
+  .toc strong {
+    display: block; font-size: .7rem; letter-spacing: .12em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: .7rem; font-weight: 700;
+  }
+  .toc ol { margin: 0; padding-left: 1.3rem; } .toc li { margin: .3rem 0; }
+  .toc a { color: var(--body); } .toc a:hover { color: var(--accent-ink); }
+
+  .table-wrap { overflow-x: auto; margin: 1.6rem 0; }
+  table { width: 100%; border-collapse: collapse; font-family: var(--sans); font-size: .9rem; }
+  th, td { text-align: left; padding: .58rem .7rem; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  thead th {
+    font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; color: var(--muted);
+    border-bottom: 1.5px solid var(--rule-strong); font-weight: 700;
+  }
+  td:first-child { color: var(--ink); font-weight: 600; }
+  td code { font-size: .82em; }
+  .own { font-weight: 700; white-space: nowrap; }
+  .own.det { color: var(--muted); } .own.ai { color: var(--accent-ink); } .own.hum { color: var(--danger); }
+
+  .phase { border-left: 3px solid var(--rule-strong); padding: .1rem 0 .1rem 1.35rem; margin: 1.5rem 0; }
+  .phase.found { border-left-color: var(--accent); }
+  .phase h3 {
+    font-family: var(--serif); font-size: 1.18rem; color: var(--ink); margin: 0 0 .55rem; line-height: 1.25;
+  }
+  .phase h3 .badge {
+    font-family: var(--sans); font-size: .68rem; font-weight: 700; letter-spacing: .12em;
+    text-transform: uppercase; color: var(--accent-ink); display: block; margin-bottom: .3rem;
+  }
+  .phase p { margin: .5rem 0; }
+  .phase .why { color: var(--body); }
+  .phase .why b { color: var(--accent-ink); font-weight: 700; }
+
+  .thesis {
+    margin: 2.6rem 0; padding: 1.7rem 1.9rem; background: var(--accent-wash);
+    border-left: 3px solid var(--accent); border-radius: 0 4px 4px 0;
+  }
+  .thesis p {
+    margin: 0; font-size: clamp(1.2rem, 1.02rem + 0.8vw, 1.5rem); line-height: 1.36;
+    font-weight: 700; color: var(--ink); text-wrap: pretty;
+  }
+  .thesis .mark {
+    font-family: var(--sans); display: block; font-size: .72rem; font-weight: 600; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent-ink); margin-bottom: .7rem;
+  }
+  blockquote.callout {
+    margin: 2rem 0; padding: 0 0 0 1.4rem; border-left: 3px solid var(--rule-strong);
+    font-style: italic; font-size: clamp(1.16rem, 1.02rem + 0.62vw, 1.42rem); line-height: 1.42; color: var(--ink);
+  }
+  blockquote.callout p { margin: 0; }
+
+  .floor {
+    margin: 2.2rem 0; padding: 1.4rem 1.6rem; border: 1.5px solid var(--accent);
+    border-radius: 8px; background: var(--accent-wash);
+  }
+  .floor h3 {
+    font-family: var(--sans); margin: 0 0 .9rem; font-size: .78rem; font-weight: 700;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--accent-ink);
+  }
+  .floor ol { margin: 0; padding-left: 1.3rem; } .floor li { margin: .5rem 0; line-height: 1.55; }
+  .floor li strong { color: var(--ink); }
+
+  .stat {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: .8rem; margin: 1.6rem 0;
+  }
+  .stat div {
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 7px; padding: .9rem 1rem;
+  }
+  .stat .big {
+    font-family: var(--sans); font-weight: 700; font-size: 1.5rem; color: var(--accent-ink);
+    font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .stat .lab { font-family: var(--sans); font-size: .74rem; color: var(--muted); margin-top: .4rem; line-height: 1.3; }
+
+  .closer { margin: 3.2rem 0 0; padding-top: 2.4rem; border-top: 1px solid var(--rule-strong); }
+  .closer .big {
+    font-family: var(--serif); font-weight: 700; font-style: italic;
+    font-size: clamp(1.5rem, 1.1rem + 2vw, 2.2rem); line-height: 1.16; letter-spacing: -0.015em;
+    color: var(--ink); margin: 1.4rem 0 0; text-wrap: balance;
+  }
+  .closer .big span { color: var(--accent-ink); }
+  .colophon {
+    font-family: var(--sans); font-size: .8rem; line-height: 1.6; color: var(--muted);
+    margin-top: 3rem; padding-top: 1.4rem; border-top: 1px solid var(--rule);
+  }
+
+  figure.fig { margin: 2.4rem 0; }
+  figure.fig svg { width: 100%; height: auto; display: block; overflow: visible; }
+  figure.fig figcaption {
+    font-family: var(--sans); font-size: .82rem; line-height: 1.5; color: var(--muted);
+    margin: 1rem auto 0; text-align: center; text-wrap: pretty; max-width: 52ch;
+  }
+  .dg-panel { fill: var(--surface); stroke: var(--rule-strong); stroke-width: 1.5; }
+  .dg-panel-teal { fill: var(--accent-wash); stroke: var(--accent); stroke-width: 2; }
+  .dg-panel-bad  { fill: var(--danger-wash); stroke: var(--danger); stroke-width: 2; }
+  .dg-chip { fill: var(--ink); }
+  .dg-pen { fill: none; stroke: var(--accent); stroke-width: 2; stroke-dasharray: 7 6; }
+  .dg-flow { stroke: var(--rule-strong); stroke-width: 2.2; fill: none; }
+  .dg-flow-teal { stroke: var(--accent); stroke-width: 2.2; fill: none; }
+  .dg-flow-head { fill: var(--rule-strong); }
+  .dg-flow-head-teal { fill: var(--accent); }
+  .dg-title { fill: var(--ink); font-family: var(--sans); font-weight: 700; }
+  .dg-sub { fill: var(--body); font-family: var(--serif); font-style: italic; }
+  .dg-muted { fill: var(--muted); font-family: var(--sans); }
+  .dg-item { fill: var(--body); font-family: var(--sans); }
+  .dg-mono-on { fill: var(--paper); font-family: var(--mono); }
+  .dg-onchip { fill: var(--paper); font-family: var(--sans); font-weight: 700; }
+  .dg-teal-ink { fill: var(--accent-ink); font-family: var(--sans); font-weight: 700; }
+  .dg-teal-sub { fill: var(--accent-ink); font-family: var(--serif); font-style: italic; }
+  .dg-bad-ink { fill: var(--danger); font-family: var(--sans); font-weight: 700; }
+  .dg-tag-ai  { fill: var(--accent); }
+  .dg-tag-det { fill: var(--rule-strong); }
+  .dg-tag-text { fill: var(--paper); font-family: var(--sans); font-weight: 700; letter-spacing: .04em; }
+  .dg-fill-teal { fill: var(--accent); }
+  .dg-fill-danger { fill: var(--danger); }
+  .dg-stroke-paper { stroke: var(--paper); fill: none; }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="kicker fade">Deblob Research · Notatki inżynierskie</p>
+    <h1 class="fade">Deblob: kod deterministyczny, SLM i dostrajanie</h1>
+    <p class="deck fade">Jak powstawały elementy systemu i dlaczego, co za co odpowiada, po co w środku jest mały model językowy — i na czym polega jego dostrajanie. Kompletny przewodnik dla inżyniera.</p>
+    <p class="byline fade">
+      <span>Autorzy: dwoje agentów badawczych AI — <b>Claude</b> i <b>Hermes</b></span>
+      <span>·</span>
+      <span>~14 min czytania · zakłada, że piszesz kod</span>
+    </p>
+  </header>
+
+  <article>
+    <p class="lead">Każde zdarzenie w systemie niesie ukrytą umowę: <strong>schemat</strong>. Jakie pola istnieją, jakie mają typy, co znaczą. Producent i konsument się na nią zgadzają — zwykle bez zapisywania jej gdziekolwiek. Umowa trzyma się, dopóki ktoś z innego zespołu jej nie zmieni: przemianuje pole, opakuje treść, albo zacznie wysyłać kwoty w jednostkach podrzędnych zamiast we frakcji. Payload nadal jest poprawnym JSON-em i nadal się deserializuje — po prostu <em>znaczy</em> co innego. To <strong>dryf schematu</strong>.</p>
+
+    <span class="pre-label">events.orders — to samo pole, trzy dni później</span>
+    <pre><code>  {
+    "order_id": 4471,
+<span class="del">-   "amount": 39.99,            <span class="cmt">// float, jednostki główne (dolary)</span></span>
+<span class="add">+   "amount": "3999",           <span class="cmt">// string, jednostki podrzędne? nikt nie powiedział</span></span>
+    "currency": "USD"
+  }</code></pre>
+
+    <p>Deblob to usługa, która stoi w środku strumienia i utrzymuje tę umowę pod kontrolą: rozpoznaje kształt każdego zdarzenia, wykrywa dryf i pomaga tworzyć nowe schematy — a część pracy oddaje małemu modelowi językowemu. Ten tekst opisuje trzy rzeczy: <strong>jak powstawał</strong> (i dlaczego w takiej kolejności), <strong>co za co odpowiada</strong>, oraz <strong>po co jest model i na czym polega jego dostrajanie</strong>. Wszystko oparte na prawdziwym kodzie i historii repozytorium.</p>
+
+    <div class="toc">
+      <strong>W tym tekście</strong>
+      <ol>
+        <li><a href="#historia">Historia: co powstało najpierw i dlaczego · mapa odpowiedzialności</a></li>
+        <li><a href="#podzial">Dwie warstwy: fundament i warstwa znaczenia</a></li>
+        <li><a href="#po-co">Po co model — jedyna rzecz, której determinizm nie potrafi</a></li>
+        <li><a href="#pulapka">Pułapka: poprawna struktura ≠ poprawne znaczenie</a></li>
+        <li><a href="#gwarancja">Co realnie gwarantuje jakość nowych schematów</a></li>
+        <li><a href="#dostrajanie">Dostrajanie modelu: znaczenie i przebieg</a></li>
+        <li><a href="#dostepnosc">Dostępność: dwie gwarancje, gdy model padnie</a></li>
+      </ol>
+    </div>
+
+    <h2 id="historia"><span class="n">Historia</span>Co powstało najpierw i dlaczego</h2>
+    <p>Kolejność budowy Deblob nie jest przypadkowa — to najlepszy dowód na to, jak działa cała reszta. System nie zaczął się od modelu. Zaczął się od fundamentu, który miał działać zupełnie sam.</p>
+
+    <div class="phase found">
+      <h3><span class="badge">Faza 1 · rdzeń deterministyczny — zmergowany 14.07, bez AI</span>Fundament, który stoi sam</h3>
+      <p>Zanim w repozytorium pojawił się jakikolwiek model, zmergowano cały rdzeń deterministyczny (commit <em>„Merge P1 deterministic core"</em>). Powstawał w tej kolejności:</p>
+      <p class="why"><strong>Fingerprint</strong> (<code>deblob-fingerprint</code>) — ograniczony parser JSON (limity przed alokacją, fuzzowany), ekstrakcja kształtu i wersjonowany hash kanoniczny. <b>Po co:</b> tożsamość schematu musi być powtarzalna i odporna na wrogie payloady. To on liczy stabilny odcisk kształtu.</p>
+      <p class="why"><strong>Monoid-profil</strong> — scalalne profile strukturalne z udowodnionymi prawami (np. <code>int_only</code> scala się przez AND — twierdzenie uniwersalne). <b>Po co:</b> zlać tysiące obserwacji jednego źródła w jeden stabilny profil, matematycznie poprawnie.</p>
+      <p class="why"><strong>Rejestr Redis</strong> — publikacja atomowa (Lua) z niezmiennością <em>write-once</em>, indeks kubełkowy, evidence store (kandydaci z TTL oddzieleni od trwałego audytu) i bramka zdrowia persystencji zamrażająca promocje. <b>Po co:</b> opublikowana wersja schematu nigdy się nie zmienia; jeśli storage jest niezdrowy — zero promocji.</p>
+      <p class="why"><strong>Hot-path matcher</strong> — dopasowanie znanych kształtów z LRU i tagowaniem <em>„unresolved"</em> bezpiecznym na awarię. <b>Po co:</b> szybka ścieżka. Awaria Redis → tag „nierozwiązany", nie crash.</p>
+      <p class="why"><strong>Cold-lane</strong> — akumulacja i klastrowanie nieznanych kształtów, promocja tylko pod strażą. <strong>Relay Kafka</strong> — transakcyjne wyprowadzenie tagów z higieną nagłówków. <b>Po co:</b> nieznane trafiają na wolną ścieżkę do rozpoznania; tagi wychodzą transakcyjnie.</p>
+      <p>Cały ten rdzeń — parser, fingerprint, rejestr, matcher, relay — tagował zdarzenia, <strong>zanim w systemie istniał jakikolwiek model</strong>. To jest teza tego tekstu w formie faktu historycznego: determinizm stoi sam.</p>
+    </div>
+
+    <div class="phase">
+      <h3><span class="badge">Faza 2 · tor SLM + harness ewaluacyjny</span>Model dołożony z pomiarem, nie „na wiarę"</h3>
+      <p class="why">Dopiero na działającym rdzeniu dołożono model — i to nie ślepo. Powstały <strong>trzy ramiona eksperymentu</strong> (<code>deblob-experiment/arms</code>): <strong>A — deterministyczne</strong> (heurystyka), <strong>B — semantyczne</strong> (surowy SLM), <strong>C — bramkowane</strong> (SLM + deterministyczna koroboracja). Do tego drabina metryk <code>l1_retrieval → l2_raw → l3_gate → l4_utility</code> i korpus (GitHub Archive, Wikimedia). <b>Po co:</b> zmierzyć, czy wariant C naprawdę bije czysto deterministyczny — na <em>wydzielonych rodzinach</em> schematów — zanim mu się zaufa. Arm-C to zwycięski wzorzec: <b>model proponuje, bramka decyduje.</b></p>
+      <p class="why">Powstały też <strong>kontrakty inferencji 3-drożne z walidacją względem allow-listy ID</strong> — model nie może wymyślić identyfikatora schematu; wolno mu wskazać tylko istniejący. Oraz <code>deblob-eval</code>: generator korpusu z etykietami prawdy + render danych do dostrajania (JSONL).</p>
+    </div>
+
+    <div class="phase">
+      <h3><span class="badge">Faza 3 · utwardzenie — 21–24.07</span>Produkcja: nazwy, similarity, stabilność, demo</h3>
+      <p class="why"><strong>Nazwy:</strong> kwalifikacja źródłem, deterministyczny słownik (akronimy, skróty feedów), sklejanie duplikatów, lista słów zakazanych — nazwy ugruntowane i niegeneryczne. <strong>Serwowanie SLM:</strong> timeout Ollamy staje się <em>miękkim</em> fallbackiem do heurystyki (nie porażką joba), model-pull w <code>postStart</code>, benchmark dekompozycji timeoutu.</p>
+      <p class="why"><strong>Similarity + domain-gate:</strong> sąsiedzi semantyczni ważeni IDF, bramkowanie po anchorach dyskryminujących, deterministyczna <strong>bramka koherencji źródło–domena</strong> (shadow → enforce), rozszerzona na konsolidację umbrella — blokuje fałszywe dopasowania międzydomenowe. <strong>Stabilność/OOM (23.07):</strong> kaskada admission control (o niej niżej). <strong>settle-and-sample</strong> za flagą, <strong>kolektory</strong> live (z zawieszeniem <code>wikidata</code> — PII w dynamicznych kluczach), build <strong>Kaniko</strong> in-cluster, i wreszcie <strong>demo</strong> drift-sentinel.</p>
+    </div>
+
+    <h3 style="font-family:var(--sans);font-size:.82rem;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin:2.4rem 0 .4rem;">Mapa odpowiedzialności — co za co odpowiada</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Element (crate / moduł)</th><th>Zadanie</th><th>Warstwa</th></tr></thead>
+        <tbody>
+          <tr><td><code>deblob-fingerprint</code></td><td>parser + kształt + hash kanoniczny = tożsamość schematu</td><td class="own det">determinizm</td></tr>
+          <tr><td>monoid-profil</td><td>scalanie obserwacji w stabilny profil strukturalny</td><td class="own det">determinizm</td></tr>
+          <tr><td>rejestr Redis</td><td>publikacja write-once, indeks, evidence, audyt</td><td class="own det">determinizm</td></tr>
+          <tr><td>hot-path matcher</td><td>tagowanie znanych kształtów (szybka ścieżka)</td><td class="own det">determinizm</td></tr>
+          <tr><td>cold-lane clustering</td><td>akumulacja i klaster nieznanych kandydatów</td><td class="own det">determinizm</td></tr>
+          <tr><td>relay Kafka</td><td>transakcyjne wyprowadzenie tagów</td><td class="own det">determinizm</td></tr>
+          <tr><td>domain / coherence gate</td><td>odrzucanie fałszywych dopasowań międzydomenowych</td><td class="own det">determinizm</td></tr>
+          <tr><td>trust gate / <code>Adjudicator</code></td><td>koroboracja propozycji modelu, allow-lista ID</td><td class="own det">determinizm</td></tr>
+          <tr><td>SLM (<code>Qwen2.5-0.5B</code>)</td><td>nazwa, mapowanie, ranking kandydatów, wyjaśnienie</td><td class="own ai">SLM (propozycja)</td></tr>
+          <tr><td><code>deblob-eval</code> / <code>-experiment</code></td><td>pomiar A/B/C: czy SLM+bramka bije determinizm</td><td class="own det">determinizm</td></tr>
+          <tr><td>continual loop + Modal</td><td>dostrajanie LoRA na feedbacku, za bramkami</td><td class="own ai">SLM + det.</td></tr>
+          <tr><td>governance / HITL</td><td>publikacja wersji, akceptacja umbrella</td><td class="own hum">człowiek</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 id="podzial"><span class="n">Podział</span>Dwie warstwy: fundament i warstwa znaczenia</h2>
+    <p>Cała architektura bierze się z jednej decyzji: „zrozum dane" to nie jedno zadanie, tylko dwie różne warstwy, które nie mogą się mieszać.</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 560 286" role="img" aria-labelledby="d0t">
+        <title id="d0t">Dwie warstwy. Kod deterministyczny to fundament: parsowanie, typy, fingerprint, walidacja, bramki, PII, publikacja — ustala, czy wolno. SLM to węższa warstwa znaczenia: nazwa kształtu, mapowanie pól, ranking i wyjaśnienie — mówi, co to znaczy. SLM podaje propozycję do warstwy deterministycznej, ale nie podejmuje decyzji.</title>
+        <rect class="dg-panel" x="16" y="22" width="256" height="250" rx="12" />
+        <text class="dg-title" x="144" y="50" text-anchor="middle" font-size="12.5">KOD DETERMINISTYCZNY</text>
+        <text class="dg-muted" x="144" y="69" text-anchor="middle" font-size="10.5">fundament — gwarantuje jakość</text>
+        <circle class="dg-fill-teal" cx="42" cy="99" r="3" /><text class="dg-item" x="52" y="103" font-size="12">parsowanie · typy · fingerprint</text>
+        <circle class="dg-fill-teal" cx="42" cy="125" r="3" /><text class="dg-item" x="52" y="129" font-size="12">walidacja · bramki · straty</text>
+        <circle class="dg-fill-teal" cx="42" cy="151" r="3" /><text class="dg-item" x="52" y="155" font-size="12">kompatybilność · PII</text>
+        <circle class="dg-fill-teal" cx="42" cy="177" r="3" /><text class="dg-item" x="52" y="181" font-size="12">publikacja wersji schematu</text>
+        <rect class="dg-tag-det" x="42" y="214" width="188" height="30" rx="15" />
+        <text class="dg-tag-text" x="136" y="233" text-anchor="middle" font-size="10.5">USTALA, CZY WOLNO</text>
+        <line class="dg-flow" x1="300" y1="150" x2="276" y2="150" /><polygon class="dg-flow-head" points="274,150 285,144 285,156" />
+        <text class="dg-muted" x="288" y="140" text-anchor="middle" font-size="9">propozycja</text>
+        <rect class="dg-panel-teal" x="302" y="52" width="242" height="192" rx="12" />
+        <text class="dg-teal-ink" x="423" y="80" text-anchor="middle" font-size="13">SLM</text>
+        <text class="dg-muted" x="423" y="99" text-anchor="middle" font-size="10.5">warstwa znaczenia — propozycje</text>
+        <circle class="dg-fill-teal" cx="324" cy="127" r="3" /><text class="dg-item" x="334" y="131" font-size="12">nazwa nowego kształtu</text>
+        <circle class="dg-fill-teal" cx="324" cy="152" r="3" /><text class="dg-item" x="334" y="156" font-size="12">mapowanie pól</text>
+        <circle class="dg-fill-teal" cx="324" cy="177" r="3" /><text class="dg-item" x="334" y="181" font-size="12">ranking + wyjaśnienie diffa</text>
+        <rect class="dg-tag-ai" x="324" y="206" width="164" height="30" rx="15" />
+        <text class="dg-tag-text" x="406" y="225" text-anchor="middle" font-size="10.5">MÓWI, CO ZNACZY</text>
+      </svg>
+      <figcaption>Fundament jest szerszy i niżej — to on decyduje. SLM to węższa nadbudowa: wrzuca propozycje znaczenia do fundamentu, ale nie ma nad nim władzy.</figcaption>
+    </figure>
+
+    <h2 id="po-co"><span class="n">Po co model</span>Jedyna rzecz, której determinizm nie potrafi</h2>
+    <p>Kod deterministyczny robi wszystko, co powtarzalne i ma jedną poprawną odpowiedź: parsuje, wnioskuje typy, kanonikalizuje, liczy fingerprint, profiluje, wykrywa dryf. To on <strong>zauważa</strong>, że kształt się zmienił — <code>hash(kształt)</code> jest inny.</p>
+    <p>Ale jest ściana, której żadna liczba reguł nie przekroczy: <strong>znaczenie</strong>. Fingerprint mówi, że kształt A ≠ B. Nie mówi, że B to „zamówienie w centach", ani że <code>cust_no</code> to to samo pojęcie co <code>customer_id</code>, ani jak nazwać nowy kształt po ludzku. To nie są fakty do policzenia — to sądy o znaczeniu.</p>
+
+    <blockquote class="callout">
+      <p>Po to jest model: żeby przekroczyć ścianę znaczenia. To jedyny element pipeline'u, który operuje na sensie, a nie na strukturze.</p>
+    </blockquote>
+
+    <p>Konkretnie: <strong>nazwać</strong> nowo odkryty kształt, <strong>zaproponować</strong>, że <code>cust_no</code> ≈ <code>customer_id</code>, <strong>uszeregować</strong> krótką listę kandydatów zwróconą przez wyszukiwanie i <strong>wyjaśnić</strong> po ludzku diff, który warstwa deterministyczna już policzyła. To wszystko. Model nie liczy fingerprintu, nie waliduje, nie publikuje. Zamienia niejednoznaczność w propozycję.</p>
+
+    <h2 id="pulapka"><span class="n">Pułapka</span>Sam model niczego nie gwarantuje</h2>
+    <p>Możesz wymusić idealnie ukształtowany wynik — <code>constrained decoding</code>, JSON Schema, model <code>pydantic</code>. To gwarantuje właściwe pola, typy i enumy. Ale te narzędzia walidują <em>kopertę</em>, nie <em>prawdę</em> w środku.</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 560 196" role="img" aria-labelledby="d3t">
+        <title id="d3t">Payload przechodzi bramkę składni (Pydantic / JSON Schema), ale nie przechodzi bramki znaczenia, która pyta, czy 3999 to 39,99 dolara czy 3999 dolarów, i wstrzymuje go do przeglądu człowieka.</title>
+        <rect class="dg-chip" x="10" y="70" width="126" height="52" rx="8" />
+        <text class="dg-mono-on" x="73" y="93" text-anchor="middle" font-size="11.5">amount:</text>
+        <text class="dg-mono-on" x="73" y="110" text-anchor="middle" font-size="12.5">"3999"</text>
+        <line class="dg-flow" x1="136" y1="96" x2="172" y2="96" /><polygon class="dg-flow-head" points="179,96 168,90 168,102" />
+        <rect class="dg-panel" x="186" y="60" width="164" height="72" rx="10" />
+        <text class="dg-title" x="268" y="88" text-anchor="middle" font-size="12">BRAMKA SKŁADNI</text>
+        <text class="dg-muted" x="268" y="106" text-anchor="middle" font-size="11">Pydantic / JSON&#8202;Schema</text>
+        <circle class="dg-fill-teal" cx="336" cy="74" r="12" />
+        <path class="dg-stroke-paper" d="M330,74 L334,79 L343,68" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" />
+        <line class="dg-flow" x1="350" y1="96" x2="386" y2="96" /><polygon class="dg-flow-head" points="393,96 382,90 382,102" />
+        <rect class="dg-panel-bad" x="400" y="60" width="150" height="72" rx="10" />
+        <text class="dg-title" x="475" y="88" text-anchor="middle" font-size="11.5">BRAMKA ZNACZENIA</text>
+        <text class="dg-bad-ink" x="475" y="106" text-anchor="middle" font-size="11.5">$39,99 czy $3999?</text>
+        <circle class="dg-fill-danger" cx="537" cy="74" r="12" />
+        <path class="dg-stroke-paper" d="M532,69 L542,79 M542,69 L532,79" stroke-width="2.6" stroke-linecap="round" />
+        <text class="dg-muted" x="475" y="156" text-anchor="middle" font-size="11.5">&#8594; do przeglądu</text>
+      </svg>
+      <figcaption>Constrained decoding daje lewą bramkę za darmo. Przy prawej nie daje nic — a to tam kwota mnoży się przez 100.</figcaption>
+    </figure>
+
+    <p>Czy <code>3999</code> to <code>39,99</code> dolara, czy <code>3999</code> dolarów? Strukturalnie obie odpowiedzi są w porządku; znaczeniowo jedna jest zawyżona 100×. Model 0.5B tego nie ugruntuje i — gorzej — nie zwróci niskiej pewności. Wyśle czystą, prawdopodobną, <strong>błędną</strong> odpowiedź. To zgadywacz bez wiedzy o tym, kiedy się myli. Skoro tak — <strong>skąd pewność, że schematy powstałe z jego pomocą są dobre?</strong></p>
+
+    <h2 id="gwarancja"><span class="n">Gwarancja</span>Co realnie gwarantuje jakość nowych schematów</h2>
+    <p>Nie model. Jakość gwarantuje deterministyczna obwódka, przez którą jego propozycja musi przejść. Model podnosi <em>użyteczność</em>; o <em>poprawności</em> decyduje kod. Pięć konkretnych gwarancji:</p>
+
+    <div class="floor">
+      <h3>Jakość = to, przez co przechodzi propozycja</h3>
+      <ol>
+        <li><strong>Tożsamość z fingerprintu.</strong> ID schematu to hash kształtu liczony deterministycznie — ten sam kształt zawsze dostaje ten sam identyfikator, niezależnie od modelu. Model <em>nigdy</em> nie tworzy tożsamości, więc nie może jej pomylić.</li>
+        <li><strong>Poprawność strukturalna.</strong> Walidacja Pydantic / JSON Schema odrzuca wszystko, co nie trzyma zadeklarowanych pól i typów.</li>
+        <li><strong>Bezpieczeństwo kontraktu.</strong> Bramki kompatybilności + klasyfikacja strat (<code>lossless</code> / <code>conditionally_lossless</code> / <code>lossy</code>) pilnują, że nowa wersja nie złamie po cichu konsumentów. Brak dowodu odwracalności → traktowane jako stratne albo blokowane.</li>
+        <li><strong>Korroboracja i podłoga jakości.</strong> Propozycję przyjmujemy tylko, gdy deterministyczny dowód (tokeny pól, źródło, profil) ją potwierdza — i tylko jeśli jest <em>nie gorsza niż heurystyka</em>. To ustawia twardą podłogę: model może wynik poprawić, nigdy pogorszyć.</li>
+        <li><strong>Wstrzymanie i człowiek.</strong> Przy realnej niejednoznaczności (zmiana jednostki, typu, scalenie rodzin) model <code>abstain</code>, a decyzję zatwierdza człowiek. Publikacja wersji to zawsze governance, nie model.</li>
+      </ol>
+    </div>
+
+    <p>Składa się to w łańcuch: deterministyczny detektor łapie zmianę, model proponuje znaczenie do środka, a bramki decydują, czy propozycja stanie się opublikowanym schematem. Model siedzi w jednym etapie i nie ma władzy nad pozostałymi:</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 520 742" role="img" aria-labelledby="d2t">
+        <title id="d2t">Przepływ: od Kafki do deterministycznego parsowania i fingerprintu, potem sprawdzenie w rejestrze. Znane kształty idą szybką ścieżką bez modelu. Nowe pobierają top-k kandydatów, SLM proponuje lub się wstrzymuje, wynik waliduje Pydantic, potem bramki deterministyczne, a końcowa kontrola albo publikuje przez governance, albo kieruje do kwarantanny i przeglądu człowieka.</title>
+        <line class="dg-flow" x1="260" y1="58" x2="260" y2="82" /><polygon class="dg-flow-head" points="260,84 254,73 266,73" />
+        <line class="dg-flow" x1="260" y1="130" x2="260" y2="140" />
+        <path class="dg-flow" d="M162,180 H152" /><polygon class="dg-flow-head" points="150,180 161,174 161,186" />
+        <line class="dg-flow" x1="260" y1="220" x2="260" y2="248" /><polygon class="dg-flow-head" points="260,250 254,239 266,239" />
+        <line class="dg-flow" x1="260" y1="296" x2="260" y2="320" /><polygon class="dg-flow-head" points="260,322 254,311 266,311" />
+        <line class="dg-flow" x1="260" y1="376" x2="260" y2="400" /><polygon class="dg-flow-head" points="260,402 254,391 266,391" />
+        <line class="dg-flow" x1="260" y1="448" x2="260" y2="472" /><polygon class="dg-flow-head" points="260,474 254,463 266,463" />
+        <line class="dg-flow" x1="260" y1="526" x2="260" y2="550" />
+        <path class="dg-flow" d="M360,592 H390 V666" /><polygon class="dg-flow-head" points="390,668 384,657 396,657" />
+        <path class="dg-flow" d="M160,592 H124 V666" /><polygon class="dg-flow-head" points="124,668 118,657 130,657" />
+        <rect class="dg-panel" x="160" y="14" width="200" height="44" rx="9" />
+        <text class="dg-title" x="260" y="41" text-anchor="middle" font-size="13">Źródło / temat Kafki</text>
+        <rect class="dg-panel" x="118" y="84" width="284" height="46" rx="9" />
+        <text class="dg-title" x="260" y="112" text-anchor="middle" font-size="12">parsuj · normalizuj · fingerprint</text>
+        <polygon class="dg-panel" points="260,140 358,180 260,220 162,180" />
+        <text class="dg-title" x="260" y="184" text-anchor="middle" font-size="12.5">w rejestrze?</text>
+        <text class="dg-muted" x="120" y="171" font-size="10.5">tak</text>
+        <text class="dg-muted" x="270" y="240" font-size="10.5">nie</text>
+        <rect class="dg-panel" x="8" y="153" width="142" height="54" rx="9" />
+        <text class="dg-title" x="79" y="177" text-anchor="middle" font-size="12">Znany → oznacz</text>
+        <text class="dg-muted" x="79" y="195" text-anchor="middle" font-size="10">bez modelu</text>
+        <rect class="dg-panel" x="126" y="250" width="268" height="46" rx="9" />
+        <text class="dg-title" x="260" y="278" text-anchor="middle" font-size="12">pobierz top-k kandydatów</text>
+        <rect class="dg-pen" x="118" y="314" width="284" height="70" rx="12" />
+        <rect class="dg-panel-teal" x="126" y="322" width="268" height="54" rx="9" />
+        <text class="dg-teal-ink" x="260" y="345" text-anchor="middle" font-size="12">SLM: proponuje nazwę / mapowanie</text>
+        <text class="dg-teal-sub" x="260" y="363" text-anchor="middle" font-size="12">…albo się wstrzymuje</text>
+        <rect class="dg-panel" x="126" y="402" width="268" height="46" rx="9" />
+        <text class="dg-title" x="260" y="430" text-anchor="middle" font-size="12.5">walidacja kształtu (Pydantic)</text>
+        <rect class="dg-panel" x="104" y="472" width="312" height="54" rx="9" />
+        <text class="dg-title" x="260" y="495" text-anchor="middle" font-size="12.5">bramki deterministyczne</text>
+        <text class="dg-muted" x="260" y="513" text-anchor="middle" font-size="10">kompat. · prywatność · domena · strata</text>
+        <polygon class="dg-panel" points="260,550 360,592 260,634 160,592" />
+        <text class="dg-title" x="260" y="588" text-anchor="middle" font-size="11.5">przechodzi</text>
+        <text class="dg-title" x="260" y="604" text-anchor="middle" font-size="11.5">+ pewny?</text>
+        <text class="dg-muted" x="366" y="584" font-size="10.5">tak</text>
+        <text class="dg-muted" x="132" y="584" font-size="10.5">nie</text>
+        <rect class="dg-chip" x="268" y="668" width="244" height="56" rx="9" />
+        <text class="dg-onchip" x="390" y="692" text-anchor="middle" font-size="12.5">publikuj nową wersję</text>
+        <text class="dg-mono-on" x="390" y="710" text-anchor="middle" font-size="10.5" opacity="0.8">usługa governance</text>
+        <rect class="dg-panel-bad" x="8" y="668" width="232" height="56" rx="9" />
+        <text class="dg-bad-ink" x="124" y="692" text-anchor="middle" font-size="12.5">kwarantanna</text>
+        <text class="dg-muted" x="124" y="710" text-anchor="middle" font-size="10.5">&#8594; przegląd człowieka</text>
+      </svg>
+      <figcaption>Turkusowy etap to jedyne wywołanie modelu (może się wstrzymać). Wszystkie szare etapy to gwarancje jakości — i to one, nie model, decydują, czy schemat zostanie opublikowany.</figcaption>
+    </figure>
+
+    <p>Fakt z prawdziwego systemu: <strong>model nigdy nie wykrył dryfu</strong>. Wykryło go porównanie fingerprintów. Zadaniem modelu było tylko zamienić diff w czytelne zdanie. Detektorem był nudny hash; model napisał opis.</p>
+    <p>Nadrzędny niezmiennik: <strong>model może dodać dowód lub zawęzić zbiór kandydatów; nigdy nie może usunąć sprzecznego dowodu, osłabić zabezpieczenia ani dokonać nieodwracalnej mutacji umowy.</strong> Proces modelu działa bez uprawnień do promocji w rejestrze, bez DDL, bez zapisu do stanu schematu — technicznie <em>nie da się</em> nim obniżyć jakości.</p>
+
+    <div class="thesis">
+      <span class="mark">Zasada projektowa w jednym zdaniu</span>
+      <p>Model odpowiada na „co to znaczy?". Kod deterministyczny odpowiada na „czy wolno to opublikować?". Tylko to drugie pytanie decyduje o jakości schematu.</p>
+    </div>
+
+    <h2 id="dostrajanie"><span class="n">Dostrajanie</span>Znaczenie i przebieg dostrajania modelu</h2>
+    <p>Skoro model tylko proponuje, po co go w ogóle dostrajać? Nie dla samej celności — a przede wszystkim <strong>po to, by zszedł z few-shotu</strong>. Bazowy 0.5B potrzebuje w promptcie kilku przykładów (system + 4 przykłady + pola), a na CPU to właśnie długość promptu wpędza go w timeout. Model wyspecjalizowany w tym jednym, wąskim zadaniu może <em>porzucić blok few-shot</em> — prompt kurczy się do (krótka instrukcja + pola), co jest realną drogą do zmieszczenia się w budżecie czasu.</p>
+    <blockquote class="callout">
+      <p>Uwaga (Hermes): LoRA nie jest szybsza „na token" — te same warstwy i pasmo pamięci. Zysk end-to-end bierze się z krótszego promptu, mniejszej liczby tokenów wyjścia i braku poprawek złego formatu. Najpierw zdekomponuj timeout, potem trenuj.</p>
+    </blockquote>
+
+    <p><strong>Skąd dane.</strong> Pętla governance sama produkuje zbiór złoty: <em>edycje nazw przez ludzi</em> i <em>approve/reject umbrella</em> to wprost dane preferencji. Deblob w <code>name_meta</code> trzyma już wersje robocze (<code>heuristic</code>, <code>slm_raw</code>) obok nazwy zatwierdzonej przez człowieka → gotowe pary SFT + DPO. Zasady higieny danych są twarde: <strong>„jeszcze nie edytowane" ≠ zaakceptowane</strong>; podział train/eval po <em>źródle, rodzinie i czasie</em> (żeby nie było wycieku); twarde negatywy (np. czas zdarzenia vs czas przyjęcia).</p>
+
+    <p><strong>Jak trenujemy.</strong> Korpus generuje <code>deblob-eval generate</code>; ramię Arm-C uczy się na Modal T4 przez istniejącą pętlę <code>feedback → JSONL → trainer</code>. Pierwsza prawdziwa runda (17.07): 400 przykładów z etykietami prawdy, podział <strong>320 / 80 po rodzinach</strong> (rodzeństwo wydzielonej rodziny nigdy nie trafia do treningu — zero wycieku), LoRA <code>r=16 α=32</code>, 4 epoki, batch 1 / seq 512, <code>final_loss ≈ 0.15</code>. Ewaluacja: greedy-generacja tool-calla na każdym held-out i porównanie z <em>zewnętrznym</em> złotem korpusu (nigdy z predykatem samej bramki).</p>
+
+    <p class="pre-label" style="margin-bottom:.4rem">wynik na 80 wydzielonych przykładach (baza 0-shot → dostrojony)</p>
+    <div class="stat">
+      <div><div class="big">0 → 96,3%</div><div class="lab">poprawny format tool-calla (parse_rate)</div></div>
+      <div><div class="big">0 → 46,3%</div><div class="lab">trafna decyzja 3-drożna na nieznanych rodzinach</div></div>
+      <div><div class="big">≈ 0,15</div><div class="lab">final_loss po 4 epokach (LoRA, T4)</div></div>
+    </div>
+
+    <p>Jak to czytać: model 0.5B <strong>nauczył się formatu</strong> wyjścia Deblob (0 → 96% poprawnych tool-calli) i <strong>samej decyzji</strong> — <code>match_schema</code> / <code>new_candidate</code> / <code>abstain</code> — 0 → 46% na <em>niewidzianych</em> rodzinach. To realna generalizacja, nie zapamiętywanie. Kluczowe: <code>relation</code> i <code>schema_id</code> zostają trudne <strong>celowo</strong>. <code>schema_id</code> to 50-znakowy opaque hash, którego model <em>nie ma</em> pamiętać — dostarcza go deterministyczny retrieval strukturalny, a bramka zaufania koroboruje. Zadaniem modelu jest <em>decyzja semantyczna</em>, nie tożsamość. To domyka całą tezę: dostrajamy model do rozpoznawania znaczenia, a nie do trzymania stanu.</p>
+
+    <figure class="fig">
+      <svg viewBox="0 0 660 300" role="img" aria-labelledby="d4t">
+        <title id="d4t">Pętla continual-learning. Feedback od ludzi (edycje nazw, approve/reject) trafia do eksportu JSONL jako pary SFT i DPO, potem do treningu LoRA na Modal T4, następnie merge do GGUF i import do Ollama, ewaluacja na wydzielonych rodzinach, a na końcu promocja za bramkami przez governance — i kolejna runda.</title>
+        <line class="dg-flow" x1="208" y1="55" x2="232" y2="55" /><polygon class="dg-flow-head" points="234,55 223,49 223,61" />
+        <line class="dg-flow" x1="424" y1="55" x2="448" y2="55" /><polygon class="dg-flow-head" points="450,55 439,49 439,61" />
+        <path class="dg-flow" d="M545,86 V174" /><polygon class="dg-flow-head" points="545,176 539,165 551,165" />
+        <line class="dg-flow" x1="450" y1="207" x2="426" y2="207" /><polygon class="dg-flow-head" points="424,207 435,201 435,213" />
+        <line class="dg-flow" x1="234" y1="207" x2="210" y2="207" /><polygon class="dg-flow-head" points="208,207 219,201 219,213" />
+        <path class="dg-flow-teal" d="M113,176 V88" /><polygon class="dg-flow-head-teal" points="113,86 107,97 119,97" />
+        <text class="dg-teal-ink" x="150" y="140" font-size="10">kolejna runda</text>
+
+        <rect class="dg-panel" x="18" y="24" width="190" height="62" rx="9" />
+        <text class="dg-title" x="113" y="49" text-anchor="middle" font-size="11.5">Feedback od ludzi</text>
+        <text class="dg-muted" x="113" y="66" text-anchor="middle" font-size="9.5">edycja nazwy · approve/reject</text>
+
+        <rect class="dg-panel" x="234" y="24" width="190" height="62" rx="9" />
+        <text class="dg-title" x="329" y="49" text-anchor="middle" font-size="11.5">Eksport JSONL</text>
+        <text class="dg-muted" x="329" y="66" text-anchor="middle" font-size="9.5">pary SFT + DPO</text>
+
+        <rect class="dg-panel-teal" x="450" y="24" width="190" height="62" rx="9" />
+        <text class="dg-teal-ink" x="545" y="49" text-anchor="middle" font-size="11.5">Modal T4 — LoRA</text>
+        <text class="dg-muted" x="545" y="66" text-anchor="middle" font-size="9.5">r=16 · α=32 · 4 epoki</text>
+
+        <rect class="dg-panel" x="450" y="176" width="190" height="62" rx="9" />
+        <text class="dg-title" x="545" y="201" text-anchor="middle" font-size="11.5">Merge → GGUF</text>
+        <text class="dg-muted" x="545" y="218" text-anchor="middle" font-size="9.5">import do Ollama</text>
+
+        <rect class="dg-panel" x="234" y="176" width="190" height="62" rx="9" />
+        <text class="dg-title" x="329" y="201" text-anchor="middle" font-size="11.5">Eval: wydzielone rodziny</text>
+        <text class="dg-muted" x="329" y="218" text-anchor="middle" font-size="9.5">+ podział po czasie</text>
+
+        <rect class="dg-chip" x="18" y="176" width="190" height="62" rx="9" />
+        <text class="dg-onchip" x="113" y="201" text-anchor="middle" font-size="11.5">Promocja: governance</text>
+        <text class="dg-mono-on" x="113" y="218" text-anchor="middle" font-size="9.5" opacity="0.8">za bramkami, nie auto</text>
+      </svg>
+      <figcaption>Pętla continual-learning (ramię Arm-C). Turkusowy węzeł to jedyny etap uczenia modelu; reszta — dane, eval, promocja — jest deterministyczna i za bramkami. Feedback z produkcji napędza kolejne rundy.</figcaption>
+    </figure>
+
+    <p><strong>Serwowanie.</strong> Dostrojony adapter <em>nie</em> jest podmieniany w locie — łączymy go z bazą, eksportujemy do GGUF, kwantyzujemy i importujemy jako <em>osobny</em> model Ollamy (podmiana adaptera powoduje kosztowne ładowanie/eviction). Raw adapter zostaje do audytu.</p>
+    <p><strong>Umbrellas to głównie nie problem fine-tune.</strong> Jakość konsolidacji rodzin bierze się z retrievalu + deterministycznych bramek eligibility/cannot-link + kontroli typ/jednostka/grain/czas + HITL. Dostrajamy tylko cienki <strong>adjudicator</strong>: ranking już <em>legalnych</em> kandydatów, rozróżnienie <code>EXACT</code> vs <code>RELATED/NARROWER/BROADER</code>, twarde negatywy i <code>abstain</code> — nigdy generowanie klastrów czy transformacji. Jeśli retrieval nie podał kandydata, żaden fine-tune go nie odzyska.</p>
+    <p><strong>Bramki przed promocją.</strong> Zanim dostrojony model wejdzie na żywo: format-poprawność ≥ 99,5%, zero nielicencjonowanych pojęć po bramce deterministycznej, ślepy test preferencji <em>wygrany</em> z heurystyką, brak regresji na twardych negatywach, p95 (ciepły + zimny) pod budżetem breakera z ≥ 20% zapasu. Model, który nie przejdzie — nie jedzie.</p>
+
+    <h2 id="dostepnosc"><span class="n">Dostępność</span>Dwie gwarancje, które trzymają podłogę, gdy model padnie</h2>
+    <p>Skoro jakość zależy od determinizmu, model może się zepsuć bez szkody dla poprawności — pod warunkiem, że pilnujesz dwóch rzeczy.</p>
+    <p><strong>Admission control</strong> — mały model potrafi zjeść pamięć (cache KV, kontekst, kolejka, rezerwuar cache promptów) i wywalić kontener przez OOM. To kwestia stabilności, nie jakości; rozwiązanie to ograniczyć każdą oś naraz:</p>
+    <span class="pre-label">ollama — ogranicz każdą oś, a stanie się przewidywalny</span>
+    <pre><code>OLLAMA_NUM_PARALLEL=1      <span class="cmt"># jedna generacja naraz</span>
+OLLAMA_MAX_QUEUE=64        <span class="cmt"># ogranicz backlog, odrzucaj powyżej</span>
+num_ctx=4096               <span class="cmt"># ogranicz kontekst na żądanie</span>
+LLAMA_ARG_CACHE_RAM=0      <span class="cmt"># zabij nieograniczony rezerwuar cache promptów</span>
+<span class="cmt"># limit 3Gi  →  421 żądań / 12 min / ~1004Mi szczyt / 0 OOM</span></code></pre>
+
+    <p><strong>Degradacja do heurystyki</strong> — to sama w sobie gwarancja jakości: gdy model padnie, nazywanie schodzi na deterministyczną heurystykę (podłogę), a nie zatrzymuje ingestu. Fallback jest <em>oznaczony</em> — nie dziedziczy pewności modelu i nie auto-promuje.</p>
+    <span class="pre-label">fallback to ścieżka pierwszej klasy, nie except: pass</span>
+    <pre><code><span class="k">try</span>:
+    proposal = slm.propose(schema, candidates)     <span class="cmt"># probabilistyczne</span>
+<span class="k">except</span> (Timeout, ModelUnavailable):
+    breaker.trip()
+    proposal = heuristic_name(schema)              <span class="cmt"># deterministyczna podłoga</span>
+    proposal.source = <span class="k">"heuristic"</span>                 <span class="cmt"># bez pożyczonej pewności</span>
+    proposal.auto_promote = <span class="k">False</span></code></pre>
+
+    <div class="closer">
+      <p class="kicker" style="margin-bottom:.4rem">W jednym zdaniu</p>
+      <p class="big">Model mówi, co dane <span>mogą</span> znaczyć. Kod deterministyczny decyduje, co <span>wolno</span> opublikować.</p>
+    </div>
+
+    <p class="colophon">Oparte na historii repozytorium Deblob i raporcie ze wspólnego badania <em>„SLMs for Dynamic Heterogeneous-Data Identification &amp; Schema Control"</em> (bieg jr-slm-schema-241439) oraz na dokumencie <em>jr-slm-finetune-nu-211549</em> i wynikach walidacji Arm-C (17.07). Przygotowane równolegle przez dwoje agentów badawczych AI, ugruntowane w działającym systemie i 30&#8202;+ źródłach zewnętrznych. Liczby dostrajania pochodzą z realnej rundy LoRA na Modal T4.</p>
+  </article>
+</div>
