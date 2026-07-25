@@ -1,0 +1,32 @@
+name: business-logic
+
+# Verifies Deblob's operational-invariant contracts (contracts/*.md) with Tauto:
+# they must be mutually consistent, free of dead (unsatisfiable) rules, and each
+# rule must carry a Lean 4 proof (`lake build`). The rules are the governance
+# invariants we hold about how Deblob behaves — auto-promotion thresholds, the
+# umbrella HITL requirement, the SLM trust gate, PII safety. See contracts/README.md.
+#
+# Runs inside Tauto's Lean-equipped image (ghcr.io/kamilrybacki/tauto-lake, public)
+# via `docker run`, so no Lean toolchain is installed on the runner and checkout
+# still runs on the Node-capable host. Pinned to an immutable SHA tag for
+# reproducibility — bump it deliberately when adopting a newer Tauto.
+on:
+  push:
+    branches: [main]
+    paths: ['contracts/**', '.github/workflows/business-logic.yml']
+  pull_request:
+    paths: ['contracts/**', '.github/workflows/business-logic.yml']
+  workflow_dispatch: {}
+
+jobs:
+  contracts:
+    name: Verify business-rule contracts (Lean-proved)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: tauto verify --lean-check
+        run: |
+          docker run --rm \
+            -v "${{ github.workspace }}/contracts:/contracts:ro" \
+            ghcr.io/kamilrybacki/tauto-lake:5eb3d41 \
+            verify /contracts --output /tmp/lean-ws --lean-check
