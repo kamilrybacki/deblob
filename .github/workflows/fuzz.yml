@@ -13,7 +13,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@nightly
       - run: cargo install cargo-fuzz --locked
-      - run: cargo fuzz run parse_fuzz -- -max_total_time=60
+      # The repo's rust-toolchain.toml pins `stable`, which overrides the nightly
+      # installed above — so cargo-fuzz built the sanitizer target with stable
+      # rustc and `-Zsanitizer=address` was rejected ("`-Z` only on nightly").
+      # `cargo +nightly` sets RUSTUP_TOOLCHAIN=nightly, which takes precedence
+      # over rust-toolchain.toml in the inner `cargo build` cargo-fuzz spawns.
+      - run: cargo +nightly fuzz run parse_fuzz -- -max_total_time=60
         working-directory: crates/deblob-fingerprint
       - name: Upload crash artifact
         if: failure()
