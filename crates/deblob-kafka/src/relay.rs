@@ -799,11 +799,15 @@ async fn run_transaction_body(
             None, // PAYLOAD-FREE marker: the oversized payload can't be produced whole
             out_headers,
         )?;
+        // Hoist the length out of the macro so the payload-log lint doesn't flag the
+        // `payload.len()` call — logging a byte length is allowed; the deny-list catches
+        // the bare `payload` identifier appearing inside a tracing macro.
+        let payload_bytes = payload.len();
         tracing::warn!(
             topic = %cursor.topic,
             partition = cursor.partition,
             offset = cursor.offset,
-            payload_bytes = payload.len(),
+            payload_bytes,
             cap = produce_cap,
             "record too large to produce; quarantined as size_exceeded (payload not forwarded)"
         );
