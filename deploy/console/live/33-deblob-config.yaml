@@ -35,7 +35,7 @@ data:
     # before any SLM-proposed match is applied, so model quality never risks a merge.
     enabled = true
     base_url = "http://ollama.deblob.svc.cluster.local:11434/v1"
-    model = "granite4:350m"
+    model = "hf.co/ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M"
     # CPU 0.5B inference is slow; give it headroom so the sweep doesn't 500 on the
     # 8s default (the trust gate never applies an SLM match without corroboration).
     timeout_ms = 25000

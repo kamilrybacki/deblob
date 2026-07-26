@@ -23,7 +23,7 @@ data:
     import os, re, json, sys, time, hashlib, urllib.parse, urllib.request, urllib.error
     BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
     OLLAMA_URL = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
-    MODEL = "granite4:350m"
+    MODEL = "hf.co/ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M"
     PROMPT_VERSION = "v2"          # v2 = source-aware naming (re-names v1 schemas)
     NORMALIZER_VERSION = "v4"      # v3 = acronym preservation (UTC/GPU/CPU...) + temporal-plumbing
                                    # (dtime/utc) + Polish IMGW token aliases; v4 = common data-feed

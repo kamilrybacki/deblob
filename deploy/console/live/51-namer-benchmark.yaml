@@ -20,7 +20,7 @@ data:
     import os, re, json, time, statistics, urllib.parse, urllib.request
     BASE = "http://deblob-mgmt.deblob.svc.cluster.local:9615"
     OLLAMA = "http://ollama.deblob.svc.cluster.local:11434/api/chat"
-    MODEL = "granite4:350m"
+    MODEL = "hf.co/ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M"
     SEED = 211549
     PROD_BUDGET_MS = 15000          # the live namer's per-call timeout (circuit-breaker)
     SAMPLE = int(os.environ.get("SAMPLE", "16"))   # schemas per variant
