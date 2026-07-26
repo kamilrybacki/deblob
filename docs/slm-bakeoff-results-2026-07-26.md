@@ -73,3 +73,21 @@ modal run deploy/experiment/modal/bakeoff.py --model LiquidAI/LFM2.5-1.2B-Instru
   --jsonl /tmp/deblob_finetune.jsonl --target-modules q_proj,k_proj,v_proj,out_proj,w1,w2,w3
 modal run deploy/experiment/modal/bakeoff.py --model openbmb/MiniCPM5-1B --jsonl /tmp/deblob_finetune.jsonl
 ```
+
+## Live switch (2026-07-26)
+
+The bake-off winner is now the **live** Deblob SLM: swapped `qwen2.5:0.5b` →
+`granite4:350m` across `deploy/console/live/{33-deblob-config,40-ollama,50-namer-controller,51-namer-benchmark}.yaml`
+(committed `0f02de9`), rolled out ollama (which also fixed a pre-existing stuck
+ollama pod) + deblob. Ollama serves `granite4:350m` natively (708 MB pull).
+
+**Live namer-benchmark through the real namer path** (base + few-shot, NOT the
+fine-tuned adapter — that's a separate promotion step), FEWSHOT variant:
+- format-valid names: **16/16 (100%)**, 0 errors, licensed 15/16, accept-vs-heuristic 4/16
+- load p50 **368 ms** (stays resident — keep-alive works), prompt_eval p50 1137 ms, eval p50 361 ms
+- wall p50 **8.7 s**, p95 16.5 s — over the 15 s prod budget on 12% (2/16) of calls (the
+  degrade-to-heuristic path covers that tail).
+
+So granite4:350m is a viable live base for the naming lane. Still open: promote the
+*fine-tuned* Granite adapter (merge→GGUF→import) for the decision lane, and multi-seed
+the bake-off before treating the 60% > 46% gap as final.
