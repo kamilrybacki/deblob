@@ -91,3 +91,28 @@ fine-tuned adapter — that's a separate promotion step), FEWSHOT variant:
 So granite4:350m is a viable live base for the naming lane. Still open: promote the
 *fine-tuned* Granite adapter (merge→GGUF→import) for the decision lane, and multi-seed
 the bake-off before treating the 60% > 46% gap as final.
+
+### Optimization: BF16 → Q4_K_M
+
+The initial live tag `granite4:350m` was **BF16** (708 MB) → it ~doubled ollama's
+resident memory (552 → 1059 Mi working set) vs the old Q4 qwen. Fixed by switching to
+the **Q4_K_M** GGUF (`hf.co/ibm-granite/granite-4.0-h-350m-GGUF:Q4_K_M`, 222 MB weights,
+committed `217fe67`).
+
+Live re-benchmark (FEWSHOT — the production variant) + measured memory:
+
+| metric | qwen Q4 | granite BF16 | **granite Q4_K_M** |
+|---|---|---|---|
+| ollama working set | 552 Mi | 1059 Mi | **443 Mi** |
+| ollama RSS | ~660 Mi | 1550 Mi | **656 Mi** |
+| model on disk | ~374 MB | 708 MB | **222 MB** |
+| format-valid (few-shot) | — | 100% | **100%** |
+| wall p50 / p95 | — | 8.7 / 16.5 s | **5.7 / 10.9 s** |
+| eval p50 | — | 361 ms | **168 ms** |
+| over 15 s budget | — | 12% | **0%** |
+
+Net: quality held (100% valid, 0 errors, accept-vs-heuristic even improved 4→8/16),
+latency dropped ~34%, and memory is now **below the old qwen** — the OOM buffer is fully
+restored (443 Mi = 15% of the 3 Gi limit). CPU spikes to the 4-core limit *during* a
+generation (Q4 uses all cores for fast eval) then idles at ~1m. COMPACT variant degrades
+at Q4 (38% valid) but the live lane uses FEWSHOT.
