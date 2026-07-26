@@ -36,6 +36,7 @@ fn record_and_bucket(json: &[u8], family_id: FamilyId) -> (SchemaRecord, String)
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     };
     (record, bucket)
 }

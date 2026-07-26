@@ -1,0 +1,5 @@
+---
+source: crates/deblob-monoid/src/simhash.rs
+expression: "format!(\"{sketch:016x}\")"
+---
+00a44146b530a3a5

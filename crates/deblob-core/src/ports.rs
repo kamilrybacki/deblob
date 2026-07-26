@@ -49,6 +49,19 @@ pub struct SchemaRecord {
     /// `value_profile_ref` is `None`.
     #[serde(default)]
     pub value_profile_summary: Option<ValueProfileSummary>,
+    /// A 64-bit STRUCTURAL SimHash sketch of the generalized `canonical` shape
+    /// (`deblob_monoid::structural_simhash`, versioned by
+    /// `STRUCTURAL_SIMHASH_VERSION`). A deliberately LOSSY locality digest —
+    /// structurally similar schemas land at small Hamming distance — used ONLY
+    /// to surface near-duplicate / umbrella-candidate families for discovery.
+    /// NEVER an identity: excluded from the `sch_`/`sem_` digests (like
+    /// `value_profile_ref`), so back-filling it never changes a schema's id, a
+    /// sketch collision proves nothing about identity, and the exact fingerprint
+    /// remains the sole authority on "same schema". `None` for schemas promoted
+    /// before the sketch existed, or when the canonical yielded no structural
+    /// tokens. `#[serde(default)]` for back-compat with pre-existing records.
+    #[serde(default)]
+    pub structural_simhash: Option<u64>,
 }
 
 /// The five coarse, non-reversible numeric magnitude buckets, packed into a

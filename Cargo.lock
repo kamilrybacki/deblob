@@ -802,6 +802,7 @@ dependencies = [
  "insta",
  "proptest",
  "serde",
+ "serde_json",
  "sha2",
 ]
 

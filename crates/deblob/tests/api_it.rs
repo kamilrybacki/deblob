@@ -500,6 +500,7 @@ fn sample_schema(seed: u8) -> SchemaRecord {
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     }
 }
 
@@ -558,6 +559,7 @@ fn family_schema(seed: u8, family_id: deblob_core::id::FamilyId, version: u32) -
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     }
 }
 
@@ -578,6 +580,7 @@ fn semantic_schema(seed: u8) -> SchemaRecord {
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     }
 }
 
@@ -1692,6 +1695,7 @@ fn lineage_child_schema() -> SchemaRecord {
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     }
 }
 

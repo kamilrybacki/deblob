@@ -192,6 +192,7 @@ async fn publish_schema(
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     };
     let bucket = format!("bucket:drift-all-versions-it:{cand_seed}");
     let cand = CandidateId::from_digest(&[cand_seed; 32]);

@@ -483,6 +483,7 @@ async fn canon_v1_schema_annotation_still_works_unchanged() {
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     };
     let cand = CandidateId::from_digest(&[42u8; 32]);
     registry
@@ -532,6 +533,7 @@ async fn unknown_canonicalizer_reports_422_not_silent_accept() {
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     };
     let cand = CandidateId::from_digest(&[8u8; 32]);
     registry

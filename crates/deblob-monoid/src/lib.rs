@@ -6,5 +6,10 @@
 
 pub mod merge;
 pub mod profile;
+pub mod simhash;
 
 pub use profile::{FieldNode, NumericBuckets, Profile, TypeCounts, GENERALIZER};
+pub use simhash::{
+    structural_hamming, structural_simhash, NEAR_DUPLICATE_HAMMING_MAX,
+    STRUCTURAL_SIMHASH_VERSION,
+};

@@ -236,6 +236,10 @@ pub struct ApplyContext {
 /// Not `PartialEq` — `SchemaRecord` (the `Applied` payload) doesn't
 /// implement it upstream; callers/tests that need to assert on an `Applied`
 /// outcome match on the variant and inspect its fields directly.
+// A single, short-lived apply outcome — never held in bulk collections — so the
+// size asymmetry between `Applied(SchemaRecord)` and the smaller variants costs
+// nothing worth a `Box` indirection on this governed hot path.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum AppliedOutcome {
     /// Published through the governed [`PromoterTrait`] path.

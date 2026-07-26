@@ -13,6 +13,7 @@ pub mod schemas;
 pub mod semantic;
 pub mod sources;
 pub mod stream;
+pub mod structural;
 pub mod umbrellas;
 
 use std::sync::Arc;
@@ -317,6 +318,10 @@ pub fn router(state: ApiState) -> Router {
         .route(
             "/schemas/{sch_id}/semantic-neighbors",
             get(semantic::get_semantic_neighbors),
+        )
+        .route(
+            "/schemas/{sch_id}/structural-neighbors",
+            get(structural::get_structural_neighbors),
         )
         .route("/semantic/{sem_id}", get(semantic::get_schemas_by_semantic))
         .route("/families/{fam_id}", get(schemas::get_family))

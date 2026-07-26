@@ -313,6 +313,10 @@ impl PromoterTrait for Promoter {
         });
 
         let canonical = profile.generalized_canonical_json();
+        // Additive locality sketch over the SAME generalized canonical (not the
+        // hot fingerprint path): a discovery-only signal for near-duplicate /
+        // umbrella families, never part of `schema_id`'s identity.
+        let structural_simhash = deblob_monoid::structural_simhash(&canonical);
 
         // Stage 1 (joint design dc-umbrella-signals-1907): capture an
         // immutable value-profile snapshot from the candidate's profile and
@@ -352,6 +356,7 @@ impl PromoterTrait for Promoter {
             privacy_class: None,
             value_profile_ref,
             value_profile_summary,
+            structural_simhash,
         };
 
         let bucket = bucket_key(&generalized_shape_summary(&profile));

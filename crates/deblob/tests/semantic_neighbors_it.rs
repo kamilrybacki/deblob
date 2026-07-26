@@ -131,6 +131,7 @@ async fn publish_schema(reg: &RedisRegistry, json: &[u8], cand_seed: u8) -> Sche
         privacy_class: None,
         value_profile_ref: None,
         value_profile_summary: None,
+        structural_simhash: None,
     };
     let bucket = format!("bucket:neighbors-it:{cand_seed}");
     let cand = CandidateId::from_digest(&[cand_seed; 32]);
