@@ -1,0 +1,1332 @@
+{
+  "model": "openbmb/MiniCPM5-1B",
+  "target_modules": "auto",
+  "train_n": 320,
+  "test_n": 80,
+  "epochs": 4,
+  "lora": {
+    "r": 16,
+    "alpha": 32
+  },
+  "final_loss": 0.1205,
+  "before": {
+    "n": 80,
+    "parse_rate": 0.0,
+    "decision_match": 0.0,
+    "decision_relation_match": 0.0,
+    "exact_match": 0.0
+  },
+  "after": {
+    "n": 80,
+    "parse_rate": 0.8,
+    "decision_match": 0.4125,
+    "decision_relation_match": 0.075,
+    "exact_match": 0.0375
+  },
+  "delta": {
+    "parse_rate": 0.8,
+    "decision_match": 0.4125,
+    "decision_relation_match": 0.075,
+    "exact_match": 0.0375
+  },
+  "examples": [
+    {
+      "case_name": "gen_001_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"number\" }",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"number\" }",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\"}",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_03_drift_widen_nullability",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "unstructured"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"uns",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "object"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"obj",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5seusuop3xknz6acsy46sduq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5erosuop5xknz6acsy46sduq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_vuicxrffeu2ncfwoiedgzclqpjhv5erosuop5xknz6acsy46sduq\"}",
+      "decision_ok": true,
+      "relation_ok": true,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"202406271999 address\": \"202406271999\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_001_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5seusuop3xknz6acsy46sduq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "scalar"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"sca",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5seusuop3xknz6acsy46sduq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "scalar"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"sca",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5seusuop3xknz6acsy46sduq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "scalar"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"sca",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_03_drift_add_optional",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5seusuop3xknz6acsy46sduq"
+      },
+      "predicted": null,
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma}, {\"decision\":",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5seusuop3xknz6acsy46sduq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "version": 1
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"version\": 1}",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5seusuop3xknz6acsy46sduq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5erosuop3xknz6acsy46sduq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_vuicxrffeu2ncfwoiedgzclqpjhv5erosuop3xknz6acsy46sduq\"}",
+      "decision_ok": true,
+      "relation_ok": true,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "scalar"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"sca",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "detached"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"det",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5erosuop3xknz6acsy46sduq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_vuicxrffeu2ncfwoiedgzclqpjhv5erosuop3xknz6acsy46sduq\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_012_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq",
+        "type": "equal"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq\", \"type\": \"equal\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "predicted": null,
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma}, {\"decision\":",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "predicted": null,
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma}, {\"decision\":",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "predicted": null,
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma}, {\"decision\":",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_03_drift_enum_value",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "predicted": null,
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma}, {\"decision\":",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "predicted": null,
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma}, {\"decision\":",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma\"}",
+      "decision_ok": true,
+      "relation_ok": true,
+      "exact_ok": true
+    },
+    {
+      "case_name": "gen_019_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_019_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"20231004199-14-3b2c-2e55-6f4b7f8d9f8c\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "type": "equal"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"type\": \"equal\" }",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "type": "full_ticket"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"type\": \"full_ticke",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_03_drift_add_optional",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"20231004199-04-86b1-bc5a-dfa5fa5c1c5fd\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "type": "equal"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"type\": \"equal\" }",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\"}",
+      "decision_ok": true,
+      "relation_ok": true,
+      "exact_ok": true
+    },
+    {
+      "case_name": "gen_024_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "scalar"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"sca",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "detached"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"det",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_024_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"type\": \"num",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "predicted": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "raw": "{\"cause\": \"insufficient_evidence\", \"decision\": \"abstain\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "predicted": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "raw": "{\"cause\": \"insufficient_evidence\", \"decision\": \"abstain\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_03_drift_add_optional",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\"}",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\"}",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "predicted": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "raw": "{\"cause\": \"insufficient_evidence\", \"decision\": \"abstain\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_vuicxrffeu2ncfwoiedgzclqpjhv5ensisopu45cw4ajkq6es3kp7km3l4g2lmkscc5mq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_vuicxrffeu2ncfwoiedgzclqpjhv5ensisopu45cw4ajkq6es3kp7km3l4g2lmkscc5",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_028_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "raw": "{\"cause\": \"insufficient_evidence\", \"decision\": \"abstain\"}",
+      "decision_ok": true,
+      "relation_ok": true,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea\", \"type\": \"num",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea\", \"type\": \"num",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea\", \"type\": \"num",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_03_drift_enum_value",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea\", \"type\": \"num",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_04_false_split_abbrev",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea",
+        "type": "number"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea\", \"type\": \"num",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\"}",
+      "decision_ok": true,
+      "relation_ok": true,
+      "exact_ok": true
+    },
+    {
+      "case_name": "gen_031_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_08_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea",
+        "status": "active"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_5di254ttq2fgwtptpdzao3mwdze2tmabwtrvjr4oqecrxp4qlsea\", \"status\": \"a",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_031_09_abstain_candidate_missing",
+      "gold": {
+        "cause": "candidate_missing",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "status": "incompatible",
+        "type": "structural"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"status\": \"i",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "status": "incompatible",
+        "type": "structural"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"status\": \"i",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "type": "full"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"type\": \"full\"})",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_03_drift_widen_nullability",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "status": "incompatible",
+        "type": "structural"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"status\": \"i",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq",
+        "subschema_id": "subschema_id_1",
+        "title": "Address"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq\", \"subschema_i",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_05_incompatible_generic_names",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_g4tboyb3dsxq6akgnqmhkkefbohbz77aftmo44rqtlqe7kki32hq"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"202-74_2\", \"category\": \"number\", \"count\": 69, \"present\": 69, \"explicit_null\": 0, \"type\": \"number\", \"nullable\": false, \"array_empty\": false, \"array_",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "scalar"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"sca",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "semantic"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "detached"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"det",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_similarity\", \"schema_id\": \"sch_hg3pu7yn6uo5l7klie6vm4l3f46m6vm3xlkrodbfub2y3nrudcma\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_033_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"202406271999 address\" }",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_00_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"20231004137-147-01aa4-32c7-74c37f93a5b7\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_01_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"29/29 explicit_null=0 type=['number'] numeric=[] array_empty=false array_partial=false}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_02_exact",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "exact",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"55 Quesillo Drive, Santh\u00edn, Mexico\" \"address\" > \"city\": \"Santh\u00edn\" \"address\" > \"street\" : \"55 Quesillo Drive\" \"address\" > \"zip\" : \"55 Quesillo Drive",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_03_drift_add_optional",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_04_false_split_vendor_prefix",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "compatible_drift",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq",
+        "status": "allowed",
+        "type": "string"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_b4fzmoxhyb76fwnl2zzaclvzjqxsfyjczfjxus55iqdvbvri2egq\", \"status\": \"a",
+      "decision_ok": true,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_05_incompatible_unit_swap",
+      "gold": {
+        "decision": "match_schema",
+        "relation": "incompatible_similarity",
+        "schema_id": "sch_pfxy4avbmz33yzyc3huxvonsewqghbmv6ghhwmq4wzdyflqqaesq"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"202-10-01/300/400,202-10-01-400-800-120000\" \"address\" > \"city\": \"New York\" \"address\" > \"street\" : \"Rd, State Rd, Blvd, Line\" \"address\" > \"zip\" : \"U",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_06_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "scalar"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"sca",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_07_new_family",
+      "gold": {
+        "decision": "new_candidate",
+        "novelty": "structural"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja",
+        "type": "detached"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_oeak32oq6tmha24qec5mnix4zqhz3cylebc6yikfg75ulmk2blja\", \"type\": \"det",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_08_abstain_insufficient_evidence",
+      "gold": {
+        "cause": "insufficient_evidence",
+        "decision": "abstain"
+      },
+      "predicted": null,
+      "raw": "{\"address\": \"address\" },\n{\"address\" > \"city\" },\n{\"address\" > \"street\" },\n{\"address\" > \"width\" },\n{\"address\" > \"address\" },\n{\"address\" > \"vnd\" },\n{\"address\" > \"c",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    },
+    {
+      "case_name": "gen_036_09_abstain_ambiguous",
+      "gold": {
+        "cause": "ambiguous",
+        "decision": "abstain"
+      },
+      "predicted": {
+        "decision": "match_schema",
+        "relation": "incompatible_semantic_decision",
+        "schema_id": "sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba"
+      },
+      "raw": "{\"decision\": \"match_schema\", \"relation\": \"incompatible_semantic_decision\", \"schema_id\": \"sch_hlxgf7wigqst2ryyb6ht7jtqo3dikeisauhhjrmcn6f2tf3ejdba\"}",
+      "decision_ok": false,
+      "relation_ok": false,
+      "exact_ok": false
+    }
+  ]
+}
