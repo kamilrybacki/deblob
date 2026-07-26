@@ -5,6 +5,15 @@
 
 <p align="center"><strong>Continuous schema discovery and identity tagging for uncontrolled data.</strong></p>
 
+> **⚠️ Deprecated & archived (2026-07-26).** This homelab project is no longer
+> deployed. It served its purpose: a measured test of whether a small on-edge
+> SLM can *autonomously discover schemas* — the answer is **no, not as an
+> authority** (best fine-tuned decision-accuracy ~60%; determinism owns
+> identity, the SLM is a bounded proposer). The schema system worked; the
+> SLM-as-discoverer thesis was falsified with evidence. The reusable fine-tune
+> / serve / eval machinery and the full findings were extracted into a
+> successor project seed (`edge-slm-kit`). Kept read-only for reference.
+
 Deblob is an open-source Rust service that assigns every message a durable
 schema identity. Deterministic fingerprinting stays on the synchronous path;
 sampling and semantic discovery run asynchronously; policy decides which
