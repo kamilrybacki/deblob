@@ -26,7 +26,7 @@ spec:
         ports: [{name: http, containerPort: 11434}]
         env:
         - {name: OLLAMA_HOST, value: "0.0.0.0:11434"}
-        - {name: OLLAMA_KEEP_ALIVE, value: "-1"}          # keep the 0.5B model resident
+        - {name: OLLAMA_KEEP_ALIVE, value: "-1"}          # keep the 350M model resident
         - {name: OLLAMA_MAX_LOADED_MODELS, value: "1"}
         # Admission cap (jr-deblob-stability-231518): bound the pending-request
         # queue so an SLM burst (namer + decision lane) queues/rejects rather than
@@ -70,7 +70,7 @@ spec:
         lifecycle:
           postStart:
             exec:
-              command: ["/bin/sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull qwen2.5:0.5b >/tmp/poststart-pull.log 2>&1 || true"]
+              command: ["/bin/sh", "-c", "until ollama list >/dev/null 2>&1; do sleep 2; done; ollama pull granite4:350m >/tmp/poststart-pull.log 2>&1 || true"]
         volumeMounts:
         - {name: models, mountPath: /home/ollama/.ollama}
         readinessProbe: {httpGet: {path: /, port: 11434}, initialDelaySeconds: 5, periodSeconds: 10}
